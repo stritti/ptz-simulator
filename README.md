@@ -66,6 +66,14 @@ streaming-server sees the new position on its next `GetStatus`.
 | `o` | power on / standby |
 | `q` | quit |
 
+Next to the dashboard (or above it in narrow terminals) the TUI shows the
+**camera picture** at the current position: the same virtual scene as the NDI test
+picture, drawn with text characters. The horizon is at 0° tilt, the ground has a
+5° checker pattern, a post with its angle stands every 45° of pan, and a 1° grid
+appears when zoomed in. The field of view is 60° at 1× and narrows with the zoom
+(3° at 20×); the caption shows pan, tilt and zoom. Moves from the streaming-server
+or any other client show up in the picture as they happen.
+
 The keyboard UI uses `curses` and needs a terminal, so it is not available on
 native Windows Python (use WSL) or when stdin/stdout are redirected; `serve` then
 falls back to the read-only dashboard.
