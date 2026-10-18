@@ -1,0 +1,390 @@
+"""VISCA command interpreter.
+
+Takes raw VISCA packets (``8x ... FF``), applies them to a :class:`CameraState`
+and produces the replies a real camera would send.
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import dataclass
+from typing import Deque, List, Optional
+
+from . import state as st
+from .state import CameraState
+
+TERMINATOR = 0xFF
+SOCKET = 1
+
+VENDOR_ID = 0x0001  # Sony
+MODEL_ID = 0x0519
+ROM_VERSION = 0x0100
+
+
+class ViscaError(Exception):
+    """Raised by a command handler; carries the VISCA error code."""
+
+    SYNTAX = 0x02
+    BUFFER_FULL = 0x03
+    CANCELLED = 0x04
+    NO_SOCKET = 0x05
+    NOT_EXECUTABLE = 0x41
+
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass
+class Reply:
+    data: bytes
+    # When True the reply must only be sent once the camera has finished moving.
+    after_motion: bool = False
+
+
+@dataclass
+class LogEntry:
+    raw: bytes
+    description: str
+    ok: bool
+    # Shown instead of the hex dump for non-VISCA protocols (e.g. "ONVIF").
+    label: str = ""
+
+    @property
+    def source(self) -> str:
+        return self.label or hexdump(self.raw)
+
+
+def hexdump(data: bytes) -> str:
+    return " ".join(f"{b:02X}" for b in data)
+
+
+def parse_hex(text: str) -> bytes:
+    return bytes.fromhex(text.replace(",", " ").replace("0x", ""))
+
+
+def decode_nibbles(data: bytes, signed: bool = False) -> int:
+    value = 0
+    for b in data:
+        value = (value << 4) | (b & 0x0F)
+    bits = 4 * len(data)
+    if signed and value & (1 << (bits - 1)):
+        value -= 1 << bits
+    return value
+
+
+def encode_nibbles(value: int, count: int = 4) -> bytes:
+    value &= (1 << (4 * count)) - 1
+    return bytes((value >> (4 * (count - 1 - i))) & 0x0F for i in range(count))
+
+
+def split_packets(buffer: bytearray) -> List[bytes]:
+    """Remove and return every complete VISCA packet from a stream buffer."""
+    packets = []
+    while True:
+        try:
+            end = buffer.index(TERMINATOR)
+        except ValueError:
+            return packets
+        packet = bytes(buffer[: end + 1])
+        del buffer[: end + 1]
+        if len(packet) > 1:
+            packets.append(packet)
+
+
+class ViscaCamera:
+    """A single VISCA device at ``address`` (1..7)."""
+
+    def __init__(self, camera: Optional[CameraState] = None, address: int = 1, instant: bool = False):
+        self.state = camera or CameraState()
+        self.address = address
+        self.instant = instant
+        self.log: Deque[LogEntry] = deque(maxlen=200)
+        self.command_count = 0
+
+    # ---------------------------------------------------------------- replies
+    @property
+    def _reply_header(self) -> int:
+        return (self.address + 8) << 4  # camera 1 answers with 0x90
+
+    def _ack(self) -> bytes:
+        return bytes([self._reply_header, 0x40 | SOCKET, TERMINATOR])
+
+    def _completion(self, payload: bytes = b"") -> bytes:
+        return bytes([self._reply_header, 0x50 | SOCKET]) + payload + bytes([TERMINATOR])
+
+    def _inquiry_reply(self, payload: bytes) -> bytes:
+        return bytes([self._reply_header, 0x50]) + payload + bytes([TERMINATOR])
+
+    def _error(self, code: int, socket: int = SOCKET) -> bytes:
+        sock = 0 if code == ViscaError.SYNTAX else socket
+        return bytes([self._reply_header, 0x60 | sock, code, TERMINATOR])
+
+    # ----------------------------------------------------------------- entry
+    def handle(self, packet: bytes) -> List[Reply]:
+        """Process one VISCA packet and return the replies to send."""
+        self.command_count += 1
+        if len(packet) < 3 or packet[-1] != TERMINATOR or not packet[0] & 0x80:
+            self._log(packet, "invalid packet", ok=False)
+            return [Reply(self._error(ViscaError.SYNTAX))]
+
+        header = packet[0]
+        if header == 0x88:
+            return self._broadcast(packet)
+        target = header & 0x0F
+        if target != self.address:
+            self._log(packet, f"ignored (addressed to camera {target})", ok=True)
+            return []
+
+        body = packet[1:-1]
+        try:
+            if body[0] == 0x01:
+                return self._command(packet, body[1:])
+            if body[0] == 0x09:
+                return self._inquiry(packet, body[1:])
+            if body[0] & 0xF0 == 0x20:
+                self._log(packet, "command cancel", ok=True)
+                return [Reply(self._error(ViscaError.NO_SOCKET, body[0] & 0x0F))]
+            raise ViscaError(ViscaError.SYNTAX, "unknown message type")
+        except ViscaError as err:
+            self._log(packet, f"error: {err}", ok=False)
+            return [Reply(self._error(err.code))]
+        except IndexError:
+            self._log(packet, "error: truncated packet", ok=False)
+            return [Reply(self._error(ViscaError.SYNTAX))]
+
+    def record(self, label: str, description: str, ok: bool = True) -> None:
+        """Log a command that arrived over another protocol (e.g. ONVIF)."""
+        self.command_count += 1
+        self.log.append(LogEntry(b"", description, ok, label))
+
+    def _log(self, raw: bytes, description: str, ok: bool = True) -> None:
+        self.log.append(LogEntry(raw, description, ok))
+
+    # -------------------------------------------------------------- broadcast
+    def _broadcast(self, packet: bytes) -> List[Reply]:
+        if packet[1:4] == b"\x30\x01\xff":
+            self._log(packet, "address set (broadcast)")
+            return [Reply(bytes([0x88, 0x30, self.address + 1, TERMINATOR]))]
+        if packet[1:4] == b"\x01\x00\x01":
+            self.state.stop_all()
+            self._log(packet, "IF_Clear (broadcast)")
+            return [Reply(bytes([0x88, 0x01, 0x00, 0x01, TERMINATOR]))]
+        self._log(packet, "unknown broadcast", ok=False)
+        return [Reply(self._error(ViscaError.SYNTAX))]
+
+    # --------------------------------------------------------------- commands
+    def _command(self, packet: bytes, body: bytes) -> List[Reply]:
+        category, cmd, args = body[0], body[1], body[2:]
+        s = self.state
+
+        if category == 0x00 and cmd == 0x01 and not args:
+            s.stop_all()
+            self._log(packet, "IF_Clear")
+            return [Reply(self._completion())]
+
+        if category == 0x04 and cmd == 0x00:
+            on = self._choice(args, {0x02: True, 0x03: False})
+            s.power = on
+            if not on:
+                s.stop_all()
+            self._log(packet, f"power {'on' if on else 'standby'}")
+            return self._done()
+
+        if not s.power:
+            raise ViscaError(ViscaError.NOT_EXECUTABLE, "camera in standby")
+
+        if category == 0x04:
+            return self._camera_command(packet, cmd, args)
+        if category == 0x06:
+            return self._pan_tilt_command(packet, cmd, args)
+        raise ViscaError(ViscaError.SYNTAX, f"unknown command category {category:02X}")
+
+    def _camera_command(self, packet: bytes, cmd: int, args: bytes) -> List[Reply]:
+        s = self.state
+        if cmd == 0x07:  # Zoom
+            self._expect_len(args, 1)
+            arg = args[0]
+            if arg == 0x00:
+                s.drive_zoom(0, 0)
+                self._log(packet, "zoom stop")
+            elif arg in (0x02, 0x03):
+                s.drive_zoom(1 if arg == 0x02 else -1, 3)
+                self._log(packet, f"zoom {'tele' if arg == 0x02 else 'wide'} (standard)")
+            elif arg >> 4 in (0x2, 0x3) and arg & 0x0F <= 7:
+                direction = 1 if arg >> 4 == 0x2 else -1
+                s.drive_zoom(direction, arg & 0x0F)
+                self._log(packet, f"zoom {'tele' if direction > 0 else 'wide'} speed {arg & 0x0F}")
+            else:
+                raise ViscaError(ViscaError.SYNTAX, "bad zoom argument")
+            return self._done()
+
+        if cmd == 0x47:  # Zoom direct
+            self._expect_len(args, 4)
+            value = decode_nibbles(args)
+            s.zoom_to(value)
+            self._log(packet, f"zoom direct {value:#06x}")
+            return self._done(after_motion=True)
+
+        if cmd == 0x08:  # Focus
+            self._expect_len(args, 1)
+            arg = args[0]
+            if arg == 0x00:
+                s.drive_focus(0, 0)
+                self._log(packet, "focus stop")
+            elif arg in (0x02, 0x03):
+                s.drive_focus(-1 if arg == 0x02 else 1, 3)
+                self._log(packet, f"focus {'far' if arg == 0x02 else 'near'} (standard)")
+            elif arg >> 4 in (0x2, 0x3) and arg & 0x0F <= 7:
+                direction = -1 if arg >> 4 == 0x2 else 1
+                s.drive_focus(direction, arg & 0x0F)
+                self._log(packet, f"focus {'far' if direction < 0 else 'near'} speed {arg & 0x0F}")
+            else:
+                raise ViscaError(ViscaError.SYNTAX, "bad focus argument")
+            return self._done()
+
+        if cmd == 0x48:  # Focus direct
+            self._expect_len(args, 4)
+            value = decode_nibbles(args)
+            s.focus_to(value)
+            self._log(packet, f"focus direct {value:#06x}")
+            return self._done(after_motion=True)
+
+        if cmd == 0x38:  # Focus mode
+            arg = self._choice(args, {0x02: "auto", 0x03: "manual", 0x10: "toggle"})
+            s.autofocus = (not s.autofocus) if arg == "toggle" else arg == "auto"
+            self._log(packet, f"focus mode {'auto' if s.autofocus else 'manual'}")
+            return self._done()
+
+        if cmd == 0x18 and args == b"\x01":  # One push AF
+            self._log(packet, "one push AF")
+            return self._done()
+
+        if cmd == 0x3F:  # Memory (presets)
+            self._expect_len(args, 2)
+            action, number = args
+            if number >= st.PRESET_COUNT:
+                raise ViscaError(ViscaError.SYNTAX, f"preset {number} out of range")
+            if action == 0x00:
+                s.clear_preset(number)
+                self._log(packet, f"preset {number} reset")
+                return self._done()
+            if action == 0x01:
+                s.save_preset(number)
+                self._log(packet, f"preset {number} set")
+                return self._done()
+            if action == 0x02:
+                if not s.recall_preset(number):
+                    raise ViscaError(ViscaError.NOT_EXECUTABLE, f"preset {number} not set")
+                self._log(packet, f"preset {number} recall")
+                return self._done(after_motion=True)
+            raise ViscaError(ViscaError.SYNTAX, "bad memory action")
+
+        raise ViscaError(ViscaError.SYNTAX, f"unsupported camera command {cmd:02X}")
+
+    def _pan_tilt_command(self, packet: bytes, cmd: int, args: bytes) -> List[Reply]:
+        s = self.state
+        if cmd == 0x01:  # Pan-tilt drive
+            self._expect_len(args, 4)
+            pan_speed, tilt_speed = self._speeds(args[0], args[1])
+            pan_dir = {0x01: -1, 0x02: 1, 0x03: 0}.get(args[2])
+            tilt_dir = {0x01: 1, 0x02: -1, 0x03: 0}.get(args[3])
+            if pan_dir is None or tilt_dir is None:
+                raise ViscaError(ViscaError.SYNTAX, "bad pan/tilt direction")
+            s.drive_pan_tilt(pan_dir, tilt_dir, pan_speed, tilt_speed)
+            names = {(-1, 0): "left", (1, 0): "right", (0, 1): "up", (0, -1): "down",
+                     (-1, 1): "up-left", (1, 1): "up-right", (-1, -1): "down-left",
+                     (1, -1): "down-right", (0, 0): "stop"}
+            self._log(packet, f"pan/tilt {names[(pan_dir, tilt_dir)]} "
+                              f"(speed {pan_speed}/{tilt_speed})")
+            return self._done()
+
+        if cmd in (0x02, 0x03):  # Absolute / relative position
+            self._expect_len(args, 10)
+            pan_speed, tilt_speed = self._speeds(args[0], args[1])
+            pan = decode_nibbles(args[2:6], signed=True)
+            tilt = decode_nibbles(args[6:10], signed=True)
+            if cmd == 0x02:
+                s.move_pan_tilt_to(pan, tilt, pan_speed, tilt_speed)
+                self._log(packet, f"absolute pan {pan} tilt {tilt}")
+            else:
+                base_pan = s.pan_target[0] if s.pan_target else s.pan
+                base_tilt = s.tilt_target[0] if s.tilt_target else s.tilt
+                s.move_pan_tilt_to(base_pan + pan, base_tilt + tilt, pan_speed, tilt_speed)
+                self._log(packet, f"relative pan {pan:+d} tilt {tilt:+d}")
+            return self._done(after_motion=True)
+
+        if cmd == 0x04 and not args:
+            s.home()
+            self._log(packet, "home")
+            return self._done(after_motion=True)
+
+        if cmd == 0x05 and not args:
+            s.home()
+            self._log(packet, "pan/tilt reset")
+            return self._done(after_motion=True)
+
+        raise ViscaError(ViscaError.SYNTAX, f"unsupported pan/tilt command {cmd:02X}")
+
+    # -------------------------------------------------------------- inquiries
+    def _inquiry(self, packet: bytes, body: bytes) -> List[Reply]:
+        s = self.state
+        pan, tilt, zoom, focus = s.position()
+        key = bytes(body)
+        if key == b"\x04\x00":
+            payload, what = bytes([0x02 if s.power else 0x03]), "power"
+        elif key == b"\x04\x47":
+            payload, what = encode_nibbles(zoom), "zoom position"
+        elif key == b"\x04\x48":
+            payload, what = encode_nibbles(focus), "focus position"
+        elif key == b"\x04\x38":
+            payload, what = bytes([0x02 if s.autofocus else 0x03]), "focus mode"
+        elif key == b"\x04\x3F":
+            payload, what = bytes([s.last_preset or 0]), "last preset"
+        elif key == b"\x06\x12":
+            payload, what = encode_nibbles(pan) + encode_nibbles(tilt), "pan/tilt position"
+        elif key == b"\x06\x11":
+            payload, what = bytes([st.PAN_SPEED_MAX, st.TILT_SPEED_MAX]), "max speed"
+        elif key == b"\x06\x10":
+            payload, what = self._pan_tilt_status(), "pan/tilt status"
+        elif key == b"\x00\x02":
+            payload = (VENDOR_ID.to_bytes(2, "big") + MODEL_ID.to_bytes(2, "big")
+                       + ROM_VERSION.to_bytes(2, "big") + bytes([0x02]))
+            what = "version"
+        else:
+            raise ViscaError(ViscaError.SYNTAX, f"unsupported inquiry {hexdump(key)}")
+        self._log(packet, f"inquiry {what}")
+        return [Reply(self._inquiry_reply(payload))]
+
+    def _pan_tilt_status(self) -> bytes:
+        s = self.state
+        status = 0x0000
+        if s.moving:
+            status |= 0x0004  # pan/tilt moving
+        if s.pan in (st.PAN_MIN, st.PAN_MAX):
+            status |= 0x0001 if s.pan == st.PAN_MAX else 0x0002
+        return encode_nibbles(status)
+
+    # ---------------------------------------------------------------- helpers
+    def _done(self, after_motion: bool = False) -> List[Reply]:
+        if after_motion and self.instant:
+            self.state.finish_moves()
+        wait = after_motion and not self.instant
+        return [Reply(self._ack()), Reply(self._completion(), after_motion=wait)]
+
+    @staticmethod
+    def _expect_len(args: bytes, length: int) -> None:
+        if len(args) != length:
+            raise ViscaError(ViscaError.SYNTAX, f"expected {length} argument bytes, got {len(args)}")
+
+    @staticmethod
+    def _choice(args: bytes, options: dict):
+        if len(args) != 1 or args[0] not in options:
+            raise ViscaError(ViscaError.SYNTAX, "bad argument")
+        return options[args[0]]
+
+    @staticmethod
+    def _speeds(pan_speed: int, tilt_speed: int):
+        if not 1 <= pan_speed <= st.PAN_SPEED_MAX or not 1 <= tilt_speed <= st.TILT_SPEED_MAX:
+            raise ViscaError(ViscaError.SYNTAX, "speed out of range")
+        return pan_speed, tilt_speed

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ptzsim"
+version = "0.1.0"
+description = "CLI simulator for ONVIF, VISCA and NDI PTZ cameras, for testing the hai-end streaming-server"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []
+
+[project.optional-dependencies]
+ndi = ["ndi-python", "numpy"]
+
+[dependency-groups]
+dev = ["pytest>=7"]
+onvif-client = ["onvif-zeep-async"]
+
+[project.scripts]
+ptzsim = "ptzsim.cli:main"
+
+[tool.setuptools]
+packages = ["ptzsim"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
