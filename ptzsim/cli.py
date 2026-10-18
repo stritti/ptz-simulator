@@ -43,6 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--no-discovery", action="store_true", help="do not answer WS-Discovery probes")
     serve.add_argument("--advertise-host", metavar="IP",
                        help="address announced in WS-Discovery (default: detected per request)")
+    serve.add_argument("--onvif-no-absolute", action="store_true",
+                       help="simulate a camera without AbsoluteMove (presets only via SetPreset/GotoPreset)")
     serve.add_argument("--rtsp-uri", metavar="URI", help="stream URI returned by ONVIF GetStreamUri")
     serve.add_argument("--address", type=int, default=1, choices=range(1, 8),
                        help="VISCA camera address (default 1)")
@@ -82,7 +84,8 @@ async def _serve(args: argparse.Namespace) -> None:
         endpoints.append(f"VISCA serial {serve_pty(sim, args.pty or None)}")
     if args.onvif is not None:
         onvif = OnvifCamera(camera, name=args.name, username=args.onvif_user,
-                            password=args.onvif_password, rtsp_uri=args.rtsp_uri)
+                            password=args.onvif_password, rtsp_uri=args.rtsp_uri,
+                            absolute=not args.onvif_no_absolute)
         await serve_onvif(onvif, args.host, args.onvif)
         endpoints.append(f"ONVIF http://{args.host}:{args.onvif}/onvif/device_service")
         if not args.no_discovery:

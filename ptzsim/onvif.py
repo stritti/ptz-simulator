@@ -142,8 +142,10 @@ class OnvifCamera:
 
     def __init__(self, camera: ViscaCamera, name: str = "PTZ-Simulator",
                  username: Optional[str] = None, password: Optional[str] = None,
-                 rtsp_uri: Optional[str] = None):
+                 rtsp_uri: Optional[str] = None, absolute: bool = True):
         self.camera = camera
+        # False simulates a camera without AbsoluteMove (only continuous moves and presets)
+        self.absolute = absolute
         self.name = name
         self.username = username
         self.password = password
@@ -295,8 +297,7 @@ class OnvifCamera:
                 "</trt:MediaUri></trt:GetStreamUriResponse>")
 
     # ---------------------------------------------------------- PTZ config
-    @staticmethod
-    def _spaces_xml() -> str:
+    def _spaces_xml(self) -> str:
         def space2d(tag, uri, low, high):
             return (f"<tt:{tag}><tt:URI>{uri}</tt:URI><tt:XRange><tt:Min>{low}</tt:Min><tt:Max>{high}"
                     f"</tt:Max></tt:XRange><tt:YRange><tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max>"
@@ -306,8 +307,9 @@ class OnvifCamera:
             return (f"<tt:{tag}><tt:URI>{uri}</tt:URI><tt:XRange><tt:Min>{low}</tt:Min>"
                     f"<tt:Max>{high}</tt:Max></tt:XRange></tt:{tag}>")
 
-        return (space2d("AbsolutePanTiltPositionSpace", PT_POSITION_SPACE, -1, 1)
-                + space1d("AbsoluteZoomPositionSpace", ZOOM_POSITION_SPACE, 0, 1)
+        absolute = (space2d("AbsolutePanTiltPositionSpace", PT_POSITION_SPACE, -1, 1)
+                    + space1d("AbsoluteZoomPositionSpace", ZOOM_POSITION_SPACE, 0, 1)) if self.absolute else ""
+        return (absolute
                 + space2d("RelativePanTiltTranslationSpace", PT_TRANSLATION_SPACE, -1, 1)
                 + space1d("RelativeZoomTranslationSpace", ZOOM_TRANSLATION_SPACE, -1, 1)
                 + space2d("ContinuousPanTiltVelocitySpace", PT_VELOCITY_SPACE, -1, 1)
@@ -321,13 +323,14 @@ class OnvifCamera:
                 f"<tt:MaximumNumberOfPresets>{st.PRESET_COUNT - 1}</tt:MaximumNumberOfPresets>"
                 f"<tt:HomeSupported>true</tt:HomeSupported></{tag}>")
 
-    @staticmethod
-    def _configuration_xml(tag: str) -> str:
+    def _configuration_xml(self, tag: str) -> str:
+        absolute = (f"<tt:DefaultAbsolutePantTiltPositionSpace>{PT_POSITION_SPACE}</tt:DefaultAbsolutePantTiltPositionSpace>"
+                    f"<tt:DefaultAbsoluteZoomPositionSpace>{ZOOM_POSITION_SPACE}</tt:DefaultAbsoluteZoomPositionSpace>"
+                    if self.absolute else "")
         return (f'<{tag} token="{PTZ_CONFIG_TOKEN}"><tt:Name>PTZ</tt:Name><tt:UseCount>1</tt:UseCount>'
                 f"<tt:NodeToken>{PTZ_NODE_TOKEN}</tt:NodeToken>"
-                f"<tt:DefaultAbsolutePantTiltPositionSpace>{PT_POSITION_SPACE}</tt:DefaultAbsolutePantTiltPositionSpace>"
-                f"<tt:DefaultAbsoluteZoomPositionSpace>{ZOOM_POSITION_SPACE}</tt:DefaultAbsoluteZoomPositionSpace>"
-                f"<tt:DefaultRelativePanTiltTranslationSpace>{PT_TRANSLATION_SPACE}</tt:DefaultRelativePanTiltTranslationSpace>"
+                + absolute
+                + f"<tt:DefaultRelativePanTiltTranslationSpace>{PT_TRANSLATION_SPACE}</tt:DefaultRelativePanTiltTranslationSpace>"
                 f"<tt:DefaultRelativeZoomTranslationSpace>{ZOOM_TRANSLATION_SPACE}</tt:DefaultRelativeZoomTranslationSpace>"
                 f"<tt:DefaultContinuousPanTiltVelocitySpace>{PT_VELOCITY_SPACE}</tt:DefaultContinuousPanTiltVelocitySpace>"
                 f"<tt:DefaultContinuousZoomVelocitySpace>{ZOOM_VELOCITY_SPACE}</tt:DefaultContinuousZoomVelocitySpace>"
@@ -469,6 +472,8 @@ class OnvifCamera:
             s.finish_moves()
 
     def absolute_move(self, request, host) -> str:
+        if not self.absolute:
+            raise OnvifFault("ter:ActionNotSupported", "AbsoluteMove is not supported", sender=False)
         self._check_profile(request)
         self._require_power()
         self._cancel_timer()

@@ -41,7 +41,8 @@ uv run ptzsim serve --no-tui -v          # line log instead of the dashboard
 
 Without uv, `python3 -m ptzsim serve ...` works as well (standard library only).
 
-More options: `--address 1..7` (VISCA address), `--instant` (jump to target
+More options: `--onvif-no-absolute` (camera without `AbsoluteMove`, presets only via
+`SetPreset`/`GotoPreset`), `--address 1..7` (VISCA address), `--instant` (jump to target
 positions instead of moving at motor speed), `--host` (bind address). In
 dashboard mode, log messages go to `ptzsim.log`.
 

@@ -156,6 +156,20 @@ def test_presets_shared_with_visca(onvif):
     assert status == 400 and text_of(root, "Subcode", "Value") == "ter:NoToken"
 
 
+def test_camera_without_absolute_move():
+    onvif = OnvifCamera(ViscaCamera(instant=True), absolute=False)
+    _, node = call(onvif, "<tptz:GetNode><tptz:NodeToken>PTZNode_1</tptz:NodeToken></tptz:GetNode>")
+    assert find(node, "SupportedPTZSpaces", "AbsolutePanTiltPositionSpace") is None
+    assert find(node, "SupportedPTZSpaces", "ContinuousPanTiltVelocitySpace") is not None
+    _, profiles = call(onvif, "<trt:GetProfiles/>")
+    assert find(profiles, "Profiles", "PTZConfiguration", "DefaultAbsolutePantTiltPositionSpace") is None
+    status, _ = call(onvif, "<tptz:AbsoluteMove><tptz:ProfileToken>Profile_1</tptz:ProfileToken>"
+                            '<tptz:Position><tt:PanTilt x="0.5" y="0"/></tptz:Position></tptz:AbsoluteMove>')
+    assert status == 500
+    status, root = call(onvif, "<tptz:SetPreset><tptz:ProfileToken>Profile_1</tptz:ProfileToken></tptz:SetPreset>")
+    assert status == 200 and text_of(root, "Body", "SetPresetResponse", "PresetToken")
+
+
 def test_unknown_profile_and_action_are_faults(onvif):
     status, root = call(onvif, "<tptz:GetStatus><tptz:ProfileToken>nope</tptz:ProfileToken></tptz:GetStatus>")
     assert status == 400 and text_of(root, "Subcode", "Value") == "ter:NoProfile"
