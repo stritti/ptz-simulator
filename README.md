@@ -35,6 +35,7 @@ uv run ptzsim serve                      # Sony VISCA/IP on UDP 52381
 uv run ptzsim serve --tcp --sony         # TCP 5678 and UDP 52381
 uv run ptzsim serve --pty /tmp/ttyPTZ    # serial port at /tmp/ttyPTZ
 uv run --extra ndi ptzsim serve --ndi --name "Camera 1"  # NDI source "HOSTNAME (Camera 1)"
+uv run ptzsim serve --view-only          # dashboard without keyboard control
 uv run ptzsim serve --no-tui -v          # line log instead of the dashboard
 ```
 
@@ -43,6 +44,31 @@ Without uv, `python3 -m ptzsim serve ...` works as well (standard library only).
 More options: `--address 1..7` (VISCA address), `--instant` (jump to target
 positions instead of moving at motor speed), `--host` (bind address). In
 dashboard mode, log messages go to `ptzsim.log`.
+
+## Keyboard control (TUI)
+
+In a terminal, `serve` shows the live dashboard and lets you drive the camera
+from the keyboard. Your actions show up in the command log as `TUI`, next to the
+commands from ONVIF, VISCA or NDI clients, and they change the same camera, so the
+streaming-server sees the new position on its next `GetStatus`.
+
+| Key | Action |
+|-----|--------|
+| arrows or `W` `A` `S` `D` | pan/tilt while the key is held (stops ~0.35 s after the last key repeat) |
+| `+` / `-` | zoom tele / wide while the key is held |
+| space | stop all movement |
+| `[` / `]` | jog speed down / up (1–8) |
+| `h` | home position |
+| `1`–`9` | recall preset |
+| `P` then `1`–`9` | save the current position as preset |
+| `C` then `1`–`9` | clear preset |
+| `f` | toggle autofocus |
+| `o` | power on / standby |
+| `q` | quit |
+
+The keyboard UI uses `curses` and needs a terminal, so it is not available on
+native Windows Python (use WSL) or when stdin/stdout are redirected; `serve` then
+falls back to the read-only dashboard.
 
 ## Testing the streaming-server (ONVIF)
 

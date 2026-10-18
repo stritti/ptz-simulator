@@ -49,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--instant", action="store_true",
                        help="jump to target positions instead of moving at motor speed")
     serve.add_argument("--no-tui", action="store_true", help="print one line per command instead of a dashboard")
+    serve.add_argument("--view-only", action="store_true",
+                       help="show the dashboard without keyboard control")
     serve.add_argument("-v", "--verbose", action="store_true", help="log every packet sent and received")
 
     send = sub.add_parser("send", help="send VISCA hex packets to a camera and print the replies")
@@ -94,8 +96,29 @@ async def _serve(args: argparse.Namespace) -> None:
 
     title = " | ".join(endpoints)
     logging.getLogger("ptzsim").info("listening: %s", title)
-    view = log_printer(camera) if args.no_tui else dashboard(camera, title)
-    await asyncio.gather(sim.run(), view)
+    if args.no_tui:
+        view = log_printer(camera)
+    elif args.view_only or not _interactive_terminal():
+        view = dashboard(camera, title)
+    else:
+        from .tui import interactive
+
+        view = interactive(camera, title)
+    tasks = [asyncio.ensure_future(sim.run()), asyncio.ensure_future(view)]
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+    for task in done:
+        task.result()  # re-raise errors from the simulator or the view
+
+
+def _interactive_terminal() -> bool:
+    """The keyboard UI needs curses (not on Windows) and a terminal on stdin and stdout."""
+    try:
+        import curses  # noqa: F401
+    except ImportError:
+        return False
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 def send_packets(packets: List[bytes], host: str, port: int, proto: str, timeout: float) -> List[bytes]:

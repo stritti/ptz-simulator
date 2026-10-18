@@ -49,7 +49,12 @@ Run the `onvif-client` variant as well whenever `ptzsim/onvif.py` changes.
 - `ptzsim/transports.py` — Sony VISCA over IP (UDP 52381), raw VISCA over TCP/UDP, serial
   via pseudo terminal.
 - `ptzsim/ndi.py` — optional NDI source with PTZ control and a rendered test picture.
-- `ptzsim/display.py` — live terminal dashboard; `ptzsim/cli.py` — `serve` and `send`.
+- `ptzsim/display.py` — renders the dashboard (`render`), read-only view and `--no-tui` log.
+- `ptzsim/tui.py` — interactive keyboard UI. `TuiController` maps keys to `CameraState`
+  actions and is curses-free so it can be unit-tested with a fake clock; only
+  `interactive()` touches curses. Terminals send no key-release events, so jogs stop
+  after `JOG_TIMEOUT` without key repeat.
+- `ptzsim/cli.py` — `serve` and `send`; picks TUI, `--view-only` dashboard or `--no-tui`.
 
 ## What the streaming-server expects (ONVIF)
 
