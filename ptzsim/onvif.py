@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import io
 import logging
 import re
 import socket
@@ -53,6 +54,14 @@ PTZ_NODE_TOKEN = "PTZNode_1"
 PRE_AUTH = {"GetSystemDateAndTime", "GetCapabilities", "GetServices", "GetServiceCapabilities", "GetWsdlUrl"}
 
 DEFAULT_CONTINUOUS_TIMEOUT = 5.0  # seconds, used when ContinuousMove has no Timeout
+TIMEOUT_RANGE = (0.1, 60.0)  # seconds, advertised in GetConfigurationOptions
+AUTH_MODES = ("both", "digest", "wsse")
+DIGEST_REALM = "ptzsim"
+
+
+class Unauthorized(Exception):
+    """No credentials although the service needs them and HTTP digest is offered:
+    answer HTTP 401 with a digest challenge (Core spec 5.9.1)."""
 
 
 # ------------------------------------------------------------ coordinates
@@ -123,6 +132,9 @@ def envelope(body: str, header: str = "") -> str:
 
 
 class OnvifFault(Exception):
+    """SOAP 1.2 fault. ``subcode`` is the ONVIF chain below env:Sender/env:Receiver,
+    e.g. "ter:InvalidArgVal/ter:NoProfile" (Core spec 5.8.2, PTZ spec fault tables)."""
+
     def __init__(self, subcode: str, reason: str, sender: bool = True):
         super().__init__(reason)
         self.subcode = subcode
@@ -131,9 +143,20 @@ class OnvifFault(Exception):
 
     def xml(self) -> str:
         code = "s:Sender" if self.sender else "s:Receiver"
-        return (f"<s:Fault><s:Code><s:Value>{code}</s:Value><s:Subcode><s:Value>{self.subcode}"
-                f"</s:Value></s:Subcode></s:Code><s:Reason><s:Text xml:lang=\"en\">"
-                f"{escape(self.reason)}</s:Text></s:Reason></s:Fault>")
+        subcodes = [c for c in self.subcode.split("/") if c]
+        nested = "".join(f"<s:Subcode><s:Value>{c}</s:Value>" for c in subcodes) + "</s:Subcode>" * len(subcodes)
+        return (f"<s:Fault><s:Code><s:Value>{code}</s:Value>{nested}</s:Code>"
+                f"<s:Reason><s:Text xml:lang=\"en\">{escape(self.reason)}</s:Text></s:Reason></s:Fault>")
+
+
+def invalid_arg(subcode: str, reason: str) -> OnvifFault:
+    """env:Sender / ter:InvalidArgVal / ``subcode``."""
+    return OnvifFault(f"ter:InvalidArgVal/{subcode}", reason)
+
+
+def action_failed(subcode: str, reason: str) -> OnvifFault:
+    """env:Receiver / ter:Action / ``subcode``."""
+    return OnvifFault(f"ter:Action/{subcode}", reason, sender=False)
 
 
 # ------------------------------------------------------------- service
@@ -142,8 +165,13 @@ class OnvifCamera:
 
     def __init__(self, camera: ViscaCamera, name: str = "PTZ-Simulator",
                  username: Optional[str] = None, password: Optional[str] = None,
-                 rtsp_uri: Optional[str] = None, absolute: bool = True):
+                 rtsp_uri: Optional[str] = None, absolute: bool = True, auth: str = "both"):
+        if auth not in AUTH_MODES:
+            raise ValueError(f"auth must be one of {AUTH_MODES}")
         self.camera = camera
+        # "both": HTTP digest (RFC 2617) and WS-UsernameToken, "digest"/"wsse": only one of them
+        self.auth = auth
+        self._digest_nonces: Dict[str, None] = {}
         # False simulates a camera without AbsoluteMove (only continuous moves and presets)
         self.absolute = absolute
         self.name = name
@@ -166,6 +194,7 @@ class OnvifCamera:
             "GetConfigurations": self.get_configurations,
             "GetConfiguration": self.get_configuration,
             "GetConfigurationOptions": self.get_configuration_options,
+            "SetConfiguration": self.set_configuration,
             "GetStatus": self.get_status,
             "ContinuousMove": self.continuous_move,
             "AbsoluteMove": self.absolute_move,
@@ -184,8 +213,13 @@ class OnvifCamera:
         return self.camera.state
 
     # ------------------------------------------------------------- dispatch
-    def handle(self, xml_body: bytes, host: str) -> Tuple[int, str]:
-        """Handle one SOAP request; returns (HTTP status, response XML)."""
+    def handle(self, xml_body: bytes, host: str, authorization: Optional[str] = None,
+               method: str = "POST", uri: str = "/onvif/device_service") -> Tuple[int, str]:
+        """Handle one SOAP request; returns (HTTP status, response XML).
+
+        ``authorization`` is the HTTP Authorization header. Raises :class:`Unauthorized`
+        when the HTTP layer has to answer 401 with a digest challenge.
+        """
         try:
             root = ET.fromstring(xml_body)
         except ET.ParseError as err:
@@ -198,8 +232,10 @@ class OnvifCamera:
         action = _local(request.tag)
         try:
             if action not in PRE_AUTH:
-                self._check_auth(root)
+                self._check_auth(root, authorization, method, uri)
             handler = self._actions.get(action)
+            if action == "GetServiceCapabilities":
+                handler = self._service_capabilities_handler(request)
             if handler is None:
                 raise OnvifFault("ter:ActionNotSupported", f"{action} is not supported", sender=False)
             response = handler(request, host)
@@ -211,12 +247,50 @@ class OnvifCamera:
             return 400, envelope(OnvifFault("ter:InvalidArgVal", str(err)).xml())
         return 200, envelope(response)
 
-    def _check_auth(self, root: ET.Element) -> None:
+    def _check_auth(self, root: ET.Element, authorization: Optional[str], method: str, uri: str) -> None:
+        """Core spec 5.9.1, figure 4: HTTP digest first, then WS-UsernameToken."""
         if self.username is None:
             return
         token = find(root, "Security", "UsernameToken")
-        if token is None:
+        http_digest = authorization if authorization and authorization.lower().startswith("digest ") else None
+        if self.auth == "wsse":
+            http_digest = None
+        if self.auth == "digest":
+            token = None
+        if http_digest is None and token is None:
+            if self.auth != "wsse":
+                raise Unauthorized()
             raise OnvifFault("ter:NotAuthorized", "authentication required")
+        if http_digest is not None:
+            self._check_http_digest(http_digest, method, uri)
+        if token is not None:
+            self._check_username_token(token)
+
+    def digest_challenge(self) -> str:
+        """WWW-Authenticate header value for a 401 answer."""
+        nonce = uuid.uuid4().hex
+        self._digest_nonces[nonce] = None
+        while len(self._digest_nonces) > 100:  # keep only recent challenges
+            self._digest_nonces.pop(next(iter(self._digest_nonces)))
+        return f'Digest realm="{DIGEST_REALM}", qop="auth", algorithm=MD5, nonce="{nonce}"'
+
+    def _check_http_digest(self, header: str, method: str, uri: str) -> None:
+        params = {k: a or b for k, a, b in re.findall(r'(\w+)=(?:"([^"]*)"|([^,\s]*))', header[7:])}
+        if params.get("username") != self.username or params.get("nonce") not in self._digest_nonces:
+            raise OnvifFault("ter:NotAuthorized", "HTTP digest: unknown user or nonce")
+        def md5(text: str) -> str:
+            return hashlib.md5(text.encode()).hexdigest()
+        ha1 = md5(f"{self.username}:{params.get('realm', DIGEST_REALM)}:{self.password}")
+        ha2 = md5(f"{method}:{params.get('uri', uri)}")
+        if params.get("qop"):
+            expected = md5(f"{ha1}:{params['nonce']}:{params.get('nc')}:{params.get('cnonce')}:"
+                           f"{params['qop']}:{ha2}")
+        else:  # RFC 2069 style
+            expected = md5(f"{ha1}:{params['nonce']}:{ha2}")
+        if params.get("response") != expected:
+            raise OnvifFault("ter:NotAuthorized", "HTTP digest: wrong password")
+
+    def _check_username_token(self, token: ET.Element) -> None:
         user = text_of(token, "Username")
         password = find(token, "Password")
         nonce, created = text_of(token, "Nonce"), text_of(token, "Created")
@@ -226,7 +300,7 @@ class OnvifCamera:
         if password.get("Type", "").endswith("#PasswordText"):
             ok = supplied == self.password
         else:
-            if nonce is None or created is None:
+            if nonce is None or created is None:  # Core spec 5.9.5: both are required
                 raise OnvifFault("ter:NotAuthorized", "digest without nonce/created")
             digest = hashlib.sha1(base64.b64decode(nonce) + created.encode() + self.password.encode())
             ok = base64.b64encode(digest.digest()).decode() == supplied
@@ -236,7 +310,7 @@ class OnvifCamera:
     def _check_profile(self, request: ET.Element, tag: str = "ProfileToken") -> None:
         token = text_of(request, tag)
         if token is not None and token != PROFILE_TOKEN:
-            raise OnvifFault("ter:NoProfile", f"unknown profile {token}")
+            raise invalid_arg("ter:NoProfile", f"unknown profile {token}")
 
     # ------------------------------------------------------------- device
     def get_system_date_and_time(self, request, host) -> str:
@@ -263,12 +337,37 @@ class OnvifCamera:
 
     def get_services(self, request, host) -> str:
         base = f"http://{host}/onvif"
-        services = [(NS["tds"], "device_service"), (NS["trt"], "media_service"), (NS["tptz"], "ptz_service")]
+        include = (text_of(request, "IncludeCapability") or "false").lower() == "true"
+        services = [("tds", "device_service"), ("trt", "media_service"), ("tptz", "ptz_service")]
         items = "".join(
-            f"<tds:Service><tds:Namespace>{ns}</tds:Namespace><tds:XAddr>{base}/{path}</tds:XAddr>"
-            "<tds:Version><tt:Major>2</tt:Major><tt:Minor>0</tt:Minor></tds:Version></tds:Service>"
-            for ns, path in services)
+            f"<tds:Service><tds:Namespace>{NS[prefix]}</tds:Namespace><tds:XAddr>{base}/{path}</tds:XAddr>"
+            + (f"<tds:Capabilities>{self._service_capabilities(prefix)}</tds:Capabilities>" if include else "")
+            + "<tds:Version><tt:Major>2</tt:Major><tt:Minor>0</tt:Minor></tds:Version></tds:Service>"
+            for prefix, path in services)
         return f"<tds:GetServicesResponse>{items}</tds:GetServicesResponse>"
+
+    def _service_capabilities(self, prefix: str) -> str:
+        if prefix == "tds":
+            return ('<tds:Capabilities><tds:Network/>'
+                    f'<tds:Security UsernameToken="{str(self.auth != "digest").lower()}" '
+                    f'HttpDigest="{str(self.auth != "wsse").lower()}"/>'
+                    '<tds:System DiscoveryResolve="true" DiscoveryBye="true"/></tds:Capabilities>')
+        if prefix == "trt":
+            return ('<trt:Capabilities><trt:ProfileCapabilities MaximumNumberOfProfiles="1"/>'
+                    '<trt:StreamingCapabilities RTP_TCP="true" RTP_RTSP_TCP="true"/></trt:Capabilities>')
+        return ('<tptz:Capabilities EFlip="false" Reverse="false" GetCompatibleConfigurations="false" '
+                'MoveStatus="true" StatusPosition="true"/>')
+
+    def _service_capabilities_handler(self, request: ET.Element):
+        """GetServiceCapabilities exists in every service; the namespace says which one."""
+        prefix = {v: k for k, v in NS.items()}.get(request.tag[1:].split("}")[0], "tds")
+        if prefix not in ("tds", "trt", "tptz"):
+            return None
+
+        def handler(request, host) -> str:
+            return (f"<{prefix}:GetServiceCapabilitiesResponse>{self._service_capabilities(prefix)}"
+                    f"</{prefix}:GetServiceCapabilitiesResponse>")
+        return handler
 
     def get_device_information(self, request, host) -> str:
         return ("<tds:GetDeviceInformationResponse><tds:Manufacturer>ptzsim</tds:Manufacturer>"
@@ -344,21 +443,37 @@ class OnvifCamera:
     def get_node(self, request, host) -> str:
         token = text_of(request, "NodeToken")
         if token != PTZ_NODE_TOKEN:
-            raise OnvifFault("ter:NoEntity", f"unknown node {token}")
+            raise invalid_arg("ter:NoEntity", f"unknown node {token}")
         return f"<tptz:GetNodeResponse>{self._node_xml('tptz:PTZNode')}</tptz:GetNodeResponse>"
 
     def get_configurations(self, request, host) -> str:
         return (f"<tptz:GetConfigurationsResponse>{self._configuration_xml('tptz:PTZConfiguration')}"
                 "</tptz:GetConfigurationsResponse>")
 
+    @staticmethod
+    def _check_config(request: ET.Element, tag: str) -> None:
+        token = text_of(request, tag)
+        if token != PTZ_CONFIG_TOKEN:
+            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
+
     def get_configuration(self, request, host) -> str:
+        self._check_config(request, "PTZConfigurationToken")
         return (f"<tptz:GetConfigurationResponse>{self._configuration_xml('tptz:PTZConfiguration')}"
                 "</tptz:GetConfigurationResponse>")
 
+    def set_configuration(self, request, host) -> str:
+        config = find(request, "PTZConfiguration")
+        token = config.get("token") if config is not None else None
+        if token != PTZ_CONFIG_TOKEN:
+            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
+        self.camera.record("ONVIF", "SetConfiguration (accepted, not changed)")
+        return "<tptz:SetConfigurationResponse/>"
+
     def get_configuration_options(self, request, host) -> str:
+        self._check_config(request, "ConfigurationToken")
         return ("<tptz:GetConfigurationOptionsResponse><tptz:PTZConfigurationOptions>"
                 f"<tt:Spaces>{self._spaces_xml()}</tt:Spaces>"
-                "<tt:PTZTimeout><tt:Min>PT1S</tt:Min><tt:Max>PT60S</tt:Max></tt:PTZTimeout>"
+                "<tt:PTZTimeout><tt:Min>PT0.1S</tt:Min><tt:Max>PT60S</tt:Max></tt:PTZTimeout>"
                 "</tptz:PTZConfigurationOptions></tptz:GetConfigurationOptionsResponse>")
 
     # --------------------------------------------------------- PTZ status
@@ -410,18 +525,21 @@ class OnvifCamera:
         s = self.state
         vx, vy = self._xy(find(request, "Velocity", "PanTilt"))
         vz, _ = self._xy(find(request, "Velocity", "Zoom"))
-        vx, vy = st.clamp(vx or 0.0, -1, 1), st.clamp(vy or 0.0, -1, 1)
+        if any(v is not None and not -1.0 <= v <= 1.0 for v in (vx, vy, vz)):
+            raise invalid_arg("ter:InvalidVelocity", "velocity outside the generic space [-1, 1]")
+        timeout_text = text_of(request, "Timeout")
+        timeout = parse_duration(timeout_text) if timeout_text else DEFAULT_CONTINUOUS_TIMEOUT
+        if not TIMEOUT_RANGE[0] <= timeout <= TIMEOUT_RANGE[1]:
+            raise invalid_arg("ter:TimeoutNotSupported", f"timeout {timeout:g}s outside PT0.1S..PT60S")
+        vx, vy = vx or 0.0, vy or 0.0
         if find(request, "Velocity", "PanTilt") is not None:
             s.pan_target = s.tilt_target = None
             s.pan_velocity = vx * st.PAN_SPEED_MAX * st.PAN_TILT_UNITS_PER_SPEED_STEP
             s.tilt_velocity = vy * st.TILT_SPEED_MAX * st.PAN_TILT_UNITS_PER_SPEED_STEP
         if vz is not None:
-            vz = st.clamp(vz, -1, 1)
             s.zoom_target = None
             s.zoom_velocity = vz * 8 * st.ZOOM_UNITS_PER_SPEED_STEP
 
-        timeout_text = text_of(request, "Timeout")
-        timeout = parse_duration(timeout_text) if timeout_text else DEFAULT_CONTINUOUS_TIMEOUT
         self._cancel_timer()
         try:
             loop = asyncio.get_running_loop()
@@ -473,12 +591,15 @@ class OnvifCamera:
 
     def absolute_move(self, request, host) -> str:
         if not self.absolute:
-            raise OnvifFault("ter:ActionNotSupported", "AbsoluteMove is not supported", sender=False)
+            raise OnvifFault("ter:ActionNotSupported/ter:OptionalActionNotSupported",
+                             "AbsoluteMove is not supported", sender=False)
         self._check_profile(request)
         self._require_power()
         self._cancel_timer()
         x, y = self._xy(find(request, "Position", "PanTilt"))
         z, _ = self._xy(find(request, "Position", "Zoom"))
+        if any(v is not None and not -1.0 <= v <= 1.0 for v in (x, y)) or (z is not None and not 0.0 <= z <= 1.0):
+            raise invalid_arg("ter:InvalidPosition", "position outside the generic space")
         self._move_to(pan_from_onvif(x) if x is not None else None,
                       tilt_from_onvif(y) if y is not None else None,
                       zoom_from_onvif(z) if z is not None else None, self._speeds(request))
@@ -534,18 +655,20 @@ class OnvifCamera:
         try:
             number = int(token)
         except (TypeError, ValueError):
-            raise OnvifFault("ter:NoToken", f"unknown preset {token}")
+            raise invalid_arg("ter:NoToken", f"unknown preset {token}")
         if not 0 <= number < st.PRESET_COUNT:
-            raise OnvifFault("ter:NoToken", f"unknown preset {token}")
+            raise invalid_arg("ter:NoToken", f"unknown preset {token}")
         return number
 
     def set_preset(self, request, host) -> str:
         self._check_profile(request)
+        if self.state.moving:  # PTZ spec 5.4.1: fails while the unit moves
+            raise action_failed("ter:MovingPTZ", "preset cannot be set while the camera moves")
         token = text_of(request, "PresetToken")
         if token is None:
             number = self.state.free_preset_number()
             if number is None:
-                raise OnvifFault("ter:TooManyPresets", "no free preset slot", sender=False)
+                raise action_failed("ter:TooManyPresets", "no free preset slot")
         else:
             number = self._preset_number(token)
         self.state.save_preset(number, text_of(request, "PresetName"))
@@ -558,7 +681,7 @@ class OnvifCamera:
         self._cancel_timer()
         number = self._preset_number(text_of(request, "PresetToken"))
         if not self.state.recall_preset(number):
-            raise OnvifFault("ter:NoToken", f"preset {number} not set")
+            raise invalid_arg("ter:NoToken", f"preset {number} not set")
         if self.camera.instant:
             self.state.finish_moves()
         self.camera.record("ONVIF", f"GotoPreset {number}")
@@ -568,7 +691,7 @@ class OnvifCamera:
         self._check_profile(request)
         number = self._preset_number(text_of(request, "PresetToken"))
         if number not in self.state.presets:
-            raise OnvifFault("ter:NoToken", f"preset {number} not set")
+            raise invalid_arg("ter:NoToken", f"preset {number} not set")
         self.state.clear_preset(number)
         self.camera.record("ONVIF", f"RemovePreset {number}")
         return "<tptz:RemovePresetResponse/>"
@@ -593,17 +716,25 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
                 body = await reader.readexactly(int(headers.get("content-length", 0) or 0))
                 host_header = headers.get("host") or f"{local_ip}:{local_port}"
 
+                extra = ""
                 if method == "POST":
-                    status, payload = onvif.handle(body, host_header)
                     content_type = "application/soap+xml; charset=utf-8"
+                    try:
+                        status, payload = onvif.handle(body, host_header, headers.get("authorization"),
+                                                       method, path)
+                    except Unauthorized:
+                        status, payload = 401, ""
+                        content_type = "text/plain; charset=utf-8"
+                        extra = f"WWW-Authenticate: {onvif.digest_challenge()}\r\n"
                 else:
                     status, payload = 200, f"ptzsim ONVIF camera '{onvif.name}'\n"
                     content_type = "text/plain; charset=utf-8"
                 data = payload.encode()
-                reason = {200: "OK", 400: "Bad Request", 500: "Internal Server Error"}[status]
+                reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized",
+                          500: "Internal Server Error"}[status]
                 close = headers.get("connection", "").lower() == "close"
                 writer.write(
-                    f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n"
+                    f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{extra}"
                     f"Content-Length: {len(data)}\r\nConnection: {'close' if close else 'keep-alive'}"
                     f"\r\n\r\n".encode() + data)
                 await writer.drain()
@@ -632,14 +763,46 @@ def _local_ip_for(peer_ip: str) -> str:
             return "127.0.0.1"
 
 
+WSA = "http://schemas.xmlsoap.org/ws/2004/08/addressing"
+WSD = "http://schemas.xmlsoap.org/ws/2005/04/discovery"
+WSD_TO = "urn:schemas-xmlsoap-org:ws:2005:04:discovery"
+DEVICE_TYPES = {("http://www.onvif.org/ver10/network/wsdl", "NetworkVideoTransmitter"),
+                (NS["tds"], "Device")}
+
+
+def scope_matches(probe_scope: str, device_scope: str) -> bool:
+    """rfc3986 matching rule: same scheme and authority, path segments as prefix."""
+    def parts(uri: str):
+        scheme, _, rest = uri.partition("://")
+        authority, _, path = rest.partition("/")
+        return scheme.lower(), authority.lower(), [seg for seg in path.split("/") if seg]
+    ps, pa, pp = parts(probe_scope)
+    ds, da, dp = parts(device_scope)
+    return ps == ds and pa == da and dp[:len(pp)] == pp
+
+
 class DiscoveryProtocol(asyncio.DatagramProtocol):
-    """Answers WS-Discovery Probe messages with a ProbeMatch for the camera."""
+    """WS-Discovery target service: Hello/Bye, Probe and Resolve (ONVIF Core spec 7)."""
 
     def __init__(self, onvif: OnvifCamera, http_port: int, advertise_host: Optional[str] = None):
         self.onvif = onvif
         self.http_port = http_port
         self.advertise_host = advertise_host
         self.transport: Optional[asyncio.DatagramTransport] = None
+        # AppSequence: InstanceId changes on every start, MessageNumber counts messages
+        self.instance_id = int(datetime.now(timezone.utc).timestamp())
+        self.message_number = 0
+
+    @property
+    def address(self) -> str:
+        return f"urn:uuid:{self.onvif.endpoint_uuid}"
+
+    @property
+    def scopes(self) -> list:
+        name = self.onvif.name.replace(" ", "%20")
+        return ["onvif://www.onvif.org/type/ptz", "onvif://www.onvif.org/type/video_encoder",
+                "onvif://www.onvif.org/Profile/Streaming", f"onvif://www.onvif.org/name/{name}",
+                "onvif://www.onvif.org/hardware/ptzsim", "onvif://www.onvif.org/location/simulator"]
 
     def connection_made(self, transport) -> None:
         self.transport = transport
@@ -647,43 +810,84 @@ class DiscoveryProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr) -> None:
         try:
             root = ET.fromstring(data)
+            # ElementTree drops prefix declarations, but Types holds prefixed QNames
+            nsmap = {}
+            for _, (prefix, uri) in ET.iterparse(io.BytesIO(data), events=("start-ns",)):
+                nsmap.setdefault(prefix, uri)
         except ET.ParseError:
-            return
-        if find(root, "Body", "Probe") is None:
-            return
-        types = text_of(root, "Probe", "Types") or ""
-        if types and "NetworkVideoTransmitter" not in types and "Device" not in types:
-            return
+            return  # Core spec 7.3.6: silently discard broken packets
         message_id = text_of(root, "MessageID") or ""
         host = self.advertise_host or _local_ip_for(addr[0])
-        self.transport.sendto(self.probe_match(message_id, host).encode(), addr)
-        self.onvif.camera.record("ONVIF", f"WS-Discovery probe from {addr[0]}")
+        probe = find(root, "Body", "Probe")
+        resolve = find(root, "Body", "Resolve")
+        if probe is not None and self._matches(probe, nsmap):
+            self._send(addr, "ProbeMatches", "ProbeMatch", message_id, host)
+            self.onvif.camera.record("ONVIF", f"WS-Discovery probe from {addr[0]}")
+        elif resolve is not None and text_of(resolve, "EndpointReference", "Address") == self.address:
+            self._send(addr, "ResolveMatches", "ResolveMatch", message_id, host)
+            self.onvif.camera.record("ONVIF", f"WS-Discovery resolve from {addr[0]}")
 
-    def probe_match(self, relates_to: str, host: str) -> str:
-        name = self.onvif.name.replace(" ", "%20")
-        scopes = " ".join([
-            "onvif://www.onvif.org/type/ptz", "onvif://www.onvif.org/type/video_encoder",
-            "onvif://www.onvif.org/Profile/Streaming", f"onvif://www.onvif.org/name/{name}",
-            "onvif://www.onvif.org/hardware/ptzsim", "onvif://www.onvif.org/location/simulator",
-        ])
+    def _matches(self, probe: ET.Element, nsmap: Dict[str, str]) -> bool:
+        types_elem = find(probe, "Types")
+        for qname in (types_elem.text or "").split() if types_elem is not None else []:
+            prefix, _, local = qname.rpartition(":")
+            if (nsmap.get(prefix), local) not in DEVICE_TYPES:
+                return False
+        scopes_elem = find(probe, "Scopes")
+        rule = scopes_elem.get("MatchBy", f"{WSD}/rfc3986") if scopes_elem is not None else ""
+        wanted = (scopes_elem.text or "").split() if scopes_elem is not None else []
+        if wanted and not rule.endswith(("/rfc3986", "/rfc2396", "/strcmp0")):
+            return False  # unsupported matching rule: no answer (Core spec 7.3.6)
+        if rule.endswith("/strcmp0"):
+            return all(w in self.scopes for w in wanted)
+        return all(any(scope_matches(w, d) for d in self.scopes) for w in wanted)
+
+    def _envelope(self, action: str, body: str, relates_to: Optional[str] = None,
+                  to: str = f"{WSA}/role/anonymous") -> bytes:
+        self.message_number += 1
+        relates = f"<a:RelatesTo>{escape(relates_to)}</a:RelatesTo>" if relates_to is not None else ""
         return (
             '<?xml version="1.0" encoding="UTF-8"?>'
-            '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
-            'xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing" '
-            'xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" '
-            'xmlns:dn="http://www.onvif.org/ver10/network/wsdl">'
-            "<s:Header>"
-            f"<a:MessageID>uuid:{uuid.uuid4()}</a:MessageID>"
-            f"<a:RelatesTo>{escape(relates_to)}</a:RelatesTo>"
-            "<a:To>http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</a:To>"
-            "<a:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/ProbeMatches</a:Action>"
-            "</s:Header><s:Body><d:ProbeMatches><d:ProbeMatch>"
-            f"<a:EndpointReference><a:Address>urn:uuid:{self.onvif.endpoint_uuid}</a:Address></a:EndpointReference>"
-            "<d:Types>dn:NetworkVideoTransmitter</d:Types>"
-            f"<d:Scopes>{scopes}</d:Scopes>"
-            f"<d:XAddrs>http://{host}:{self.http_port}/onvif/device_service</d:XAddrs>"
-            "<d:MetadataVersion>1</d:MetadataVersion>"
-            "</d:ProbeMatch></d:ProbeMatches></s:Body></s:Envelope>")
+            f'<s:Envelope xmlns:s="{NS["s"]}" xmlns:a="{WSA}" xmlns:d="{WSD}" '
+            f'xmlns:dn="http://www.onvif.org/ver10/network/wsdl" xmlns:tds="{NS["tds"]}">'
+            f"<s:Header><a:MessageID>uuid:{uuid.uuid4()}</a:MessageID>{relates}"
+            f"<a:To>{to}</a:To><a:Action>{WSD}/{action}</a:Action>"
+            f'<d:AppSequence InstanceId="{self.instance_id}" MessageNumber="{self.message_number}"/>'
+            f"</s:Header><s:Body>{body}</s:Body></s:Envelope>").encode()
+
+    def _endpoint(self, host: Optional[str], with_xaddrs: bool = True) -> str:
+        xaddrs = f"<d:XAddrs>http://{host}:{self.http_port}/onvif/device_service</d:XAddrs>" if with_xaddrs else ""
+        return (f"<a:EndpointReference><a:Address>{self.address}</a:Address></a:EndpointReference>"
+                "<d:Types>dn:NetworkVideoTransmitter tds:Device</d:Types>"
+                f"<d:Scopes>{' '.join(self.scopes)}</d:Scopes>{xaddrs}"
+                "<d:MetadataVersion>1</d:MetadataVersion>")
+
+    def _send(self, addr, action: str, item: str, relates_to: str, host: str) -> None:
+        body = f"<d:{action}><d:{item}>{self._endpoint(host)}</d:{item}></d:{action}>"
+        self.transport.sendto(self._envelope(action, body, relates_to), addr)
+
+    def probe_match(self, relates_to: str, host: str) -> str:
+        body = f"<d:ProbeMatches><d:ProbeMatch>{self._endpoint(host)}</d:ProbeMatch></d:ProbeMatches>"
+        return self._envelope("ProbeMatches", body, relates_to).decode()
+
+    def hello(self) -> None:
+        """Multicast Hello when joining the network (Core spec 7.2)."""
+        host = self.advertise_host or _local_ip_for(DISCOVERY_GROUP)
+        body = f"<d:Hello>{self._endpoint(host)}</d:Hello>"
+        self._multicast(self._envelope("Hello", body, to=WSD_TO))
+
+    def bye(self) -> None:
+        """Multicast Bye when leaving the network (Core spec 7.3.5)."""
+        body = (f"<d:Bye><a:EndpointReference><a:Address>{self.address}</a:Address>"
+                "</a:EndpointReference></d:Bye>")
+        self._multicast(self._envelope("Bye", body, to=WSD_TO))
+
+    def _multicast(self, data: bytes) -> None:
+        if self.transport is not None and not self.transport.is_closing():
+            try:
+                self.transport.sendto(data, (DISCOVERY_GROUP, DISCOVERY_PORT))
+            except OSError as err:
+                log.debug("WS-Discovery multicast failed: %s", err)
 
 
 async def serve_discovery(onvif: OnvifCamera, http_port: int, port: int = DISCOVERY_PORT,
@@ -703,6 +907,8 @@ async def serve_discovery(onvif: OnvifCamera, http_port: int, port: int = DISCOV
         except OSError as err:
             log.warning("could not join WS-Discovery multicast group: %s", err)
     loop = asyncio.get_running_loop()
-    transport, _ = await loop.create_datagram_endpoint(
+    transport, protocol = await loop.create_datagram_endpoint(
         lambda: DiscoveryProtocol(onvif, http_port, advertise_host), sock=sock)
+    if multicast:
+        protocol.hello()
     return transport

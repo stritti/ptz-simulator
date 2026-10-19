@@ -43,6 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--no-discovery", action="store_true", help="do not answer WS-Discovery probes")
     serve.add_argument("--advertise-host", metavar="IP",
                        help="address announced in WS-Discovery (default: detected per request)")
+    serve.add_argument("--onvif-auth", choices=("both", "digest", "wsse"), default="both",
+                       help="ONVIF authentication: HTTP digest and/or WS-UsernameToken (default both)")
     serve.add_argument("--onvif-no-absolute", action="store_true",
                        help="simulate a camera without AbsoluteMove (presets only via SetPreset/GotoPreset)")
     serve.add_argument("--rtsp-uri", metavar="URI", help="stream URI returned by ONVIF GetStreamUri")
@@ -68,6 +70,7 @@ async def _serve(args: argparse.Namespace) -> None:
     camera = ViscaCamera(address=args.address, instant=args.instant)
     sim = Simulator(camera)
     endpoints: List[str] = []
+    discovery = None
 
     if all(v is None for v in (args.sony, args.tcp, args.udp, args.pty, args.onvif)) and not args.ndi:
         args.sony = DEFAULT_PORTS["sony"]
@@ -85,11 +88,11 @@ async def _serve(args: argparse.Namespace) -> None:
     if args.onvif is not None:
         onvif = OnvifCamera(camera, name=args.name, username=args.onvif_user,
                             password=args.onvif_password, rtsp_uri=args.rtsp_uri,
-                            absolute=not args.onvif_no_absolute)
+                            absolute=not args.onvif_no_absolute, auth=args.onvif_auth)
         await serve_onvif(onvif, args.host, args.onvif)
         endpoints.append(f"ONVIF http://{args.host}:{args.onvif}/onvif/device_service")
         if not args.no_discovery:
-            await serve_discovery(onvif, args.onvif, advertise_host=args.advertise_host)
+            discovery = await serve_discovery(onvif, args.onvif, advertise_host=args.advertise_host)
             endpoints.append("WS-Discovery udp/3702")
     if args.ndi:
         from .ndi import start_ndi
@@ -108,11 +111,15 @@ async def _serve(args: argparse.Namespace) -> None:
 
         view = interactive(camera, title)
     tasks = [asyncio.ensure_future(sim.run()), asyncio.ensure_future(view)]
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
-    for task in done:
-        task.result()  # re-raise errors from the simulator or the view
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        for task in done:
+            task.result()  # re-raise errors from the simulator or the view
+    finally:
+        if discovery is not None:
+            discovery.get_protocol().bye()  # WS-Discovery Bye when leaving the network
 
 
 def _interactive_terminal() -> bool:

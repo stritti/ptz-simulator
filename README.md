@@ -41,7 +41,8 @@ uv run ptzsim serve --no-tui -v          # line log instead of the dashboard
 
 Without uv, `python3 -m ptzsim serve ...` works as well (standard library only).
 
-More options: `--onvif-no-absolute` (camera without `AbsoluteMove`, presets only via
+More options: `--onvif-auth both|digest|wsse` (HTTP digest and/or WS-UsernameToken,
+default both), `--onvif-no-absolute` (camera without `AbsoluteMove`, presets only via
 `SetPreset`/`GotoPreset`), `--address 1..7` (VISCA address), `--instant` (jump to target
 positions instead of moving at motor speed), `--host` (bind address). In
 dashboard mode, log messages go to `ptzsim.log`.
@@ -212,6 +213,28 @@ There is also a test against the real ONVIF client library
 ```bash
 PTZSIM_ONVIF_CLIENT=1 uv run --group onvif-client pytest
 ```
+
+## ONVIF conformance
+
+Checked against the ONVIF Core and PTZ Service Specifications 26.06 and the official
+WSDL/XSD (every response validates against the schemas):
+
+- PTZ service: all mandatory operations (GetNodes, GetNode, GetConfigurations,
+  GetConfiguration, GetConfigurationOptions, SetConfiguration, ContinuousMove, Stop,
+  GetStatus, GetServiceCapabilities), presets, home position, AbsoluteMove and
+  RelativeMove. Faults use the spec's chains, e.g. `env:Sender / ter:InvalidArgVal /
+  ter:NoProfile`; out-of-range velocity, timeout or position is rejected, SetPreset
+  fails while the camera moves (`ter:MovingPTZ`). An omitted axis in ContinuousMove
+  keeps moving, a zero velocity stops it.
+- Authentication: HTTP digest (RFC 2617, answers 401 with a challenge) and
+  WS-UsernameToken with nonce and timestamp; `--onvif-auth` limits it to one of them.
+  GetSystemDateAndTime, GetCapabilities, GetServices and GetServiceCapabilities work
+  without credentials.
+- WS-Discovery: Types `dn:NetworkVideoTransmitter tds:Device`, AppSequence, Hello on
+  start and Bye on exit, Probe matching by type and scope (rfc3986/strcmp0), Resolve.
+
+Not simulated: device management beyond what PTZ clients need (network, users,
+scopes, firmware), events, imaging, Media2, preset tours, auxiliary commands, HTTPS.
 
 ## Unsupported protocols
 

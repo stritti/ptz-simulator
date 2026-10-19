@@ -37,6 +37,16 @@ def username_token(user, password, nonce=b"0123456789abcdef", created="2026-10-1
             f'<wsu:Created>{created}</wsu:Created></wsse:UsernameToken></wsse:Security>')
 
 
+def subcodes(root):
+    """The fault subcode chain, e.g. ["ter:InvalidArgVal", "ter:NoProfile"]."""
+    chain, elem = [], find(root, "Code")
+    while True:
+        elem = next((e for e in elem if e.tag.endswith("}Subcode")), None) if elem is not None else None
+        if elem is None:
+            return chain
+        chain.append(text_of(elem, "Value"))
+
+
 def status_position(onvif):
     _, root = call(onvif, "<tptz:GetStatus><tptz:ProfileToken>Profile_1</tptz:ProfileToken></tptz:GetStatus>")
     pt, zoom = find(root, "Position", "PanTilt"), find(root, "Position", "Zoom")
@@ -153,7 +163,7 @@ def test_presets_shared_with_visca(onvif):
                 "<tptz:PresetToken>1</tptz:PresetToken></tptz:RemovePreset>")
     status, root = call(onvif, "<tptz:GotoPreset><tptz:ProfileToken>Profile_1</tptz:ProfileToken>"
                                "<tptz:PresetToken>1</tptz:PresetToken></tptz:GotoPreset>")
-    assert status == 400 and text_of(root, "Subcode", "Value") == "ter:NoToken"
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:NoToken"]
 
 
 def test_camera_without_absolute_move():
@@ -172,14 +182,18 @@ def test_camera_without_absolute_move():
 
 def test_unknown_profile_and_action_are_faults(onvif):
     status, root = call(onvif, "<tptz:GetStatus><tptz:ProfileToken>nope</tptz:ProfileToken></tptz:GetStatus>")
-    assert status == 400 and text_of(root, "Subcode", "Value") == "ter:NoProfile"
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:NoProfile"]
+    assert text_of(root, "Code", "Value") == "s:Sender"
     status, root = call(onvif, "<tptz:SendAuxiliaryCommand/>")
-    assert status == 500 and text_of(root, "Subcode", "Value") == "ter:ActionNotSupported"
+    assert status == 500 and subcodes(root) == ["ter:ActionNotSupported"]
+    assert text_of(root, "Code", "Value") == "s:Receiver"
 
 
 def test_digest_authentication():
-    onvif = OnvifCamera(ViscaCamera(), username="admin", password="secret")
-    assert call(onvif, "<trt:GetProfiles/>")[0] == 400
+    onvif = OnvifCamera(ViscaCamera(), username="admin", password="secret", auth="wsse")
+    # only WS-UsernameToken: missing credentials are a SOAP fault (Core spec 5.9.1)
+    status, root = call(onvif, "<trt:GetProfiles/>")
+    assert status == 400 and subcodes(root) == ["ter:NotAuthorized"]
     assert call(onvif, "<trt:GetProfiles/>", username_token("admin", "wrong"))[0] == 400
     assert call(onvif, "<trt:GetProfiles/>", username_token("admin", "secret"))[0] == 200
     # GetCapabilities and GetSystemDateAndTime work before authentication.
@@ -245,7 +259,9 @@ def test_ws_discovery_probe_match():
 
     root = ET.fromstring(asyncio.run(run()))
     assert text_of(root, "RelatesTo") == "uuid:probe-1"
-    assert text_of(root, "Types") == "dn:NetworkVideoTransmitter"
+    assert text_of(root, "Types").split() == ["dn:NetworkVideoTransmitter", "tds:Device"]
+    sequence = find(root, "Header", "AppSequence")
+    assert sequence is not None and sequence.get("InstanceId") and sequence.get("MessageNumber")
     assert text_of(root, "XAddrs") == "http://127.0.0.1:8080/onvif/device_service"
     assert "onvif://www.onvif.org/name/Kamera%20Links" in text_of(root, "Scopes").split()
 
