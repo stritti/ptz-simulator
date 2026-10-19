@@ -32,7 +32,7 @@ ZOOM_KEYS = {"+": 1, "=": 1, "-": -1}
 HELP = [
     "arrows/WASD pan+tilt   +/- zoom   space stop   [ ] speed   h home",
     "1-9 recall preset   P then 1-9 save preset   C then 1-9 clear preset",
-    "f autofocus on/off   o power on/standby   q quit",
+    "f autofocus on/off   b white balance   o power on/standby   q quit",
 ]
 
 
@@ -58,7 +58,7 @@ class TuiController:
     # ------------------------------------------------------------------ keys
     def handle_key(self, key: str) -> None:
         if self.pending and key.isdigit() and key != "0":
-            self._preset_action(self.pending, int(key))
+            self._preset_action(self.pending, int(key) - 1)
             self.pending = None
             return
         self.pending = None
@@ -77,11 +77,15 @@ class TuiController:
             self._finish_if_instant()
             self._record("home")
         elif key.isdigit() and key != "0":
-            self._preset_action("recall", int(key))
+            self._preset_action("recall", int(key) - 1)
         elif key == "P":
             self.pending, self.message = "save", "save preset: press 1-9"
         elif key == "C":
             self.pending, self.message = "clear", "clear preset: press 1-9"
+        elif key == "b":
+            if self._powered():
+                self.state.one_push_white_balance()
+                self._record("one push white balance")
         elif key == "f":
             self.state.autofocus = not self.state.autofocus
             self._record(f"autofocus {'on' if self.state.autofocus else 'off'}")
@@ -138,18 +142,19 @@ class TuiController:
         self._record(f"zoom {'tele' if direction > 0 else 'wide'} (speed {self.speed})")
 
     def _preset_action(self, action: str, number: int) -> None:
+        shown = number + 1  # presets are shown 1-based, the wire value is 0-based
         if action == "save":
             self.state.save_preset(number)
-            self._record(f"save preset {number}")
+            self._record(f"save preset {shown}")
         elif action == "clear":
             self.state.clear_preset(number)
-            self._record(f"clear preset {number}")
+            self._record(f"clear preset {shown}")
         elif self._powered():
             if self.state.recall_preset(number):
                 self._finish_if_instant()
-                self._record(f"recall preset {number}")
+                self._record(f"recall preset {shown}")
             else:
-                self.message = f"preset {number} is empty"
+                self.message = f"preset {shown} is empty"
 
     def _finish_if_instant(self) -> None:
         if self.camera.instant:

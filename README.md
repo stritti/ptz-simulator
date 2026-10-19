@@ -65,6 +65,7 @@ streaming-server sees the new position on its next `GetStatus`.
 | `P` then `1`–`9` | save the current position as preset |
 | `C` then `1`–`9` | clear preset |
 | `f` | toggle autofocus |
+| `b` | one-push white balance (sets gains to neutral, locks manual) |
 | `o` | power on / standby |
 | `q` | quit |
 
@@ -110,12 +111,16 @@ Port 80 (the ONVIF default) needs root privileges, so 8080 is the default.
 - **Authentication**: WS-Security UsernameToken with `PasswordDigest` (or `PasswordText`),
   only when `--onvif-user` is set. `GetCapabilities`, `GetServices` and
   `GetSystemDateAndTime` work without login, as on real cameras.
-- Not supported: Events, Imaging, Media2. These calls return a SOAP fault
+- **Imaging** (white balance only): `GetImagingSettings`, `SetImagingSettings` and `GetOptions`
+  for video source `VideoSource_1`, mode `AUTO`/`MANUAL`, gains 0…255/128 (1.0 = VISCA 0x80). Media
+  `GetVideoSources` lists `VideoSource_1` (640×360, 25 fps). ONVIF has no
+  one-push trigger, so one push is only available via VISCA, NDI and the `b` key.
+- Not supported: Events, Media2. These calls return a SOAP fault
   (`ter:ActionNotSupported`); Events are also missing from `GetCapabilities`.
 
 Coordinates use the generic ONVIF spaces: pan −1…1 (≈ ±170°), tilt −1…1
 (−1 = −30°, 0 = level, 1 = +90°), zoom 0…1 (1×…20×), velocities −1…1.
-VISCA and ONVIF presets are the same (ONVIF token = preset number).
+VISCA and ONVIF presets are the same. The ONVIF token and the NDI index are the VISCA wire value (0–63); the dashboard and the keys 1–9 show it as 1–64. Recall uses the preset speed setting; ONVIF `GotoPreset` with a `Speed` element overrides it.
 
 ## Testing VISCA clients
 
@@ -146,7 +151,8 @@ It executes the NDI PTZ commands that receivers send as metadata:
 | `ntk_ptz_focus mode="auto"` / `mode="manual" distance` | focus | 0 = infinity … 1 = close |
 | `ntk_ptz_focus_speed distance` | move focus | −1 … +1 |
 | `ntk_ptz_store_preset index` / `ntk_ptz_recall_preset index speed` | presets | 0…99, speed 0…1 |
-| `ntk_ptz_white_balance`, `ntk_ptz_exposure`, `ntk_ptz_iris` | accepted and logged, not simulated | – |
+| `ntk_ptz_white_balance mode="auto"` / `mode="one_shot"` / `mode="manual" red blue` | white balance | 0…1 for red/blue, 0.5 neutral; `indoor`/`outdoor` fixed modes |
+| `ntk_ptz_exposure`, `ntk_ptz_iris` | accepted and logged, not simulated | – |
 
 NDI presets are the same as for VISCA and ONVIF. `ndi-python` ships the NDI
 runtime, which is subject to the NDI license terms (NDI® is a trademark of Vizrt
@@ -163,6 +169,8 @@ uv run ptzsim send "81 09 06 12 FF"                    # query position
 
 ## Supported VISCA commands
 
+VISCA commands follow `docs/visca-interface-api-description-en-US-266656.pdf` (AXIS example). The Sony list in `docs/VISCA-Command-List-Version-2.00.pdf` uses other white balance codes (`04` = ATW).
+
 Commands (reply: ACK `90 41 FF` + completion `90 51 FF`; for absolute moves the
 completion is sent once the position has been reached):
 
@@ -175,15 +183,22 @@ completion is sent once the position has been reached):
 | Focus direct | `8x 01 04 48 0p 0q 0r 0s FF` |
 | Auto focus / manual / toggle | `8x 01 04 38 02/03/10 FF` |
 | One push AF | `8x 01 04 18 01 FF` |
-| Preset reset / set / recall | `8x 01 04 3F 00/01/02 pp FF` |
+| White balance mode (00 auto, 01 indoor, 02 outdoor, 04 auto outdoor, 05 manual) | `8x 01 04 35 0p FF` |
+| Red / blue gain, relative and absolute | `8x 01 04 03/04 0p FF`, `8x 01 04 43/44 00 00 0p 0q FF` |
+| One push white balance | `8x 01 04 10 05 FF` |
+| Preset reset / set / recall (pp 00–63, shown as 1–64) | `8x 01 04 3F 00/01/02 pp FF` |
+| Preset speed select (1 separate, 2 common) | `8x 01 7E 04 1B 0p FF` |
+| Common preset speed (01–32 hex) | `8x 01 7E 04 1C 0p 0p FF` |
+| Separate preset speed (01–32 hex) | `8x 01 7E 01 0B pp qq FF` |
 | Pan/tilt drive (up, down, left, right, diagonal, stop) | `8x 01 06 01 VV WW XX YY FF` |
 | Pan/tilt absolute / relative | `8x 01 06 02/03 VV WW 0Y0Y0Y0Y 0Z0Z0Z0Z FF` |
 | Home / reset | `8x 01 06 04 FF` / `8x 01 06 05 FF` |
+| Command cancel | `8x 2z FF` (z = socket) |
 | IF_Clear | `8x 01 00 01 FF`, `88 01 00 01 FF` |
 | Address set | `88 30 01 FF` |
 
 Inquiries (reply `90 50 ... FF`): power `09 04 00`, zoom `09 04 47`,
-focus `09 04 48`, focus mode `09 04 38`, last preset `09 04 3F`,
+focus `09 04 48`, focus mode `09 04 38`, white balance mode `09 04 35`, preset speed `09 7E 04 1B`, `09 7E 04 1C`, `09 7E 01 0B`,
 pan/tilt position `09 06 12`, max speed `09 06 11`,
 pan/tilt status `09 06 10`, version `09 00 02`.
 
@@ -194,7 +209,7 @@ request.
 
 Value ranges: pan −2448…2448 (≈ ±170°), tilt −432…1296 (≈ −30…+90°),
 zoom 0x0000…0x4000 (1×…20×), focus 0x1000…0xF000, pan speed 1…0x18,
-tilt speed 1…0x14, presets 0…254.
+tilt speed 1…0x17, presets 0…63 (shown as 1…64).
 
 ## Tests
 
@@ -216,8 +231,9 @@ PTZSIM_ONVIF_CLIENT=1 uv run --group onvif-client pytest
 
 ## ONVIF conformance
 
-Checked against the ONVIF Core and PTZ Service Specifications 26.06 and the official
-WSDL/XSD (every response validates against the schemas):
+Checked against the ONVIF Core Specification 26.06 (`docs/ONVIF-Core-Specification.pdf`).
+The PTZ Service Specification is not in `docs/`, so the PTZ fault subcodes are not
+verified against it. Responses are not validated against the XSD schemas automatically.
 
 - PTZ service: all mandatory operations (GetNodes, GetNode, GetConfigurations,
   GetConfiguration, GetConfigurationOptions, SetConfiguration, ContinuousMove, Stop,
@@ -233,8 +249,10 @@ WSDL/XSD (every response validates against the schemas):
 - WS-Discovery: Types `dn:NetworkVideoTransmitter tds:Device`, AppSequence, Hello on
   start and Bye on exit, Probe matching by type and scope (rfc3986/strcmp0), Resolve.
 
+SetConfiguration returns success for the known configuration token but changes nothing.
+
 Not simulated: device management beyond what PTZ clients need (network, users,
-scopes, firmware), events, imaging, Media2, preset tours, auxiliary commands, HTTPS.
+scopes, firmware), events, imaging beyond white balance, Media2, preset tours, auxiliary commands, HTTPS.
 
 ## Unsupported protocols
 
@@ -248,7 +266,7 @@ These PTZ protocols are common but **not supported** by the simulator:
 | Sony CGI | Sony BRC/SRG via HTTP | Sony VISCA over IP is supported |
 | Axis VAPIX | Axis cameras via HTTP | `/axis-cgi/com/ptz.cgi` |
 | Canon XC Protocol | Canon CR-N/CR-X PTZ | no public specification found |
-| ONVIF Events, Imaging, Media2 | ONVIF services besides PTZ | return `ter:ActionNotSupported` |
+| ONVIF Events, Media2 | ONVIF services besides PTZ | return `ter:ActionNotSupported` |
 
 ## References
 
@@ -256,6 +274,7 @@ These PTZ protocols are common but **not supported** by the simulator:
 - ONVIF PTZ Service Specification 25.12: https://www.onvif.org/specs/2512/ONVIF-PTZ-Service-Spec-v2512.pdf
 - ONVIF Core Specification (device service, WS-Discovery on 239.255.255.250:3702): https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf
 - OASIS WS-Security UsernameToken Profile (PasswordDigest = Base64(SHA-1(nonce + created + password))): https://docs.oasis-open.org/wss/v1.1/wss-v1.1-spec-pr-UsernameTokenProfile-01.htm
+- ONVIF Imaging Service Specification 18.12 (`docs/ONVIF-Imaging-Service-Spec-v1812.pdf`)
 - Client library used for the interop test, onvif-zeep-async: https://pypi.org/project/onvif-zeep-async/
 
 **VISCA**

@@ -15,14 +15,23 @@ UNITS_PER_DEGREE = 14.4
 MAX_OPTICAL_ZOOM = 20.0
 
 PAN_SPEED_MAX = 0x18
-TILT_SPEED_MAX = 0x14
+TILT_SPEED_MAX = 0x17
 
 # How fast the simulated motors move.
 PAN_TILT_UNITS_PER_SPEED_STEP = 60.0  # units/s per speed step
 ZOOM_UNITS_PER_SPEED_STEP = 1600.0  # units/s per zoom speed step (p = 0..7)
 FOCUS_UNITS_PER_SPEED_STEP = 4000.0
 
-PRESET_COUNT = 255
+PRESET_COUNT = 64  # VISCA preset numbers 00..63 (Sony list), shown as 1..64
+# Preset drive speed 01..32 hex (1..50 in the Sony list); the doc gives no factory default.
+PRESET_SPEED_MAX = 50
+PRESET_SPEED_DEFAULT = PRESET_SPEED_MAX
+
+# White balance (VISCA API doc): gains 0x00..0xFF, 0x80 is 50 %.
+WB_MODES = ("auto", "indoor", "outdoor", "auto_outdoor", "manual")
+WB_AUTO_MODES = ("auto", "auto_outdoor")
+WB_GAIN_NEUTRAL, WB_GAIN_MAX = 0x80, 0xFF
+WB_GAIN_STEP = 8  # simulator choice: the doc does not give the relative step
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -68,6 +77,14 @@ class CameraState:
     presets: Dict[int, Preset] = field(default_factory=dict)
     last_preset: Optional[int] = None
     home_position: Tuple[float, float] = (0.0, 0.0)
+
+    preset_speed_mode: str = "separate"  # "separate" or "common"
+    preset_speeds: Dict[int, int] = field(default_factory=dict)
+    common_preset_speed: int = PRESET_SPEED_DEFAULT
+
+    white_balance: str = "auto"
+    red_gain: int = WB_GAIN_NEUTRAL
+    blue_gain: int = WB_GAIN_NEUTRAL
 
     # ----------------------------------------------------------------- queries
     @property
@@ -122,6 +139,18 @@ class CameraState:
     def set_home(self) -> None:
         self.home_position = (self.pan, self.tilt)
 
+    def set_white_balance(self, mode: str) -> None:
+        self.white_balance = mode
+
+    def set_gains(self, red: int, blue: int) -> None:
+        self.red_gain = int(clamp(red, 0, WB_GAIN_MAX))
+        self.blue_gain = int(clamp(blue, 0, WB_GAIN_MAX))
+
+    def one_push_white_balance(self) -> None:
+        # No colour sensor is simulated: one push locks manual mode at neutral gains.
+        self.set_white_balance("manual")
+        self.set_gains(WB_GAIN_NEUTRAL, WB_GAIN_NEUTRAL)
+
     def drive_zoom(self, direction: int, speed: int) -> None:
         self.zoom_target = None
         self.zoom_velocity = direction * (speed + 1) * ZOOM_UNITS_PER_SPEED_STEP
@@ -145,19 +174,29 @@ class CameraState:
         self.presets[number] = Preset(*self.position(), name=name)
 
     def free_preset_number(self) -> Optional[int]:
-        return next((n for n in range(1, PRESET_COUNT) if n not in self.presets), None)
+        return next((n for n in range(PRESET_COUNT) if n not in self.presets), None)
 
     def clear_preset(self, number: int) -> None:
         self.presets.pop(number, None)
 
-    def recall_preset(self, number: int, speed: float = 1.0) -> bool:
-        """Start moving to a preset at ``speed`` (0..1 of maximum).
+    def recall_speed(self, number: int) -> float:
+        """Preset drive speed as a fraction of the maximum, from the speed settings."""
+        if self.preset_speed_mode == "common":
+            speed = self.common_preset_speed
+        else:
+            speed = self.preset_speeds.get(number, PRESET_SPEED_DEFAULT)
+        return speed / PRESET_SPEED_MAX
+
+    def recall_preset(self, number: int, speed: Optional[float] = None) -> bool:
+        """Start moving to a preset at ``speed`` (0..1 of maximum; default from the speed settings).
 
         Returns False if the preset is not set.
         """
         preset = self.presets.get(number)
         if preset is None:
             return False
+        if speed is None:
+            speed = self.recall_speed(number)
         speed = clamp(speed, 0.05, 1.0)
         self.move_pan_tilt_to(preset.pan, preset.tilt, PAN_SPEED_MAX * speed, TILT_SPEED_MAX * speed)
         self.zoom_to(preset.zoom)
@@ -167,6 +206,9 @@ class CameraState:
             self.focus_to(preset.focus)
         self.last_preset = number
         return True
+
+    def stop_absolute(self) -> None:
+        self.pan_target = self.tilt_target = self.zoom_target = self.focus_target = None
 
     def stop_all(self) -> None:
         self.stop_pan_tilt()

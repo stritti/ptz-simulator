@@ -31,6 +31,7 @@ NS = {
     "tds": "http://www.onvif.org/ver10/device/wsdl",
     "trt": "http://www.onvif.org/ver10/media/wsdl",
     "tptz": "http://www.onvif.org/ver20/ptz/wsdl",
+    "timg": "http://www.onvif.org/ver20/imaging/wsdl",
     "tt": "http://www.onvif.org/ver10/schema",
     "ter": "http://www.onvif.org/ver10/error",
     "wsse": "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd",
@@ -49,6 +50,9 @@ ZOOM_SPEED_SPACE = f"{SPACE}/ZoomSpaces/ZoomGenericSpeedSpace"
 PROFILE_TOKEN = "Profile_1"
 PTZ_CONFIG_TOKEN = "PTZConfig_1"
 PTZ_NODE_TOKEN = "PTZNode_1"
+IMAGING_SOURCE_TOKEN = "VideoSource_1"
+VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FRAMERATE = 640, 360, 25
+WB_ONVIF_UNIT = 128  # ONVIF gain 1.0 is VISCA 0x80
 
 # Calls a client may make before authenticating (ONVIF core spec "PRE_AUTH").
 PRE_AUTH = {"GetSystemDateAndTime", "GetCapabilities", "GetServices", "GetServiceCapabilities", "GetWsdlUrl"}
@@ -206,6 +210,10 @@ class OnvifCamera:
             "SetPreset": self.set_preset,
             "GotoPreset": self.goto_preset,
             "RemovePreset": self.remove_preset,
+            "GetImagingSettings": self.get_imaging_settings,
+            "SetImagingSettings": self.set_imaging_settings,
+            "GetOptions": self.get_options,
+            "GetVideoSources": self.get_video_sources,
         }
 
     @property
@@ -329,6 +337,7 @@ class OnvifCamera:
         base = f"http://{host}/onvif"
         return ("<tds:GetCapabilitiesResponse><tds:Capabilities>"
                 f"<tt:Device><tt:XAddr>{base}/device_service</tt:XAddr></tt:Device>"
+                f"<tt:Imaging><tt:XAddr>{base}/imaging_service</tt:XAddr></tt:Imaging>"
                 f"<tt:Media><tt:XAddr>{base}/media_service</tt:XAddr><tt:StreamingCapabilities>"
                 "<tt:RTPMulticast>false</tt:RTPMulticast><tt:RTP_TCP>true</tt:RTP_TCP>"
                 "<tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP></tt:StreamingCapabilities></tt:Media>"
@@ -338,7 +347,8 @@ class OnvifCamera:
     def get_services(self, request, host) -> str:
         base = f"http://{host}/onvif"
         include = (text_of(request, "IncludeCapability") or "false").lower() == "true"
-        services = [("tds", "device_service"), ("trt", "media_service"), ("tptz", "ptz_service")]
+        services = [("tds", "device_service"), ("trt", "media_service"), ("tptz", "ptz_service"),
+                    ("timg", "imaging_service")]
         items = "".join(
             f"<tds:Service><tds:Namespace>{NS[prefix]}</tds:Namespace><tds:XAddr>{base}/{path}</tds:XAddr>"
             + (f"<tds:Capabilities>{self._service_capabilities(prefix)}</tds:Capabilities>" if include else "")
@@ -355,13 +365,15 @@ class OnvifCamera:
         if prefix == "trt":
             return ('<trt:Capabilities><trt:ProfileCapabilities MaximumNumberOfProfiles="1"/>'
                     '<trt:StreamingCapabilities RTP_TCP="true" RTP_RTSP_TCP="true"/></trt:Capabilities>')
+        if prefix == "timg":
+            return "<timg:Capabilities/>"
         return ('<tptz:Capabilities EFlip="false" Reverse="false" GetCompatibleConfigurations="false" '
                 'MoveStatus="true" StatusPosition="true"/>')
 
     def _service_capabilities_handler(self, request: ET.Element):
         """GetServiceCapabilities exists in every service; the namespace says which one."""
         prefix = {v: k for k, v in NS.items()}.get(request.tag[1:].split("}")[0], "tds")
-        if prefix not in ("tds", "trt", "tptz"):
+        if prefix not in ("tds", "trt", "tptz", "timg"):
             return None
 
         def handler(request, host) -> str:
@@ -389,6 +401,7 @@ class OnvifCamera:
         return f"<trt:GetProfileResponse>{self._profile_xml('trt:Profile')}</trt:GetProfileResponse>"
 
     def get_stream_uri(self, request, host) -> str:
+        self._check_profile(request)
         uri = self.rtsp_uri or f"rtsp://{host.split(':')[0]}:554/stream"
         return ("<trt:GetStreamUriResponse><trt:MediaUri>"
                 f"<tt:Uri>{escape(uri)}</tt:Uri><tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>"
@@ -419,7 +432,7 @@ class OnvifCamera:
     def _node_xml(self, tag: str) -> str:
         return (f'<{tag} token="{PTZ_NODE_TOKEN}" FixedHomePosition="false"><tt:Name>{escape(self.name)}</tt:Name>'
                 f"<tt:SupportedPTZSpaces>{self._spaces_xml()}</tt:SupportedPTZSpaces>"
-                f"<tt:MaximumNumberOfPresets>{st.PRESET_COUNT - 1}</tt:MaximumNumberOfPresets>"
+                f"<tt:MaximumNumberOfPresets>{st.PRESET_COUNT}</tt:MaximumNumberOfPresets>"
                 f"<tt:HomeSupported>true</tt:HomeSupported></{tag}>")
 
     def _configuration_xml(self, tag: str) -> str:
@@ -680,7 +693,10 @@ class OnvifCamera:
         self._require_power()
         self._cancel_timer()
         number = self._preset_number(text_of(request, "PresetToken"))
-        if not self.state.recall_preset(number):
+        sx, _ = self._xy(find(request, "Speed", "PanTilt"))
+        sz, _ = self._xy(find(request, "Speed", "Zoom"))
+        speed = next((v for v in (sx, sz) if v is not None), None)
+        if not self.state.recall_preset(number, speed):
             raise invalid_arg("ter:NoToken", f"preset {number} not set")
         if self.camera.instant:
             self.state.finish_moves()
@@ -695,6 +711,66 @@ class OnvifCamera:
         self.state.clear_preset(number)
         self.camera.record("ONVIF", f"RemovePreset {number}")
         return "<tptz:RemovePresetResponse/>"
+
+    # ------------------------------------------------------------- imaging
+    def _check_source(self, request: ET.Element) -> None:
+        token = text_of(request, "VideoSourceToken")
+        if token != IMAGING_SOURCE_TOKEN:
+            raise invalid_arg("ter:NoSource", f"unknown video source {token}")
+
+    def _white_balance_xml(self) -> str:
+        s = self.state
+        mode = "AUTO" if s.white_balance in st.WB_AUTO_MODES else "MANUAL"
+        return ("<tt:WhiteBalance>"
+                f"<tt:Mode>{mode}</tt:Mode>"
+                f"<tt:CrGain>{_f(s.red_gain / WB_ONVIF_UNIT)}</tt:CrGain>"
+                f"<tt:CbGain>{_f(s.blue_gain / WB_ONVIF_UNIT)}</tt:CbGain>"
+                "</tt:WhiteBalance>")
+
+    def get_imaging_settings(self, request, host) -> str:
+        self._check_source(request)
+        return ("<timg:GetImagingSettingsResponse><timg:ImagingSettings>"
+                f"{self._white_balance_xml()}</timg:ImagingSettings></timg:GetImagingSettingsResponse>")
+
+    @staticmethod
+    def _gain(request: ET.Element, tag: str) -> Optional[int]:
+        text = text_of(request, "WhiteBalance", tag)
+        if text is None:
+            return None
+        value = float(text)
+        if not 0 <= value <= st.WB_GAIN_MAX / WB_ONVIF_UNIT:
+            raise invalid_arg("ter:SettingsInvalid", f"{tag} outside 0..{_f(st.WB_GAIN_MAX / WB_ONVIF_UNIT)}")
+        return round(value * WB_ONVIF_UNIT)
+
+    def set_imaging_settings(self, request, host) -> str:
+        self._check_source(request)
+        mode = text_of(request, "WhiteBalance", "Mode")
+        if mode not in (None, "AUTO", "MANUAL"):
+            raise invalid_arg("ter:SettingsInvalid", f"unknown white balance mode {mode}")
+        red, blue = self._gain(request, "CrGain"), self._gain(request, "CbGain")
+        s = self.state
+        if mode == "AUTO" and s.white_balance not in st.WB_AUTO_MODES:
+            s.set_white_balance("auto")
+        if mode == "MANUAL" and s.white_balance != "manual":
+            s.set_white_balance("manual")
+        s.set_gains(red if red is not None else s.red_gain, blue if blue is not None else s.blue_gain)
+        self.camera.record("ONVIF", f"SetImagingSettings white balance {s.white_balance}")
+        return "<timg:SetImagingSettingsResponse/>"
+
+    def get_video_sources(self, request, host) -> str:
+        return ("<trt:GetVideoSourcesResponse>"
+                f'<trt:VideoSources token="{IMAGING_SOURCE_TOKEN}"><tt:Framerate>{VIDEO_FRAMERATE}</tt:Framerate>'
+                f"<tt:Resolution><tt:Width>{VIDEO_WIDTH}</tt:Width><tt:Height>{VIDEO_HEIGHT}</tt:Height></tt:Resolution>"
+                "</trt:VideoSources></trt:GetVideoSourcesResponse>")
+
+    def get_options(self, request, host) -> str:
+        self._check_source(request)
+        low, high = _f(0), _f(st.WB_GAIN_MAX / WB_ONVIF_UNIT)
+        return ("<timg:GetOptionsResponse><timg:ImagingOptions><tt:WhiteBalance>"
+                "<tt:Mode>AUTO</tt:Mode><tt:Mode>MANUAL</tt:Mode>"
+                f"<tt:YrGain><tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max></tt:YrGain>"
+                f"<tt:YbGain><tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max></tt:YbGain>"
+                "</tt:WhiteBalance></timg:ImagingOptions></timg:GetOptionsResponse>")
 
 
 # ------------------------------------------------------------ HTTP server

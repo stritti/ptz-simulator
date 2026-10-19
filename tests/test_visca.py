@@ -102,7 +102,6 @@ def test_presets_set_recall_reset(cam):
 
     assert send(cam, "81 01 04 3F 02 05 FF") == [ACK, DONE]
     assert cam.state.position()[:3] == (256, 32, 0x1000)
-    assert send(cam, "81 09 04 3F FF") == [parse_hex("90 50 05 FF")]
 
     send(cam, "81 01 04 3F 00 05 FF")
     assert send(cam, "81 01 04 3F 02 05 FF") == [NOT_EXECUTABLE]
@@ -136,6 +135,73 @@ def test_broadcasts(cam):
 def test_camera_address_changes_reply_header():
     cam = ViscaCamera(address=2, instant=True)
     assert send(cam, "82 01 06 04 FF") == [parse_hex("A0 41 FF"), parse_hex("A0 51 FF")]
+
+
+def test_white_balance_modes_and_one_push(cam):
+    assert send(cam, "81 09 04 35 FF") == [parse_hex("90 50 00 FF")]
+    assert send(cam, "81 01 04 35 05 FF") == [ACK, DONE]
+    assert send(cam, "81 09 04 35 FF") == [parse_hex("90 50 05 FF")]
+    assert send(cam, "81 01 04 35 01 FF") == [ACK, DONE]
+    assert cam.state.white_balance == "indoor"
+    assert send(cam, "81 01 04 35 0A FF") == [SYNTAX_ERROR]
+    cam.state.red_gain = 0x40
+    assert send(cam, "81 01 04 10 05 FF") == [ACK, DONE]
+    assert cam.state.white_balance == "manual"
+    assert (cam.state.red_gain, cam.state.blue_gain) == (st.WB_GAIN_NEUTRAL, st.WB_GAIN_NEUTRAL)
+
+
+def test_preset_numbers_follow_sony_range(cam):
+    assert send(cam, "81 01 04 3F 01 3F FF") == [ACK, DONE]
+    assert send(cam, "81 01 04 3F 01 40 FF") == [SYNTAX_ERROR]
+
+
+def test_preset_speed_commands_and_inquiries(cam):
+    assert send(cam, "81 01 7E 04 1C 00 0A FF") == [ACK, DONE]
+    assert send(cam, "81 09 7E 04 1C FF") == [parse_hex("90 50 00 0A FF")]
+    assert send(cam, "81 01 7E 04 1B 02 FF") == [ACK, DONE]
+    assert send(cam, "81 09 7E 04 1B FF") == [parse_hex("90 50 02 FF")]
+    assert send(cam, "81 01 7E 01 0B 05 07 FF") == [ACK, DONE]
+    assert send(cam, "81 09 7E 01 0B 05 FF") == [parse_hex("90 50 07 FF")]
+    assert send(cam, "81 01 7E 01 0B 05 33 FF") == [SYNTAX_ERROR]
+    assert send(cam, "81 01 7E 04 1C 00 00 FF") == [SYNTAX_ERROR]
+
+
+def test_recall_uses_preset_speed_settings():
+    s = st.CameraState()
+    s.pan = 1000
+    s.save_preset(0)
+    s.pan = 0
+    s.preset_speeds[0] = 25
+    s.recall_preset(0)
+    assert s.pan_target[1] == pytest.approx(st.PAN_SPEED_MAX * 0.5 * st.PAN_TILT_UNITS_PER_SPEED_STEP)
+    s.preset_speed_mode = "common"
+    s.common_preset_speed = st.PRESET_SPEED_MAX
+    s.recall_preset(0)
+    assert s.pan_target[1] == pytest.approx(st.PAN_SPEED_MAX * st.PAN_TILT_UNITS_PER_SPEED_STEP)
+
+
+def test_red_and_blue_gain_commands(cam):
+    assert send(cam, "81 01 04 43 00 00 00 05 FF") == [ACK, DONE]
+    assert cam.state.red_gain == 5
+    assert send(cam, "81 01 04 03 02 FF") == [ACK, DONE]
+    assert cam.state.red_gain == 5 + st.WB_GAIN_STEP
+    assert send(cam, "81 01 04 44 00 00 0F 0F FF") == [ACK, DONE]
+    assert cam.state.blue_gain == st.WB_GAIN_MAX
+    assert send(cam, "81 01 04 44 01 00 00 00 FF") == [SYNTAX_ERROR]
+    assert send(cam, "81 01 04 04 00 FF") == [ACK, DONE]
+    assert cam.state.blue_gain == st.WB_GAIN_NEUTRAL
+
+
+def test_pan_tilt_status_reports_end_stops(cam):
+    assert send(cam, "81 09 06 10 FF") == [parse_hex("90 50 00 00 FF")]
+    cam.state.pan, cam.state.tilt = st.PAN_MIN, st.TILT_MIN
+    assert send(cam, "81 09 06 10 FF") == [parse_hex("90 50 00 09 FF")]
+    cam.state.pan, cam.state.tilt = st.PAN_MAX, st.TILT_MAX
+    assert send(cam, "81 09 06 10 FF") == [parse_hex("90 50 00 06 FF")]
+
+
+def test_max_speed_inquiry(cam):
+    assert send(cam, "81 09 06 11 FF") == [parse_hex("90 50 18 17 FF")]
 
 
 def test_version_inquiry(cam):

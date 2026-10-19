@@ -77,7 +77,7 @@ def test_get_service_capabilities_is_pre_auth():
 def test_get_services_with_capabilities(onvif):
     _, root = call(onvif, "<tds:GetServices><tds:IncludeCapability>true</tds:IncludeCapability></tds:GetServices>")
     services = [e for e in root.iter() if e.tag.endswith("}Service")]
-    assert len(services) == 3 and all(find(s, "Capabilities") is not None for s in services)
+    assert len(services) == 4 and all(find(s, "Capabilities") is not None for s in services)
     _, root = call(onvif, "<tds:GetServices><tds:IncludeCapability>false</tds:IncludeCapability></tds:GetServices>")
     assert find(root, "Service", "Capabilities") is None
 
@@ -98,6 +98,53 @@ def test_omitted_axis_keeps_moving_and_zero_stops(onvif):
     assert onvif.state.pan_velocity > 0 and onvif.state.zoom_velocity > 0
     call(onvif, move.format('<tt:PanTilt x="0" y="0"/>'))  # zero stops that axis
     assert onvif.state.pan_velocity == 0 and onvif.state.zoom_velocity > 0
+
+
+# ----------------------------------------------------------------- imaging
+IMG_NS = 'xmlns:timg="http://www.onvif.org/ver20/imaging/wsdl"'
+SOURCE = "<timg:VideoSourceToken>VideoSource_1</timg:VideoSourceToken>"
+
+
+def test_imaging_white_balance_round_trip(onvif):
+    assert call(onvif, f"<timg:GetServiceCapabilities {IMG_NS}/>")[0] == 200
+    status, root = call(onvif, f"<timg:GetImagingSettings {IMG_NS}>{SOURCE}</timg:GetImagingSettings>")
+    assert status == 200 and text_of(root, "WhiteBalance", "Mode") == "AUTO"
+    body = (f"<timg:SetImagingSettings {IMG_NS}>{SOURCE}<timg:ImagingSettings><tt:WhiteBalance>"
+            "<tt:Mode>MANUAL</tt:Mode><tt:CrGain>0.5</tt:CrGain><tt:CbGain>1.5</tt:CbGain>"
+            "</tt:WhiteBalance></timg:ImagingSettings></timg:SetImagingSettings>")
+    assert call(onvif, body)[0] == 200
+    assert onvif.state.white_balance == "manual" and (onvif.state.red_gain, onvif.state.blue_gain) == (64, 192)
+    status, root = call(onvif, f"<timg:GetImagingSettings {IMG_NS}>{SOURCE}</timg:GetImagingSettings>")
+    assert text_of(root, "WhiteBalance", "Mode") == "MANUAL"
+    assert text_of(root, "WhiteBalance", "CrGain") == "0.5"
+
+
+def test_imaging_options_and_faults(onvif):
+    status, root = call(onvif, f"<timg:GetOptions {IMG_NS}>{SOURCE}</timg:GetOptions>")
+    assert status == 200 and float(text_of(root, "WhiteBalance", "YrGain", "Max")) == pytest.approx(255 / 128, abs=1e-6)
+    status, root = call(onvif, f"<timg:GetOptions {IMG_NS}><timg:VideoSourceToken>x</timg:VideoSourceToken>"
+                               "</timg:GetOptions>")
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:NoSource"]
+    body = (f"<timg:SetImagingSettings {IMG_NS}>{SOURCE}<timg:ImagingSettings><tt:WhiteBalance>"
+            "<tt:CrGain>5</tt:CrGain></tt:WhiteBalance></timg:ImagingSettings></timg:SetImagingSettings>")
+    status, root = call(onvif, body)
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:SettingsInvalid"]
+    assert onvif.state.white_balance == "auto"
+
+
+def test_stream_uri_rejects_unknown_profile(onvif):
+    status, root = call(onvif, "<trt:GetStreamUri><trt:ProfileToken>nope</trt:ProfileToken></trt:GetStreamUri>")
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:NoProfile"]
+    status, root = call(onvif, "<trt:GetStreamUri><trt:ProfileToken>Profile_1</trt:ProfileToken></trt:GetStreamUri>")
+    assert status == 200 and text_of(root, "MediaUri", "Timeout") == "PT0S"
+
+
+def test_video_source_is_discoverable_for_imaging(onvif):
+    status, root = call(onvif, '<trt:GetVideoSources xmlns:trt="http://www.onvif.org/ver10/media/wsdl"/>')
+    token = find(root, "VideoSources").get("token")
+    assert status == 200 and token == "VideoSource_1"
+    body = f"<timg:GetOptions {IMG_NS}><timg:VideoSourceToken>{token}</timg:VideoSourceToken></timg:GetOptions>"
+    assert call(onvif, body)[0] == 200
 
 
 # ------------------------------------------------------- authentication

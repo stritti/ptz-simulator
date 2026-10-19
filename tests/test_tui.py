@@ -62,19 +62,27 @@ def test_zoom_jog_and_stop():
     assert not tui.state.moving
 
 
+def test_b_key_one_push_white_balance():
+    tui, _ = make()
+    tui.state.red_gain, tui.state.blue_gain = 0x40, 0xC0
+    tui.handle_key("b")
+    assert tui.state.white_balance == "manual" and (tui.state.red_gain, tui.state.blue_gain) == (0x80, 0x80)
+    assert tui.camera.log[-1].description == "one push white balance"
+
+
 def test_save_recall_and_clear_preset():
     tui, _ = make(instant=True)
     tui.state.pan, tui.state.tilt, tui.state.zoom = 500, 200, 0x2000
     tui.handle_key("P")
     tui.handle_key("3")
-    assert 3 in tui.state.presets
+    assert 2 in tui.state.presets
     tui.handle_key("h")
     assert (tui.state.pan, tui.state.tilt) == (0, 0)
     tui.handle_key("3")
     assert tui.state.position()[:3] == (500, 200, 0x2000)
     tui.handle_key("C")
     tui.handle_key("3")
-    assert 3 not in tui.state.presets
+    assert 2 not in tui.state.presets
     tui.handle_key("3")
     assert tui.message == "preset 3 is empty"
 

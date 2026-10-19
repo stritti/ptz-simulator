@@ -20,6 +20,13 @@ VENDOR_ID = 0x0001  # Sony
 MODEL_ID = 0x0519
 ROM_VERSION = 0x0100
 
+# VISCA white balance modes per docs/visca-interface-api-description (AXIS example).
+WB_VISCA_MODES = {0x00: "auto", 0x01: "indoor", 0x02: "outdoor", 0x04: "auto_outdoor", 0x05: "manual"}
+WB_VISCA_CODES = {mode: code for code, mode in WB_VISCA_MODES.items()}
+# Preset speed select (Sony list, command category 7E).
+PRESET_SPEED_MODES = {0x01: "separate", 0x02: "common"}
+PRESET_SPEED_CODES = {mode: code for code, mode in PRESET_SPEED_MODES.items()}
+
 
 class ViscaError(Exception):
     """Raised by a command handler; carries the VISCA error code."""
@@ -40,6 +47,8 @@ class Reply:
     data: bytes
     # When True the reply must only be sent once the camera has finished moving.
     after_motion: bool = False
+    # Set for a cancel packet; the transport decides which reply to send.
+    cancel_socket: Optional[int] = None
 
 
 @dataclass
@@ -120,6 +129,9 @@ class ViscaCamera:
         sock = 0 if code == ViscaError.SYNTAX else socket
         return bytes([self._reply_header, 0x60 | sock, code, TERMINATOR])
 
+    def canceled_reply(self, socket: int = SOCKET) -> bytes:
+        return self._error(ViscaError.CANCELLED, socket)
+
     # ----------------------------------------------------------------- entry
     def handle(self, packet: bytes) -> List[Reply]:
         """Process one VISCA packet and return the replies to send."""
@@ -143,8 +155,9 @@ class ViscaCamera:
             if body[0] == 0x09:
                 return self._inquiry(packet, body[1:])
             if body[0] & 0xF0 == 0x20:
-                self._log(packet, "command cancel", ok=True)
-                return [Reply(self._error(ViscaError.NO_SOCKET, body[0] & 0x0F))]
+                socket = body[0] & 0x0F
+                self._log(packet, f"command cancel (socket {socket})", ok=True)
+                return [Reply(self._error(ViscaError.NO_SOCKET, socket), cancel_socket=socket)]
             raise ViscaError(ViscaError.SYNTAX, "unknown message type")
         except ViscaError as err:
             self._log(packet, f"error: {err}", ok=False)
@@ -196,6 +209,8 @@ class ViscaCamera:
 
         if category == 0x04:
             return self._camera_command(packet, cmd, args)
+        if category == 0x7E:
+            return self._preset_speed_command(packet, cmd, args)
         if category == 0x06:
             return self._pan_tilt_command(packet, cmd, args)
         raise ViscaError(ViscaError.SYNTAX, f"unknown command category {category:02X}")
@@ -260,6 +275,39 @@ class ViscaCamera:
             self._log(packet, "one push AF")
             return self._done()
 
+        if cmd == 0x35:  # White balance mode
+            self._expect_len(args, 1)
+            s.set_white_balance(self._choice(args, WB_VISCA_MODES))
+            self._log(packet, f"white balance {s.white_balance}")
+            return self._done()
+
+        if cmd in (0x03, 0x04, 0x43, 0x44):  # Relative (03/04) and absolute (43/44) red/blue gain
+            red = cmd in (0x03, 0x43)
+            current = s.red_gain if red else s.blue_gain
+            if cmd in (0x03, 0x04):
+                self._expect_len(args, 1)
+                value = {0x00: st.WB_GAIN_NEUTRAL, 0x02: current + st.WB_GAIN_STEP,
+                         0x03: current - st.WB_GAIN_STEP}.get(args[0])
+                if value is None:
+                    raise ViscaError(ViscaError.SYNTAX, "bad gain argument")
+            else:
+                self._expect_len(args, 4)
+                value = decode_nibbles(args)
+                if value > st.WB_GAIN_MAX:
+                    raise ViscaError(ViscaError.SYNTAX, "gain out of range")
+            if red:
+                s.set_gains(value, s.blue_gain)
+            else:
+                s.set_gains(s.red_gain, value)
+            gain = s.red_gain if red else s.blue_gain
+            self._log(packet, f"{'red' if red else 'blue'} gain {gain:#04x}")
+            return self._done()
+
+        if cmd == 0x10 and args == b"\x05":  # WB SET (one push)
+            s.one_push_white_balance()
+            self._log(packet, "one push white balance")
+            return self._done()
+
         if cmd == 0x3F:  # Memory (presets)
             self._expect_len(args, 2)
             action, number = args
@@ -267,20 +315,48 @@ class ViscaCamera:
                 raise ViscaError(ViscaError.SYNTAX, f"preset {number} out of range")
             if action == 0x00:
                 s.clear_preset(number)
-                self._log(packet, f"preset {number} reset")
+                self._log(packet, f"preset {number + 1} reset")
                 return self._done()
             if action == 0x01:
                 s.save_preset(number)
-                self._log(packet, f"preset {number} set")
+                self._log(packet, f"preset {number + 1} set")
                 return self._done()
             if action == 0x02:
                 if not s.recall_preset(number):
-                    raise ViscaError(ViscaError.NOT_EXECUTABLE, f"preset {number} not set")
-                self._log(packet, f"preset {number} recall")
+                    raise ViscaError(ViscaError.NOT_EXECUTABLE, f"preset {number + 1} not set")
+                self._log(packet, f"preset {number + 1} recall")
                 return self._done(after_motion=True)
             raise ViscaError(ViscaError.SYNTAX, "bad memory action")
 
         raise ViscaError(ViscaError.SYNTAX, f"unsupported camera command {cmd:02X}")
+
+    def _preset_speed_command(self, packet: bytes, cmd: int, args: bytes) -> List[Reply]:
+        s = self.state
+        if cmd == 0x04 and args[:1] == b"\x1B":  # Speed select: separate or common
+            self._expect_len(args, 2)
+            s.preset_speed_mode = self._choice(args[1:], PRESET_SPEED_MODES)
+            self._log(packet, f"preset speed {s.preset_speed_mode}")
+            return self._done()
+        if cmd == 0x04 and args[:1] == b"\x1C":  # Common speed
+            self._expect_len(args, 3)
+            s.common_preset_speed = self._preset_speed(decode_nibbles(args[1:]))
+            self._log(packet, f"common preset speed {s.common_preset_speed}")
+            return self._done()
+        if cmd == 0x01 and args[:1] == b"\x0B":  # Separate speed for one preset
+            self._expect_len(args, 3)
+            number = args[1]
+            if number >= st.PRESET_COUNT:
+                raise ViscaError(ViscaError.SYNTAX, f"preset {number + 1} out of range")
+            s.preset_speeds[number] = self._preset_speed(args[2])
+            self._log(packet, f"preset {number + 1} speed {s.preset_speeds[number]}")
+            return self._done()
+        raise ViscaError(ViscaError.SYNTAX, f"unsupported extended command {cmd:02X}")
+
+    @staticmethod
+    def _preset_speed(value: int) -> int:
+        if not 1 <= value <= st.PRESET_SPEED_MAX:
+            raise ViscaError(ViscaError.SYNTAX, "preset speed out of range")
+        return value
 
     def _pan_tilt_command(self, packet: bytes, cmd: int, args: bytes) -> List[Reply]:
         s = self.state
@@ -320,9 +396,9 @@ class ViscaCamera:
             return self._done(after_motion=True)
 
         if cmd == 0x05 and not args:
-            s.home()
-            self._log(packet, "pan/tilt reset")
-            return self._done(after_motion=True)
+            s.stop_pan_tilt()
+            self._log(packet, "pan/tilt driver reset")
+            return self._done()
 
         raise ViscaError(ViscaError.SYNTAX, f"unsupported pan/tilt command {cmd:02X}")
 
@@ -339,8 +415,17 @@ class ViscaCamera:
             payload, what = encode_nibbles(focus), "focus position"
         elif key == b"\x04\x38":
             payload, what = bytes([0x02 if s.autofocus else 0x03]), "focus mode"
-        elif key == b"\x04\x3F":
-            payload, what = bytes([s.last_preset or 0]), "last preset"
+        elif key == b"\x04\x35":
+            payload, what = bytes([WB_VISCA_CODES[s.white_balance]]), "white balance mode"
+        elif key == b"\x7e\x04\x1b":
+            payload, what = bytes([PRESET_SPEED_CODES[s.preset_speed_mode]]), "preset speed mode"
+        elif key == b"\x7e\x04\x1c":
+            payload, what = encode_nibbles(s.common_preset_speed, count=2), "common preset speed"
+        elif len(key) == 4 and key[:3] == b"\x7e\x01\x0b":
+            if key[3] >= st.PRESET_COUNT:
+                raise ViscaError(ViscaError.SYNTAX, f"preset {key[3]} out of range")
+            payload = bytes([s.preset_speeds.get(key[3], st.PRESET_SPEED_DEFAULT)])
+            what = "preset speed"
         elif key == b"\x06\x12":
             payload, what = encode_nibbles(pan) + encode_nibbles(tilt), "pan/tilt position"
         elif key == b"\x06\x11":
@@ -359,11 +444,15 @@ class ViscaCamera:
     def _pan_tilt_status(self) -> bytes:
         s = self.state
         status = 0x0000
-        if s.moving:
-            status |= 0x0004  # pan/tilt moving
-        if s.pan in (st.PAN_MIN, st.PAN_MAX):
-            status |= 0x0001 if s.pan == st.PAN_MAX else 0x0002
-        return encode_nibbles(status)
+        if s.pan <= st.PAN_MIN:
+            status |= 0x0001
+        if s.pan >= st.PAN_MAX:
+            status |= 0x0002
+        if s.tilt >= st.TILT_MAX:
+            status |= 0x0004
+        if s.tilt <= st.TILT_MIN:
+            status |= 0x0008
+        return status.to_bytes(2, "big")
 
     # ---------------------------------------------------------------- helpers
     def _done(self, after_motion: bool = False) -> List[Reply]:

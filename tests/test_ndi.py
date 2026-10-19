@@ -32,6 +32,18 @@ def test_pan_speed_positive_moves_left():
     assert ndi.camera.log[-1].description == "pan/tilt stop"
 
 
+def test_white_balance_modes(ndi):
+    ndi.handle('<ntk_ptz_white_balance mode="manual" red="0.25" blue="0.75"/>')
+    assert ndi.state.white_balance == "manual" and (ndi.state.red_gain, ndi.state.blue_gain) == (64, 192)
+    ndi.handle('<ntk_ptz_white_balance mode="indoor"/>')
+    assert ndi.state.white_balance == "indoor"
+    ndi.handle('<ntk_ptz_white_balance mode="auto"/>')
+    assert ndi.state.white_balance == "auto"
+    ndi.handle('<ntk_ptz_white_balance mode="one_shot"/>')
+    assert ndi.state.white_balance == "manual" and (ndi.state.red_gain, ndi.state.blue_gain) == (0x80, 0x80)
+    assert ndi.camera.log[-1].description == "white balance one shot"
+
+
 def test_zoom_absolute_is_inverted(ndi):
     ndi.handle('<ntk_ptz_zoom zoom="0.000000"/>')
     assert ndi.state.zoom == st.ZOOM_MAX  # 0.0 = zoomed in
@@ -75,7 +87,7 @@ def test_recall_speed_slows_the_move():
 
 
 def test_unsimulated_and_unknown_messages(ndi):
-    assert ndi.handle('<ntk_ptz_white_balance mode="auto"/>')
+    assert ndi.handle('<ntk_ptz_exposure mode="auto"/>')
     assert "not simulated" in ndi.camera.log[-1].description
     assert not ndi.handle('<ntk_tally on_program="true"/>')
     assert not ndi.handle('<not xml')

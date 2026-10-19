@@ -149,7 +149,7 @@ def test_presets_shared_with_visca(onvif):
     _, root = call(onvif, "<tptz:SetPreset><tptz:ProfileToken>Profile_1</tptz:ProfileToken>"
                           "<tptz:PresetName>Altar</tptz:PresetName></tptz:SetPreset>")
     token = text_of(root, "PresetToken")
-    assert token == "1" and onvif.state.presets[1].name == "Altar"
+    assert token == "0" and onvif.state.presets[0].name == "Altar"
 
     onvif.camera.handle(parse_hex("81 01 06 04 FF"))
     call(onvif, f"<tptz:GotoPreset><tptz:ProfileToken>Profile_1</tptz:ProfileToken>"

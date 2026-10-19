@@ -115,4 +115,17 @@ def test_render_shows_state():
     cam = ViscaCamera(instant=True)
     cam.handle(parse_hex("81 01 04 3F 01 03 FF"))
     text = render(cam, "test", color=False)
-    assert "Pan" in text and "3: pan" in text and "preset 3 set" in text
+    assert "Pan" in text and "4: pan" in text and "preset 4 set" in text
+
+
+def test_cancel_drops_waiting_completion():
+    sim = Simulator(ViscaCamera(), tick_interval=0.01)
+    out = []
+    sim.process(parse_hex("81 01 06 02 18 14 00 01 00 00 00 00 00 00 FF"), out.append)
+    sim.process(parse_hex("81 21 FF"), out.append)
+    assert out == [parse_hex("90 41 FF"), parse_hex("90 61 04 FF")]
+    sim.step(100)
+    assert out == [parse_hex("90 41 FF"), parse_hex("90 61 04 FF")]
+    assert not sim.camera.state.busy
+    sim.process(parse_hex("81 21 FF"), out.append)
+    assert out[-1] == parse_hex("90 61 05 FF")

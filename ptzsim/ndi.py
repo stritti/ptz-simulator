@@ -29,7 +29,6 @@ log = logging.getLogger("ptzsim")
 
 # Connection metadata a sender sends so receivers report PTZ support.
 CAPABILITIES = '<ndi_capabilities ntk_ptz="true"/>'
-NDI_PRESET_COUNT = 100
 
 
 class NdiPtzController:
@@ -115,8 +114,8 @@ class NdiPtzController:
     # ------------------------------------------------------------- presets
     def _preset(self, a) -> int:
         number = int(a["index"])
-        if not 0 <= number < NDI_PRESET_COUNT:
-            raise ValueError(f"preset {number} out of range 0..99")
+        if not 0 <= number < st.PRESET_COUNT:
+            raise ValueError(f"preset {number} out of range 0..{st.PRESET_COUNT - 1}")
         return number
 
     def _ntk_ptz_store_preset(self, a) -> str:
@@ -137,6 +136,18 @@ class NdiPtzController:
         return f"{name} {detail} (not simulated)".replace("  ", " ")
 
     def _ntk_ptz_white_balance(self, a) -> str:
+        mode = a.get("mode")
+        if mode in ("auto", "indoor", "outdoor"):
+            self.state.set_white_balance(mode)
+            return f"white balance {mode}"
+        if mode == "one_shot":
+            self.state.one_push_white_balance()
+            return "white balance one shot"
+        if mode == "manual":
+            red, blue = self._num(a, "red", 0, 1), self._num(a, "blue", 0, 1)
+            self.state.set_white_balance("manual")
+            self.state.set_gains(round(red * 256), round(blue * 256))  # NDI 0.5 is neutral (0x80)
+            return f"white balance manual red {red:.2f} blue {blue:.2f}"
         return self._ignored("white balance", a)
 
     def _ntk_ptz_exposure(self, a) -> str:

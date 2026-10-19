@@ -49,13 +49,14 @@ def render(camera: ViscaCamera, title: str, color: bool = True, log_lines: int =
         f"{bar(s.zoom, st.ZOOM_MIN, st.ZOOM_MAX)}  {motion(s.zoom_velocity, s.zoom_target)}",
         f"Focus {focus:#06x}  {'AF' if s.autofocus else 'MF':>8}  "
         f"{bar(s.focus, st.FOCUS_MIN, st.FOCUS_MAX)}  {motion(s.focus_velocity, s.focus_target)}",
+        f"White balance  {s.white_balance:<12}  R {s.red_gain:#04x}  B {s.blue_gain:#04x}",
         "",
     ]
     if s.presets:
         lines.append(f"{b}Presets{x}")
         for number, p in sorted(s.presets.items()):
             marker = "*" if number == s.last_preset else " "
-            lines.append(f" {marker}{number:3d}: pan {p.pan:6d}  tilt {p.tilt:6d}  "
+            lines.append(f" {marker}{number + 1:3d}: pan {p.pan:6d}  tilt {p.tilt:6d}  "
                          f"zoom {p.zoom:#06x}  focus {p.focus:#06x}"
                          + (f"  {p.name}" if p.name else ""))
     else:

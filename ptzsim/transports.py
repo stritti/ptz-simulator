@@ -9,7 +9,7 @@ import struct
 import time
 from typing import Callable, List, Optional, Tuple
 
-from .visca import ViscaCamera, hexdump, split_packets
+from .visca import SOCKET, ViscaCamera, hexdump, split_packets
 
 log = logging.getLogger("ptzsim")
 
@@ -37,7 +37,9 @@ class Simulator:
     def process(self, packet: bytes, send: Send) -> None:
         log.debug("rx %s", hexdump(packet))
         for reply in self.camera.handle(packet):
-            if reply.after_motion and self.camera.state.busy:
+            if reply.cancel_socket is not None and self._cancel(reply.cancel_socket):
+                self._send(send, self.camera.canceled_reply(reply.cancel_socket))
+            elif reply.after_motion and self.camera.state.busy:
                 self._pending.append((send, reply.data))
             else:
                 self._send(send, reply.data)
@@ -48,6 +50,14 @@ class Simulator:
             send(data)
         except (OSError, RuntimeError) as err:  # client went away
             log.debug("send failed: %s", err)
+
+    def _cancel(self, socket: int) -> bool:
+        """Drop the completion waiting on ``socket``; False if nothing is running there."""
+        if socket != SOCKET or not self._pending:
+            return False
+        self._pending = []
+        self.camera.state.stop_absolute()
+        return True
 
     def step(self, dt: float) -> None:
         self.camera.state.tick(dt)
