@@ -124,7 +124,7 @@ def post(port, body, header="", user=None, password=None):
     data = SOAP.format(header=header, body=body).encode()
     request = urllib.request.Request(f"http://127.0.0.1:{port}/onvif/device_service", data=data,
                                      headers={"Content-Type": "application/soap+xml"})
-    handlers = []
+    handlers = [urllib.request.ProxyHandler({})]  # never via HTTP_PROXY
     if user:
         manager = urllib.request.HTTPPasswordMgrWithDefaultRealm()
         manager.add_password(None, f"http://127.0.0.1:{port}/", user, password)
