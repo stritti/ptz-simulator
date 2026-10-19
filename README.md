@@ -137,7 +137,7 @@ uv run --extra ndi ptzsim serve --ndi --name "Camera 1"
 The simulator shows up as the NDI source `HOSTNAME (Camera 1)` and sends a test
 picture (640×360, `--ndi-fps`, default 25): a grid with sky, ground, horizon and
 red posts every 45° that moves with pan, tilt and zoom. It announces PTZ support
-(`<ndi_capabilities ntk_ptz="true"/>`), so NDI Studio Monitor, vMix, OBS
+(`<ndi_capabilities ntk_ptz="true" .../>` with pan/tilt, zoom, focus, autofocus, white balance and preset speed; NDI preset indexes 0–99, of which the camera has 64), so NDI Studio Monitor, vMix, OBS
 (DistroAV) etc. offer PTZ control.
 
 It executes the NDI PTZ commands that receivers send as metadata:
@@ -203,9 +203,26 @@ pan/tilt position `09 06 12`, max speed `09 06 11`,
 pan/tilt status `09 06 10`, version `09 00 02`.
 
 Errors: syntax error `90 60 02 FF`, not executable `90 61 41 FF` (e.g. standby
-or preset not set). Sony VISCA/IP: the control command `RESET` (`02 00`) is
-acknowledged with `02 01 ... 01`; replies carry the sequence number of the
-request.
+or preset not set). `IF_Clear` answers `90 50 FF` without ACK. Pan/tilt status
+reports "initialization completes" (`20 00`) plus "operating" (`04 00`) or
+"operations complete" (`08 00`) and the end-stop bits. In absolute/relative moves
+tilt speed `00` means "same as pan", and both 4- and 5-digit coordinates are
+accepted (classic BRC/EVI/Axis and newer Sony models).
+
+Sony VISCA/IP (per the Sony VISCA command list, chapter VISCA over IP): the control
+command `RESET` (`02 00`) is acknowledged with `02 01 ... 01` and resets the
+sequence number; replies carry the sequence number of the request. A repeated
+sequence number is not executed again and answered with control reply `0F 01`, a
+payload type that does not match the packet (inquiry sent as command or vice versa)
+with `0F 02`. The camera address is fixed to 1 over IP: any address is accepted and
+replies always come from `90`.
+
+**VISCA is not one standard.** The transport (VISCA over IP, replies, error codes,
+sockets) is common to Sony cameras, the command set differs per model. The simulator
+follows the classic 4-digit Sony BRC/EVI and Axis command set; check the command
+list of the target camera before relying on model-specific commands (e.g. white
+balance codes, speed ranges, 5-digit positions on newer Sony models). Simplification:
+only one command socket, so "command buffer full" never occurs.
 
 Value ranges: pan −2448…2448 (≈ ±170°), tilt −432…1296 (≈ −30…+90°),
 zoom 0x0000…0x4000 (1×…20×), focus 0x1000…0xF000, pan speed 1…0x18,

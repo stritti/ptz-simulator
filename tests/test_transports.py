@@ -9,7 +9,9 @@ import pytest
 
 from ptzsim.cli import send_packets
 from ptzsim.display import render
-from ptzsim.transports import Simulator, serve_pty, serve_tcp, serve_udp
+from ptzsim.transports import (SONY_CONTROL_COMMAND, SONY_CONTROL_REPLY, SONY_HEADER, SONY_VISCA_COMMAND,
+                                SONY_VISCA_INQUIRY, Simulator, SonyViscaIpProtocol, serve_pty, serve_tcp,
+                                serve_udp)
 from ptzsim.visca import ViscaCamera, parse_hex
 
 
@@ -129,3 +131,48 @@ def test_cancel_drops_waiting_completion():
     assert not sim.camera.state.busy
     sim.process(parse_hex("81 21 FF"), out.append)
     assert out[-1] == parse_hex("90 61 05 FF")
+
+
+class FakeTransport:
+    def __init__(self):
+        self.sent = []
+
+    def sendto(self, data, addr):
+        self.sent.append(data)
+
+
+def sony(payload_type, sequence, hex_packet):
+    packet = parse_hex(hex_packet)
+    return SONY_HEADER.pack(payload_type, len(packet), sequence) + packet
+
+
+def sony_protocol():
+    protocol = SonyViscaIpProtocol(Simulator(ViscaCamera(instant=True)))
+    protocol.connection_made(FakeTransport())
+    return protocol
+
+
+def test_sony_ip_repeated_sequence_is_not_executed_again():
+    protocol = sony_protocol()
+    home = sony(SONY_VISCA_COMMAND, 7, "81 01 06 04 FF")
+    protocol.datagram_received(home, ("10.0.0.1", 1))
+    protocol.datagram_received(home, ("10.0.0.1", 1))
+    assert protocol.transport.sent[-1] == SONY_HEADER.pack(SONY_CONTROL_REPLY, 2, 7) + b""
+    assert len(protocol.transport.sent) == 3  # ACK, completion, sequence error
+    # after a RESET the same number is fine again
+    protocol.datagram_received(SONY_HEADER.pack(SONY_CONTROL_COMMAND, 1, 0) + b"", ("10.0.0.1", 1))
+    protocol.datagram_received(home, ("10.0.0.1", 1))
+    assert protocol.transport.sent[-1][8:] == parse_hex("90 51 FF")
+
+
+def test_sony_ip_wrong_message_type():
+    protocol = sony_protocol()
+    protocol.datagram_received(sony(SONY_VISCA_COMMAND, 1, "81 09 06 12 FF"), ("10.0.0.1", 1))
+    protocol.datagram_received(sony(SONY_VISCA_INQUIRY, 2, "81 01 06 04 FF"), ("10.0.0.1", 1))
+    assert [d[8:] for d in protocol.transport.sent] == [b"", b""]
+
+
+def test_sony_ip_any_address_counts_as_camera_1():
+    protocol = sony_protocol()
+    protocol.datagram_received(sony(SONY_VISCA_COMMAND, 1, "83 01 06 04 FF"), ("10.0.0.1", 1))
+    assert [d[8:] for d in protocol.transport.sent] == [parse_hex("90 41 FF"), parse_hex("90 51 FF")]

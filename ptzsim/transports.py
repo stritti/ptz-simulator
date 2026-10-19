@@ -23,6 +23,9 @@ SONY_VISCA_DEVICE_SETTING = 0x0120
 SONY_CONTROL_COMMAND = 0x0200
 SONY_CONTROL_REPLY = 0x0201
 SONY_HEADER = struct.Struct(">HHI")
+# Control reply "ERROR": abnormality in the sequence number / in the message type.
+ERROR_SEQUENCE = b"\x0f\x01"
+ERROR_MESSAGE_TYPE = b"\x0f\x02"
 
 
 class Simulator:
@@ -119,6 +122,8 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
     def __init__(self, sim: Simulator):
         self.sim = sim
         self.transport: Optional[asyncio.DatagramTransport] = None
+        # Last sequence number per controller; a repeat is not executed again.
+        self._last_sequence = {}
 
     def connection_made(self, transport) -> None:
         self.transport = transport
@@ -137,18 +142,36 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
         if payload_type == SONY_CONTROL_COMMAND:
             # 0x01 = RESET of the sequence number; answer with an ACK.
             log.info("Sony VISCA-IP control command %s from %s", hexdump(payload), addr)
+            if payload[:1] == b"\x01":
+                self._last_sequence.pop(addr, None)
             self._reply(addr, SONY_CONTROL_REPLY, sequence, b"\x01")
             return
         if payload_type not in (SONY_VISCA_COMMAND, SONY_VISCA_INQUIRY, SONY_VISCA_DEVICE_SETTING):
             log.warning("unknown Sony VISCA-IP payload type %04X from %s", payload_type, addr)
-            self._reply(addr, SONY_CONTROL_REPLY, sequence, b"\x0f\x01")
+            self._reply(addr, SONY_CONTROL_REPLY, sequence, ERROR_MESSAGE_TYPE)
             return
+        # The message type must match the VISCA packet: 8x 01 .. command, 8x 09 .. inquiry.
+        kind = payload[1:2]
+        if (payload_type == SONY_VISCA_COMMAND and kind == b"\x09") or (
+                payload_type == SONY_VISCA_INQUIRY and kind != b"\x09"):
+            self._reply(addr, SONY_CONTROL_REPLY, sequence, ERROR_MESSAGE_TYPE)
+            return
+        # A retransmission with the same sequence number is not executed again.
+        if self._last_sequence.get(addr) == sequence:
+            self._reply(addr, SONY_CONTROL_REPLY, sequence, ERROR_SEQUENCE)
+            return
+        self._last_sequence[addr] = sequence
 
         buffer = bytearray(payload)
         for packet in split_packets(buffer):
+            # Over IP the camera address is fixed to 1 and the controller to 0:
+            # any address is accepted and every reply comes from 90.
+            if packet[0] & 0xF0 == 0x80 and packet[0] != 0x88:
+                packet = bytes([0x80 | self.sim.camera.address]) + packet[1:]
             self.sim.process(
                 packet,
-                lambda reply, a=addr, seq=sequence: self._reply(a, SONY_VISCA_REPLY, seq, reply),
+                lambda reply, a=addr, seq=sequence: self._reply(
+                    a, SONY_VISCA_REPLY, seq, bytes([0x90]) + reply[1:]),
             )
 
 

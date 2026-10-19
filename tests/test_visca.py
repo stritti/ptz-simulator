@@ -193,11 +193,36 @@ def test_red_and_blue_gain_commands(cam):
 
 
 def test_pan_tilt_status_reports_end_stops(cam):
-    assert send(cam, "81 09 06 10 FF") == [parse_hex("90 50 00 00 FF")]
+    # Sony "Pan/Tilt Status Codes": 0x2000 = initialization completes
+    assert send(cam, "81 09 06 10 FF") == [parse_hex("90 50 20 00 FF")]
     cam.state.pan, cam.state.tilt = st.PAN_MIN, st.TILT_MIN
-    assert send(cam, "81 09 06 10 FF") == [parse_hex("90 50 00 09 FF")]
+    assert send(cam, "81 09 06 10 FF") == [parse_hex("90 50 20 09 FF")]
     cam.state.pan, cam.state.tilt = st.PAN_MAX, st.TILT_MAX
-    assert send(cam, "81 09 06 10 FF") == [parse_hex("90 50 00 06 FF")]
+    assert send(cam, "81 09 06 10 FF") == [parse_hex("90 50 20 06 FF")]
+
+
+def test_pan_tilt_status_operating_and_complete():
+    cam = ViscaCamera()
+    send(cam, "81 01 06 01 10 10 02 03 FF")
+    assert send(cam, "81 09 06 10 FF") == [parse_hex("90 50 24 00 FF")]  # operating
+    send(cam, "81 01 06 01 10 10 03 03 FF")
+    assert send(cam, "81 09 06 10 FF") == [parse_hex("90 50 28 00 FF")]  # complete
+
+
+def test_if_clear_has_no_ack(cam):
+    assert send(cam, "81 01 00 01 FF") == [parse_hex("90 50 FF")]
+
+
+def test_absolute_tilt_speed_00_follows_pan(cam):
+    assert send(cam, "81 01 06 02 18 00 00 01 00 00 00 00 00 00 FF") == [
+        parse_hex("90 41 FF"), parse_hex("90 51 FF")]
+    assert cam.state.pan == 256
+
+
+def test_absolute_position_with_five_digits(cam):
+    # newer Sony models (e.g. ILME-FR7) use 5 nibbles per axis
+    send(cam, "81 01 06 02 18 14 00 00 01 00 00 0F 0F 0F 0F 0F FF")
+    assert cam.state.position()[:2] == (256, -1)
 
 
 def test_max_speed_inquiry(cam):

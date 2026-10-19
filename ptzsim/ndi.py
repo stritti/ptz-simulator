@@ -28,7 +28,10 @@ from .visca import ViscaCamera
 log = logging.getLogger("ptzsim")
 
 # Connection metadata a sender sends so receivers report PTZ support.
-CAPABILITIES = '<ndi_capabilities ntk_ptz="true"/>'
+CAPABILITIES = ('<ndi_capabilities ntk_ptz="true" ntk_pan_tilt="true" ntk_zoom="true" '
+                'ntk_focus="true" ntk_autofocus="true" ntk_white_balance="true" '
+                'ntk_preset_speed="true"/>')
+PRESET_RANGE = range(0, 100)  # NDI SDK: "The preset number is in the range 0 to 99"
 
 
 class NdiPtzController:
@@ -114,8 +117,10 @@ class NdiPtzController:
     # ------------------------------------------------------------- presets
     def _preset(self, a) -> int:
         number = int(a["index"])
-        if not 0 <= number < st.PRESET_COUNT:
-            raise ValueError(f"preset {number} out of range 0..{st.PRESET_COUNT - 1}")
+        if number not in PRESET_RANGE:
+            raise ValueError(f"preset {number} out of the NDI range 0..99")
+        if number >= st.PRESET_COUNT:
+            raise ValueError(f"preset {number}: the camera has {st.PRESET_COUNT} presets")
         return number
 
     def _ntk_ptz_store_preset(self, a) -> str:

@@ -158,3 +158,19 @@ def test_real_ndi_round_trip():
     assert supported
     assert camera.state.pan_target is not None or camera.state.pan > 0
     assert 7 in camera.state.presets
+
+
+def test_ndi_preset_range_is_0_to_99():
+    from ptzsim.ndi import NdiPtzController
+    from ptzsim.visca import ViscaCamera
+    ndi = NdiPtzController(ViscaCamera(instant=True))
+    assert ndi.handle('<ntk_ptz_store_preset index="63"/>')
+    assert not ndi.handle('<ntk_ptz_store_preset index="64"/>')  # camera has 64 presets
+    assert not ndi.handle('<ntk_ptz_store_preset index="100"/>')  # outside the SDK range
+
+
+def test_ndi_announces_ptz_capabilities():
+    import xml.etree.ElementTree as ET
+    from ptzsim.ndi import CAPABILITIES
+    attrs = ET.fromstring(CAPABILITIES).attrib
+    assert attrs["ntk_ptz"] == "true" and attrs["ntk_zoom"] == "true" and attrs["ntk_preset_speed"] == "true"

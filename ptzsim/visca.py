@@ -110,6 +110,7 @@ class ViscaCamera:
         self.instant = instant
         self.log: Deque[LogEntry] = deque(maxlen=200)
         self.command_count = 0
+        self._pan_tilt_instructed = False  # for the "operation complete" status bits
 
     # ---------------------------------------------------------------- replies
     @property
@@ -194,7 +195,8 @@ class ViscaCamera:
         if category == 0x00 and cmd == 0x01 and not args:
             s.stop_all()
             self._log(packet, "IF_Clear")
-            return [Reply(self._completion())]
+            # Sony VISCA Command List: no ACK, completion with socket 0
+            return [Reply(bytes([self._reply_header, 0x50, TERMINATOR]))]
 
         if category == 0x04 and cmd == 0x00:
             on = self._choice(args, {0x02: True, 0x03: False})
@@ -360,6 +362,7 @@ class ViscaCamera:
 
     def _pan_tilt_command(self, packet: bytes, cmd: int, args: bytes) -> List[Reply]:
         s = self.state
+        self._pan_tilt_instructed = True
         if cmd == 0x01:  # Pan-tilt drive
             self._expect_len(args, 4)
             pan_speed, tilt_speed = self._speeds(args[0], args[1])
@@ -376,10 +379,17 @@ class ViscaCamera:
             return self._done()
 
         if cmd in (0x02, 0x03):  # Absolute / relative position
-            self._expect_len(args, 10)
-            pan_speed, tilt_speed = self._speeds(args[0], args[1])
-            pan = decode_nibbles(args[2:6], signed=True)
-            tilt = decode_nibbles(args[6:10], signed=True)
+            # 4 nibbles per axis (BRC/EVI, Axis) or 5 (newer Sony, e.g. ILME-FR7)
+            if len(args) not in (10, 12):
+                raise ViscaError(ViscaError.SYNTAX, f"expected 10 or 12 argument bytes, got {len(args)}")
+            digits = (len(args) - 2) // 2
+            if args[1] == 0x00:  # tilt speed 00: "synced with pan operation"
+                pan_speed, _ = self._speeds(args[0], 1)
+                tilt_speed = max(1, round(pan_speed * st.TILT_SPEED_MAX / st.PAN_SPEED_MAX))
+            else:
+                pan_speed, tilt_speed = self._speeds(args[0], args[1])
+            pan = decode_nibbles(args[2:2 + digits], signed=True)
+            tilt = decode_nibbles(args[2 + digits:], signed=True)
             if cmd == 0x02:
                 s.move_pan_tilt_to(pan, tilt, pan_speed, tilt_speed)
                 self._log(packet, f"absolute pan {pan} tilt {tilt}")
@@ -442,8 +452,15 @@ class ViscaCamera:
         return [Reply(self._inquiry_reply(payload))]
 
     def _pan_tilt_status(self) -> bytes:
+        """Sony "Pan/Tilt Status Codes": initialized, operating/complete, limit bits."""
         s = self.state
-        status = 0x0000
+        status = 0x2000  # initialization completes
+        moving = (s.pan_velocity or s.tilt_velocity or s.pan_target is not None
+                  or s.tilt_target is not None)
+        if moving:
+            status |= 0x0400  # pan/tilt operating
+        elif self._pan_tilt_instructed:
+            status |= 0x0800  # pan/tilt operations complete
         if s.pan <= st.PAN_MIN:
             status |= 0x0001
         if s.pan >= st.PAN_MAX:
