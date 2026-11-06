@@ -45,3 +45,15 @@
   font-size: 14px;
   line-height: 1.6;
 }
+
+.badges p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 24px;
+}
+
+.badges img {
+  display: block;
+  height: 20px;
+}
