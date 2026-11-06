@@ -226,6 +226,9 @@ def get_health(port, path="/health", user=None, password=None):
     try:
         response = urllib.request.build_opener(*handlers).open(request, timeout=3)
     except urllib.error.HTTPError as err:
+        # Python 3.8 can return a body-less digest-auth failure.
+        if err.fp is None:
+            return err.code, err.headers, b""
         response = err
     with response:
         return response.status, response.headers, response.read()
