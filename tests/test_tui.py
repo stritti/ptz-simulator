@@ -702,6 +702,7 @@ def fake_curses(keys=(), size=(24, 120), **overrides):
 
 
 def test_interactive_processes_keys_until_quit(monkeypatch):
+    monkeypatch.delenv("ESCDELAY", raising=False)  # interactive() only sets the default
     mod = fake_curses(keys=["d", "\x1b", "[", "C", "q"])
     monkeypatch.setitem(sys.modules, "curses", mod)
     cam = ViscaCamera()

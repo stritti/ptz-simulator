@@ -18,6 +18,9 @@ from ptzsim import display
 from ptzsim.network import InterfaceInfo
 from ptzsim.visca import ViscaCamera
 
+unix_keyboard = pytest.mark.skipif(sys.platform == "win32",
+                                   reason="dashboard keyboard input needs Unix select/termios")
+
 
 def make_interface(name, up=True, ipv4=(), ipv6=(), loopback=False):
     info = InterfaceInfo(name)
@@ -168,6 +171,7 @@ def _wait_until(predicate, timeout=2):
         time.sleep(0.01)
 
 
+@unix_keyboard
 def test_keyboard_input_switches_views_and_quits(monkeypatch):
     read_fd, write_fd = os.pipe()
     monkeypatch.setattr(sys, "stdin", _PipeStdin(read_fd))
@@ -213,6 +217,7 @@ def test_keyboard_input_without_termios_module(monkeypatch):
     _run_keyboard_input(display.DashboardState())  # returns immediately
 
 
+@unix_keyboard
 def test_keyboard_input_survives_interrupted_select(monkeypatch):
     read_fd, write_fd = os.pipe()
     monkeypatch.setattr(sys, "stdin", _PipeStdin(read_fd))
@@ -241,6 +246,7 @@ def test_keyboard_input_survives_interrupted_select(monkeypatch):
         os.close(write_fd)
 
 
+@unix_keyboard
 def test_keyboard_input_logs_read_errors(monkeypatch, caplog):
     read_fd, write_fd = os.pipe()
     monkeypatch.setattr(sys, "stdin", _PipeStdin(read_fd))
@@ -260,6 +266,7 @@ def test_keyboard_input_logs_read_errors(monkeypatch, caplog):
         os.close(write_fd)
 
 
+@unix_keyboard
 def test_keyboard_input_warns_when_terminal_restore_fails(monkeypatch, caplog):
     import termios
     import tty

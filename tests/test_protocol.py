@@ -241,7 +241,23 @@ def test_port_can_be_reused_right_after_the_context():
     asyncio.run(run())
 
 
-def test_onvif_plugin_announces_ws_discovery_and_says_bye_on_stop():
+def test_onvif_plugin_announces_ws_discovery_and_says_bye_on_stop(monkeypatch):
+    from ptzsim import onvif as onvif_module
+
+    real_serve_discovery = onvif_module.serve_discovery
+    multicast_sent = []
+
+    def serve_discovery_on_a_free_port(onvif, http_port, **kwargs):
+        # Not the well-known UDP 3702 (may be taken) and no Hello/group join.
+        kwargs["port"] = free_port(socket.SOCK_DGRAM)
+        kwargs["multicast"] = False
+        return real_serve_discovery(onvif, http_port, **kwargs)
+
+    monkeypatch.setattr(onvif_module, "serve_discovery", serve_discovery_on_a_free_port)
+    # Bye on stop is still built, but captured instead of sent to the network.
+    monkeypatch.setattr(onvif_module.DiscoveryProtocol, "_multicast",
+                        lambda self, data: multicast_sent.append(data))
+
     async def run():
         port = free_port()
         async with serve("--onvif", str(port)) as ctx:  # --no-discovery not given
@@ -249,4 +265,5 @@ def test_onvif_plugin_announces_ws_discovery_and_says_bye_on_stop():
 
     titles = asyncio.run(run())
     assert any(t.startswith("ONVIF http://127.0.0.1:") for t in titles)
-    assert "WS-Discovery udp/3702" in titles  # discovery endpoint added; stop() sent Bye
+    assert "WS-Discovery udp/3702" in titles  # discovery endpoint added
+    assert any(b"<d:Bye>" in data for data in multicast_sent)  # stop() said Bye

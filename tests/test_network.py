@@ -247,13 +247,27 @@ def test_getifaddrs_parses_a_fake_ifaddrs_chain(monkeypatch):
     ctypes_mod, _, _, Ifaddrs = network._getifaddrs_binding()
     SockaddrPtr = Ifaddrs._fields_[3][1]  # POINTER(Sockaddr) type of ifa_addr
 
+    # Same platform split as in network._getifaddrs_binding: Linux uses a 16-bit
+    # sa_family, the BSDs/macOS an 8-bit sa_len followed by an 8-bit sa_family.
+    # The address stays at offset 4 (IPv4) / 8 (IPv6) in both layouts.
+    # c_ubyte arrays: c_char arrays would stop at NUL bytes.
+    if sys.platform.startswith("linux"):
+        in_fields = [("sa_family", ctypes.c_uint16), ("sin_port", ctypes.c_uint16),
+                     ("sin_addr", ctypes.c_ubyte * 4)]
+        in6_fields = [("sa_family", ctypes.c_uint16), ("sin6_port", ctypes.c_uint16),
+                      ("sin6_flowinfo", ctypes.c_uint32), ("sin6_addr", ctypes.c_ubyte * 16)]
+    else:
+        in_fields = [("sa_len", ctypes.c_uint8), ("sa_family", ctypes.c_uint8),
+                     ("sin_port", ctypes.c_uint16), ("sin_addr", ctypes.c_ubyte * 4)]
+        in6_fields = [("sa6_len", ctypes.c_uint8), ("sa_family", ctypes.c_uint8),
+                      ("sin6_port", ctypes.c_uint16), ("sin6_flowinfo", ctypes.c_uint32),
+                      ("sin6_addr", ctypes.c_ubyte * 16)]
+
     class SockaddrIn(ctypes.Structure):
-        _fields_ = [("sa_family", ctypes.c_uint16), ("sin_port", ctypes.c_uint16),
-                    ("sin_addr", ctypes.c_ubyte * 4)]  # c_ubyte: c_char arrays stop at NUL bytes
+        _fields_ = in_fields
 
     class SockaddrIn6(ctypes.Structure):
-        _fields_ = [("sa_family", ctypes.c_uint16), ("sin6_port", ctypes.c_uint16),
-                    ("sin6_flowinfo", ctypes.c_uint32), ("sin6_addr", ctypes.c_ubyte * 16)]
+        _fields_ = in6_fields
 
     keep = []
 
@@ -273,12 +287,20 @@ def test_getifaddrs_parses_a_fake_ifaddrs_chain(monkeypatch):
         return (ctypes.c_ubyte * len(data))(*data)
 
     def ipv4(name, flags, addr, netmask=None, nxt=None):
-        sa = SockaddrIn(socket.AF_INET, 0, ubytes(socket.inet_aton(addr)))
-        nm = SockaddrIn(socket.AF_INET, 0, ubytes(socket.inet_aton(netmask))) if netmask else None
+        sa = SockaddrIn()
+        sa.sa_family = socket.AF_INET
+        sa.sin_addr = ubytes(socket.inet_aton(addr))
+        nm = None
+        if netmask:
+            nm = SockaddrIn()
+            nm.sa_family = socket.AF_INET
+            nm.sin_addr = ubytes(socket.inet_aton(netmask))
         return make_entry(name, flags, sa, nm, nxt)
 
     def ipv6(name, flags, addr, nxt=None):
-        sa = SockaddrIn6(socket.AF_INET6, 0, 0, ubytes(socket.inet_pton(socket.AF_INET6, addr)))
+        sa = SockaddrIn6()
+        sa.sa_family = socket.AF_INET6
+        sa.sin6_addr = ubytes(socket.inet_pton(socket.AF_INET6, addr))
         return make_entry(name, flags, sa, None, nxt)
 
     up_running = network.IFF_UP | network.IFF_RUNNING
