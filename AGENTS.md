@@ -40,6 +40,48 @@ follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `f
 `docs:`, …; `!` or `BREAKING CHANGE:` for breaking changes) — they decide the next version.
 Never bump the version in `pyproject.toml` or `ptzsim/__init__.py` by hand.
 
+### Pull request titles and commit messages
+
+Release Please reads the commit messages on `main`. With a squash merge the PR title
+becomes the commit message; with a merge commit the PR's own commits are read. So
+**both the PR title and every commit on the branch** must use this format:
+
+```text
+<type>[optional scope][!]: <description>
+```
+
+- `type` is one of the types in `release-please-config.json`. Types with a visible
+  changelog section trigger a release; hidden types do not, but still show up once a
+  release is cut for other reasons:
+
+  | Type | Use for | Version effect | Changelog |
+  |------|---------|----------------|-----------|
+  | `feat` | new user-visible feature | minor | Features |
+  | `fix` | bug fix | patch | Bug Fixes |
+  | `perf` | performance improvement | patch | Performance |
+  | `docs` | documentation only | patch | Documentation |
+  | `refactor` | code change without behaviour change | none | hidden |
+  | `test` | tests only | none | hidden |
+  | `ci` | workflows, release tooling | none | hidden |
+  | `chore` | dependencies, housekeeping | none | hidden |
+
+- `scope` is optional, lowercase, and names the affected area, preferably a module or
+  protocol: `onvif`, `visca`, `ndi`, `tui`, `cli`, `state`, `website`, `deps`.
+- `description`: imperative mood, lowercase start, no trailing period, at most ~72
+  characters for the whole title; written in English. It becomes the changelog entry,
+  so describe the effect for users, not the implementation
+  (`fix(onvif): report zoom position in GetStatus`, not `fix: update onvif.py`).
+- Breaking changes: add `!` after type/scope (`feat(cli)!: rename --port to --visca-port`)
+  and explain the migration in a `BREAKING CHANGE: …` footer in the commit or squash
+  body. While the version is below 1.0.0 (`bump-minor-pre-major`), a breaking change
+  bumps the minor version instead of the major.
+- One PR, one type: if a PR mixes a feature and an unrelated fix, split it. Pick the
+  type with the largest version effect that the change really has; do not label a
+  feature `chore` or a fix `docs` to avoid a release.
+- Never use titles like `Update README`, `WIP`, `Fix stuff` or the default branch name;
+  rename the PR before it is merged if needed.
+- Do not edit `CHANGELOG.md` or the Release Please PR (`chore(main): release …`) by hand.
+
 - `.github/workflows/ci.yml` — tests on Python 3.8 and 3.13, builds the release artifacts.
 - `.github/workflows/release-please.yml` — maintains the release PR (and its `uv.lock`);
   merging it tags the release and attaches wheel, sdist and `ptzsim.pyz` built by
