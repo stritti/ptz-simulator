@@ -39,6 +39,7 @@ import re
 import socket
 import sys
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 
@@ -151,10 +152,17 @@ class OnvifClient:
         return False
 
     def discovery_probe(self, timeout: float):
+        # WS-Discovery 5.2: the Probe carries WS-Addressing headers (Action,
+        # MessageID, To = the multicast discovery destination)
         probe = (
-            '<s:Envelope xmlns:s="%s" xmlns:d="%s" xmlns:dn="%s"><s:Body><d:Probe>'
+            '<s:Envelope xmlns:s="%s" xmlns:d="%s" xmlns:dn="%s" '
+            'xmlns:wsa="http://www.w3.org/2005/08/addressing"><s:Header>'
+            "<wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</wsa:Action>"
+            "<wsa:MessageID>urn:uuid:%s</wsa:MessageID>"
+            "<wsa:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To>"
+            '</s:Header><s:Body><d:Probe>'
             "<d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></s:Body></s:Envelope>"
-            % (SOAP, DISCOVERY, DN)
+            % (SOAP, DISCOVERY, DN, uuid.uuid4())
         )
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(timeout)
@@ -216,7 +224,8 @@ def main() -> int:
     args = parser.parse_args()
 
     client = OnvifClient(args.host, args.port, args.base, args.user, args.password, args.timeout)
-    profile = escape(args.profile)  # interpolated into SOAP request bodies
+    profile = args.profile          # raw value: compared against decoded response values
+    profile_body = escape(profile)  # escaped value: interpolated into SOAP request bodies
     results = []
 
     def check(name, ok, detail=""):
@@ -276,7 +285,7 @@ def main() -> int:
 
     # --- PTZ service --------------------------------------------------------
     status, text, root = client.call(
-        "ptz_service", "<tptz:GetStatus><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetStatus>" % profile)
+        "ptz_service", "<tptz:GetStatus><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetStatus>" % profile_body)
     pantilt = find_all(root, "PanTilt") if root is not None else []
     zoom = find_all(root, "Zoom") if root is not None else []
     check("GetStatus reports Position PanTilt/Zoom", status == 200 and root is not None
@@ -286,14 +295,14 @@ def main() -> int:
     move = (
         "<tptz:ContinuousMove><tptz:ProfileToken>%s</tptz:ProfileToken><tptz:Velocity>"
         '<tt:PanTilt x="0.1" y="0.0" space="%s"/><tt:Zoom x="0.0"/></tptz:Velocity>'
-        "<tptz:Timeout>PT1S</tptz:Timeout></tptz:ContinuousMove>" % (profile, PT_VELOCITY_SPACE)
+        "<tptz:Timeout>PT1S</tptz:Timeout></tptz:ContinuousMove>" % (profile_body, PT_VELOCITY_SPACE)
     )
     status, text, root = client.call("ptz", move)
     check("ContinuousMove accepted", status == 200 and root is not None
           and response_name(root) == "ContinuousMoveResponse", "HTTP %s" % status)
 
     stop = ("<tptz:Stop><tptz:ProfileToken>%s</tptz:ProfileToken>"
-            "<tptz:PanTilt>true</tptz:PanTilt><tptz:Zoom>true</tptz:Zoom></tptz:Stop>" % profile)
+            "<tptz:PanTilt>true</tptz:PanTilt><tptz:Zoom>true</tptz:Zoom></tptz:Stop>" % profile_body)
     status, text, root = client.call("ptz", stop)
     check("Stop accepted", status == 200 and root is not None
           and response_name(root) == "StopResponse", "HTTP %s" % status)
@@ -301,7 +310,7 @@ def main() -> int:
     # pick a free preset slot so existing presets on the camera are preserved;
     # only the newly created preset is removed again
     status, text, root = client.call(
-        "ptz_service", "<tptz:GetPresets><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetPresets>" % profile)
+        "ptz_service", "<tptz:GetPresets><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetPresets>" % profile_body)
     used = {el.get("token") or "" for el in find_all(root, "Preset")} if root is not None else set()
     preset_token = next((str(n) for n in range(PRESET_COUNT) if str(n) not in used), None)
     check("picked a free preset slot (existing presets kept)", preset_token is not None,
@@ -312,12 +321,12 @@ def main() -> int:
             "ptz_service",
             "<tptz:SetPreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
             "<tptz:PresetName>conformance</tptz:PresetName>"
-            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:SetPreset>" % (profile, preset_token))
+            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:SetPreset>" % (profile_body, preset_token))
         check("SetPreset %s accepted" % preset_token, status == 200 and root is not None
               and response_name(root) == "SetPresetResponse", "HTTP %s" % status)
 
         status, text, root = client.call(
-            "ptz_service", "<tptz:GetPresets><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetPresets>" % profile)
+            "ptz_service", "<tptz:GetPresets><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetPresets>" % profile_body)
         preset_tokens = [el.get("token") or "" for el in find_all(root, "Preset")] if root is not None else []
         check("GetPresets lists the new preset %s" % preset_token,
               status == 200 and preset_token in preset_tokens,
@@ -326,14 +335,14 @@ def main() -> int:
         status, text, root = client.call(
             "ptz_service",
             "<tptz:GotoPreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
-            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:GotoPreset>" % (profile, preset_token))
+            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:GotoPreset>" % (profile_body, preset_token))
         check("GotoPreset %s accepted" % preset_token, status == 200 and root is not None
               and response_name(root) == "GotoPresetResponse", "HTTP %s" % status)
 
         status, text, root = client.call(
             "ptz_service",
             "<tptz:RemovePreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
-            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:RemovePreset>" % (profile, preset_token))
+            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:RemovePreset>" % (profile_body, preset_token))
         check("RemovePreset %s accepted (only the new preset)" % preset_token,
               status == 200 and root is not None
               and response_name(root) == "RemovePresetResponse", "HTTP %s" % status)
@@ -342,7 +351,7 @@ def main() -> int:
         "<tptz:AbsoluteMove><tptz:ProfileToken>%s</tptz:ProfileToken><tptz:Position>"
         '<tt:PanTilt x="5.0" y="0.0" space="%s"/>'
         '<tt:Zoom x="0.0" space="%s"/></tptz:Position></tptz:AbsoluteMove>'
-        % (profile, PT_POSITION_SPACE, ZOOM_POSITION_SPACE)
+        % (profile_body, PT_POSITION_SPACE, ZOOM_POSITION_SPACE)
     )
     status, text, root = client.call("ptz", bad_move)
     subcodes = fault_subcodes(root, text)

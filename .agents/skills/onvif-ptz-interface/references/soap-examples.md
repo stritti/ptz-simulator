@@ -137,7 +137,13 @@ Out-of-range x/y/z (outside −1…1 / 0…1) must fault
 ```xml
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
             xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"
-            xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
+            xmlns:dn="http://www.onvif.org/ver10/network/wsdl"
+            xmlns:wsa="http://www.w3.org/2005/08/addressing">
+  <s:Header>
+    <wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</wsa:Action>
+    <wsa:MessageID>urn:uuid:…</wsa:MessageID>
+    <wsa:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To>
+  </s:Header>
   <s:Body>
     <d:Probe>
       <d:Types>dn:NetworkVideoTransmitter</d:Types>
@@ -145,6 +151,8 @@ Out-of-range x/y/z (outside −1…1 / 0…1) must fault
   </s:Body>
 </s:Envelope>
 ```
+
+(WS-Discovery 5.2 requires the WS-Addressing headers Action/MessageID/To.)
 
 Answer: `d:ProbeMatches/d:ProbeMatch` with `d:XAddrs`, `d:Types dn:NetworkVideoTransmitter tds:Device`,
 `d:Scopes` (incl. `onvif://www.onvif.org/name/<name>`), `d:MetadataVersion`, wrapped in
