@@ -167,8 +167,7 @@ def test_ndi_preset_range_is_0_to_99():
     from ptzsim.ndi import NdiPtzController
     from ptzsim.visca import ViscaCamera
     ndi = NdiPtzController(ViscaCamera(instant=True))
-    assert ndi.handle('<ntk_ptz_store_preset index="63"/>')
-    assert not ndi.handle('<ntk_ptz_store_preset index="64"/>')  # camera has 64 presets
+    assert ndi.handle('<ntk_ptz_store_preset index="99"/>')
     assert not ndi.handle('<ntk_ptz_store_preset index="100"/>')  # outside the SDK range
 
 

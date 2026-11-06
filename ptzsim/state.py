@@ -25,7 +25,7 @@ PAN_TILT_UNITS_PER_SPEED_STEP = 60.0  # units/s per speed step
 ZOOM_UNITS_PER_SPEED_STEP = 1600.0  # units/s per zoom speed step (p = 0..7)
 FOCUS_UNITS_PER_SPEED_STEP = 4000.0
 
-PRESET_COUNT = 64  # VISCA preset numbers 00..63 (Sony list), shown as 1..64
+PRESET_COUNT = 100  # VISCA preset numbers 00..63 hex (Sony list: 0..99), shown as 1..100
 # Preset drive speed 01..32 hex (1..50 in the Sony list); the doc gives no factory default.
 PRESET_SPEED_MAX = 50
 PRESET_SPEED_DEFAULT = PRESET_SPEED_MAX
@@ -97,6 +97,10 @@ class CameraState:
             t is not None
             for t in (self.pan_target, self.tilt_target, self.zoom_target, self.focus_target)
         )
+
+    def axes_busy(self, axes) -> bool:
+        """True while one of ``axes`` ("pan", "tilt", "zoom", "focus") has a target."""
+        return any(getattr(self, f"{axis}_target") is not None for axis in axes)
 
     @property
     def moving(self) -> bool:
@@ -209,6 +213,11 @@ class CameraState:
             self.focus_to(preset.focus)
         self.last_preset = number
         return True
+
+    def stop_axes(self, axes) -> None:
+        """Stop the absolute moves of ``axes``; the axes stay where they are."""
+        for axis in axes:
+            setattr(self, f"{axis}_target", None)
 
     def stop_absolute(self) -> None:
         self.pan_target = self.tilt_target = self.zoom_target = self.focus_target = None

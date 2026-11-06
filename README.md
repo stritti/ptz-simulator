@@ -169,7 +169,7 @@ default) needs root privileges, so 8080 is the default.
 
 Coordinates use the generic ONVIF spaces: pan −1…1 (≈ ±170°), tilt −1…1
 (−1 = −30°, 0 = level, 1 = +90°), zoom 0…1 (1×…20×), velocities −1…1.
-VISCA and ONVIF presets are the same. The ONVIF token and the NDI index are the VISCA wire value (0–63); the dashboard and the keys 1–9 show it as 1–64. Recall uses the preset speed setting; ONVIF `GotoPreset` with a `Speed` element overrides it.
+VISCA and ONVIF presets are the same. The ONVIF token and the NDI index are the VISCA wire value (0–99, hex `00`–`63`); the dashboard and the keys 1–9 show it as 1–100. Recall uses the preset speed setting; ONVIF `GotoPreset` with a `Speed` element overrides it.
 
 ## Testing VISCA clients
 
@@ -186,7 +186,7 @@ uv run --extra ndi ptzsim serve --ndi --name "Camera 1"
 The simulator shows up as the NDI source `HOSTNAME (Camera 1)` and sends a test
 picture (640×360, `--ndi-fps`, default 25): a grid with sky, ground, horizon and
 red posts every 45° that moves with pan, tilt and zoom. It announces PTZ support
-(`<ndi_capabilities ntk_ptz="true" .../>` with pan/tilt, zoom, focus, autofocus, white balance and preset speed; NDI preset indexes 0–99, of which the camera has 64), so NDI Studio Monitor, vMix, OBS
+(`<ndi_capabilities ntk_ptz="true" .../>` with pan/tilt, zoom, focus, autofocus, white balance and preset speed; NDI preset indexes 0–99, the same 100 presets as VISCA), so NDI Studio Monitor, vMix, OBS
 (DistroAV) etc. offer PTZ control.
 
 It executes the NDI PTZ commands that receivers send as metadata:
@@ -220,8 +220,8 @@ uv run ptzsim send "81 09 06 12 FF"                    # query position
 
 VISCA commands follow `docs/visca-interface-api-description-en-US-266656.pdf` (AXIS example). The Sony list in `docs/VISCA-Command-List-Version-2.00.pdf` uses other white balance codes (`04` = ATW).
 
-Commands (reply: ACK `90 41 FF` + completion `90 51 FF`; for absolute moves the
-completion is sent once the position has been reached):
+Commands (reply: ACK `90 4z FF` + completion `90 5z FF`, z = socket; for absolute
+moves the completion is sent once the axes of that command have reached the target):
 
 | Command | Bytes |
 |---|---|
@@ -235,7 +235,7 @@ completion is sent once the position has been reached):
 | White balance mode (00 auto, 01 indoor, 02 outdoor, 04 auto outdoor, 05 manual) | `8x 01 04 35 0p FF` |
 | Red / blue gain, relative and absolute | `8x 01 04 03/04 0p FF`, `8x 01 04 43/44 00 00 0p 0q FF` |
 | One push white balance | `8x 01 04 10 05 FF` |
-| Preset reset / set / recall (pp 00–63, shown as 1–64) | `8x 01 04 3F 00/01/02 pp FF` |
+| Preset reset / set / recall (pp hex 00–63 = 0–99, shown as 1–100) | `8x 01 04 3F 00/01/02 pp FF` |
 | Preset speed select (1 separate, 2 common) | `8x 01 7E 04 1B 0p FF` |
 | Common preset speed (01–32 hex) | `8x 01 7E 04 1C 0p 0p FF` |
 | Separate preset speed (01–32 hex) | `8x 01 7E 01 0B pp qq FF` |
@@ -244,15 +244,25 @@ completion is sent once the position has been reached):
 | Home / reset | `8x 01 06 04 FF` / `8x 01 06 05 FF` |
 | Command cancel | `8x 2z FF` (z = socket) |
 | IF_Clear | `8x 01 00 01 FF`, `88 01 00 01 FF` |
-| Address set | `88 30 01 FF` |
+| Address set (takes address w, answers `88 30 0w+1 FF`) | `88 30 0w FF` |
 
 Inquiries (reply `90 50 ... FF`): power `09 04 00`, zoom `09 04 47`,
 focus `09 04 48`, focus mode `09 04 38`, white balance mode `09 04 35`, preset speed `09 7E 04 1B`, `09 7E 04 1C`, `09 7E 01 0B`,
 pan/tilt position `09 06 12`, max speed `09 06 11`,
 pan/tilt status `09 06 10`, version `09 00 02`.
 
-Errors: syntax error `90 60 02 FF`, not executable `90 61 41 FF` (e.g. standby
-or preset not set). `IF_Clear` answers `90 50 FF` without ACK. Pan/tilt status
+Like Sony cameras the simulator has two command sockets. A command takes the lowest
+free socket (`90 41 FF`, then `90 42 FF`); a socket stays busy until its absolute
+move, home or preset recall has finished. A command that arrives while both sockets
+are busy is answered with "command buffer full" `90 60 03 FF`. A newer move takes
+over the axes of an older one; an older command left without axes completes at once; inquiries and
+`IF_Clear` do not use a socket. `8x 2z FF` cancels socket z (`90 6z 04 FF`, no
+completion follows) or answers "no socket" `90 6z 05 FF`. `IF_Clear` answers
+`90 50 FF` (broadcast: `88 01 00 01 FF`) without ACK, stops all motion and empties
+both sockets, so no completion follows.
+
+Errors: syntax error `90 60 02 FF`, not executable `90 6z 41 FF` (e.g. standby,
+preset not set, or manual focus `04 08`/`04 48` while auto focus is on). Pan/tilt status
 reports "initialization completes" (`20 00`) plus "operating" (`04 00`) or
 "operations complete" (`08 00`) and the end-stop bits. In absolute/relative moves
 tilt speed `00` means "same as pan", and both 4- and 5-digit coordinates are
@@ -263,19 +273,19 @@ command `RESET` (`02 00`) is acknowledged with `02 01 ... 01` and resets the
 sequence number; replies carry the sequence number of the request. A repeated
 sequence number is not executed again and answered with control reply `0F 01`, a
 payload type that does not match the packet (inquiry sent as command or vice versa)
-with `0F 02`. The camera address is fixed to 1 over IP: any address is accepted and
+with `0F 02`. A message that was answered with a VISCA error was not performed, so
+its retransmission with the same sequence number is executed again. The camera address is fixed to 1 over IP: any address is accepted and
 replies always come from `90`.
 
 **VISCA is not one standard.** The transport (VISCA over IP, replies, error codes,
 sockets) is common to Sony cameras, the command set differs per model. The simulator
 follows the classic 4-digit Sony BRC/EVI and Axis command set; check the command
 list of the target camera before relying on model-specific commands (e.g. white
-balance codes, speed ranges, 5-digit positions on newer Sony models). Simplification:
-only one command socket, so "command buffer full" never occurs.
+balance codes, speed ranges, 5-digit positions on newer Sony models).
 
 Value ranges: pan −2448…2448 (≈ ±170°), tilt −432…1296 (≈ −30…+90°),
 zoom 0x0000…0x4000 (1×…20×), focus 0x1000…0xF000, pan speed 1…0x18,
-tilt speed 1…0x17, presets 0…63 (shown as 1…64).
+tilt speed 1…0x17, presets 0…99 / hex 00…63 (shown as 1…100).
 
 ## Tests
 
