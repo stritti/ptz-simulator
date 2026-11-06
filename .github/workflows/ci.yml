@@ -22,7 +22,7 @@ jobs:
         python: ["3.8", "3.13"]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: ${{ matrix.python }}
       - name: Run tests
@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Build wheel, sdist and ptzsim.pyz
         run: ./scripts/build-release.sh
       - name: Smoke-test the standalone ptzsim.pyz

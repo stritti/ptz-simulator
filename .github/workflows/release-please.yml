@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         if: steps.release.outputs.prs_created == 'true'
       - name: Sync uv.lock with the new version
         if: steps.release.outputs.prs_created == 'true'
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Build wheel, sdist and ptzsim.pyz
         run: ./scripts/build-release.sh
       - name: Attach artifacts to the GitHub release
