@@ -550,6 +550,42 @@ dashboard come for free. Plugins can also live in a separate package and be foun
 the `ptzsim.protocols` entry point. The step-by-step guide with a tested example is in
 [docs/adding-a-protocol.md](docs/adding-a-protocol.md).
 
+## Agent skills
+
+`.agents/skills/` ships [Agent Skills](https://agentskills.io) (a `SKILL.md` plus
+`references/` and `scripts/` per skill) that other projects can install to implement a
+reference-conformant camera interface — wire-exact VISCA or ONVIF — and to validate it
+against this simulator:
+
+| Skill | Purpose |
+|---|---|
+| `ptz-reference-interface` | Entry point: protocol selection, implementation workflow, validation |
+| `visca-interface` | VISCA over RS-232/422 and VISCA over IP (UDP 52381): framing, command/inquiry set, ACK/completion/error replies, command sockets, value ranges, plus a `visca_conformance.py` smoke test |
+| `onvif-ptz-interface` | ONVIF Profile S/T PTZ service: SOAP operations, coordinate spaces, fault chains, WS-Discovery, WS-Security/digest auth, plus an `onvif_conformance.py` smoke test |
+| `ptz-conformance-testing` | Run ptzsim as the reference camera (or smoke-test your own camera-side endpoint) and follow the conformance checklists |
+
+Install the skills into your project from a clone of this repository:
+
+```bash
+./scripts/install-skills.sh /path/to/your-project              # all common agent skill directories
+./scripts/install-skills.sh /path/to/your-project claude vibe   # selected agents only
+./scripts/install-skills.sh --user ~                            # personal skills for all agents
+# or by hand, e.g. for Claude Code:
+mkdir -p /path/to/your-project/.claude/skills && cp -r .agents/skills/* /path/to/your-project/.claude/skills/
+# or with the skills CLI: npx skills add stritti/ptz-simulator --list
+```
+
+Agents read skills from their own directories; in this repository `.agents/skills/` is
+read directly by GitHub Copilot (VS Code/CLI/cloud), OpenAI Codex and Mistral Vibe:
+
+| Agent | Project skills | Personal skills |
+|---|---|---|
+| GitHub Copilot / VS Code | `.github/skills/`, `.claude/skills/`, `.agents/skills/` | `~/.copilot/skills/`, `~/.agents/skills/` |
+| Claude Code | `.claude/skills/` | `~/.claude/skills/` |
+| Mistral Vibe | `.vibe/skills/`, `.agents/skills/` | `~/.vibe/skills/`, `~/.agents/skills/` |
+| OpenAI Codex | `.agents/skills/` | `~/.agents/skills/` |
+| Cursor | `.cursor/skills/` | `~/.cursor/skills/` |
+
 ## Unsupported protocols
 
 These PTZ protocols are common but **not supported** by the simulator:
