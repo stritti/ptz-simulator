@@ -16,6 +16,7 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide' },
+      { text: 'Protocol reference', link: '/ptz_control_protocols_reference_guide' },
       { text: 'Get started', link: '/guide#running' }
     ],
     sidebar: [
@@ -31,6 +32,7 @@ export default defineConfig({
       {
         text: 'Protocols',
         items: [
+          { text: 'Protocol reference', link: '/ptz_control_protocols_reference_guide' },
           { text: 'ONVIF integration', link: '/guide#testing-onvif-clients' },
           { text: 'ONVIF scope', link: '/guide#onvif-scope' },
           { text: 'VISCA clients', link: '/guide#testing-visca-clients' },

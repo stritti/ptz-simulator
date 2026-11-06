@@ -218,7 +218,9 @@ uv run ptzsim send "81 09 06 12 FF"                    # query position
 
 ## Supported VISCA commands
 
-VISCA commands follow `docs/visca-interface-api-description-en-US-266656.pdf` (AXIS example). The Sony list in `docs/VISCA-Command-List-Version-2.00.pdf` uses other white balance codes (`04` = ATW).
+VISCA commands follow the [Axis VISCA interface description](https://www.axis.com/dam/public/70/3d/31/visca-interface-api-description-en-US-266656.pdf).
+The [Sony ILME-FR7 VISCA command list](https://pro.sony/s3/2022/09/14131603/VISCA-Command-List-Version-2.00.pdf)
+uses other white balance codes (`04` = ATW).
 
 Commands (reply: ACK `90 41 FF` + completion `90 51 FF`; for absolute moves the
 completion is sent once the position has been reached):
@@ -297,9 +299,9 @@ PTZSIM_ONVIF_CLIENT=1 uv run --group onvif-client pytest
 
 ## ONVIF conformance
 
-Checked against the ONVIF Core Specification 26.06 (`docs/ONVIF-Core-Specification.pdf`).
-The PTZ Service Specification is not in `docs/`, so the PTZ fault subcodes are not
-verified against it. Responses are not validated against the XSD schemas automatically.
+Checked against the [ONVIF Core Specification 26.06](https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf).
+The PTZ fault subcodes are not verified against the PTZ Service Specification.
+Responses are not validated against the XSD schemas automatically.
 
 - PTZ service: all mandatory operations (GetNodes, GetNode, GetConfigurations,
   GetConfiguration, GetConfigurationOptions, SetConfiguration, ContinuousMove, Stop,
@@ -341,7 +343,7 @@ These PTZ protocols are common but **not supported** by the simulator:
 - ONVIF PTZ Service Specification 25.12: https://www.onvif.org/specs/2512/ONVIF-PTZ-Service-Spec-v2512.pdf
 - ONVIF Core Specification (device service, WS-Discovery on 239.255.255.250:3702): https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf
 - OASIS WS-Security UsernameToken Profile (PasswordDigest = Base64(SHA-1(nonce + created + password))): https://docs.oasis-open.org/wss/v1.1/wss-v1.1-spec-pr-UsernameTokenProfile-01.htm
-- ONVIF Imaging Service Specification 18.12 (`docs/ONVIF-Imaging-Service-Spec-v1812.pdf`)
+- ONVIF Imaging Service Specification 18.12: https://www.onvif.org/specs/srv/img/ONVIF-Imaging-Service-Spec-v1812.pdf
 - Client library used for the interop test, onvif-zeep-async: https://pypi.org/project/onvif-zeep-async/
 
 **VISCA**
@@ -365,13 +367,14 @@ These PTZ protocols are common but **not supported** by the simulator:
 
 ## Documentation website
 
-The VitePress site in `website/` uses this README as its guide. Before publishing
-it, review the examples for machine-specific hostnames and network addresses.
+The VitePress site in `docs/` uses this README as its guide and includes the
+PTZ protocol reference. Before publishing it, review the examples for
+machine-specific hostnames and network addresses.
 
 Node.js 20.19+ (20.x) or 22.12+ is required. From the repository directory:
 
 ```bash
-cd website
+cd docs
 npm ci
 npm run docs:dev      # local development server
 npm test              # check root and GitHub Pages subpath builds
