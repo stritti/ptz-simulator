@@ -4,6 +4,7 @@
 __pycache__/
 *.egg-info/
 .pytest_cache/
+.coverage*
 ptzsim.log
 .venv/
 website/node_modules/

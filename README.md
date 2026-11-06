@@ -7,6 +7,7 @@ SPDX-License-Identifier: MIT
 
 [![CI](https://img.shields.io/github/actions/workflow/status/stritti/ptz-simulator/ci.yml?branch=main&label=CI)](https://github.com/stritti/ptz-simulator/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/github/actions/workflow/status/stritti/ptz-simulator/pages.yml?branch=main&label=docs)](https://stritti.github.io/ptz-simulator/)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fstritti.github.io%2Fptz-simulator%2Fcoverage.json)](https://github.com/stritti/ptz-simulator/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/stritti/ptz-simulator)](https://github.com/stritti/ptz-simulator/releases/latest)
 [![PyPI](https://img.shields.io/badge/dynamic/json?label=pypi&url=https%3A%2F%2Fpypi.org%2Fpypi%2Fptzsim%2Fjson&query=%24.info.version&color=orange&cacheSeconds=300)](https://pypi.org/project/ptzsim/)
 [![Python versions](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fstritti%2Fptz-simulator%2Fmain%2Fpyproject.toml)](https://github.com/stritti/ptz-simulator/blob/main/pyproject.toml)
@@ -508,6 +509,9 @@ The tests check VISCA, ONVIF and NDI directly and run end to end over real
 TCP/UDP sockets, Sony VISCA/IP, HTTP, WS-Discovery and a pseudo terminal. With
 `uv run --extra ndi pytest`, a real NDI round trip runs as well (a receiver calls
 `NDIlib_recv_ptz_*`, the simulator executes the commands).
+
+Every test run also measures the code coverage of `ptzsim` (pytest-cov, see
+`pyproject.toml`) and fails below 80 %.
 
 There is also a test against the real ONVIF client library
 (`onvif-zeep-async`, same WSDLs as `onvif-zeep`):
