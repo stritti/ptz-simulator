@@ -9,8 +9,8 @@ import os
 import pytest
 
 from ptzsim import state as st
-from ptzsim.pelco import (FOCUS_FAR, FOCUS_NEAR, PAN_LEFT, PAN_RIGHT, PelcoCamera, TILT_DOWN,
-                          TILT_UP, ZOOM_TELE, ZOOM_WIDE, checksum, make_frame, split_frames)
+from ptzsim.pelco import (FOCUS_FAR, PAN_LEFT, PAN_RIGHT, PelcoCamera, TILT_DOWN, TILT_UP,
+                          ZOOM_TELE, ZOOM_WIDE, checksum, make_frame, split_frames)
 from ptzsim.testing import serve
 from ptzsim.visca import ViscaCamera
 
@@ -37,8 +37,8 @@ def test_split_frames_resyncs_on_the_sync_byte():
     buffer = bytearray(b"\x00\x11" + make_frame(1, 0x00, 0x00, 0x00, 0x00))
     assert split_frames(buffer) == [make_frame(1, 0x00, 0x00, 0x00, 0x00)]
     assert not buffer  # garbage without a sync byte is dropped
-    buffer.extend(b"\x42" + make_frame(2, 0x03, 0x00, 0x05, 0x00))
-    assert split_frames(buffer) == [make_frame(2, 0x03, 0x00, 0x05, 0x00)]
+    buffer.extend(b"\x42" + make_frame(2, 0x00, 0x03, 0x00, 0x05))
+    assert split_frames(buffer) == [make_frame(2, 0x00, 0x03, 0x00, 0x05)]
     # an incomplete frame stays buffered until the rest arrives
     buffer.extend(make_frame(3, 0x00, 0x00, 0x00, 0x00)[:4])
     assert split_frames(buffer) == []
@@ -63,15 +63,18 @@ def test_frame_for_another_address_stays_silent():
 
 
 # ------------------------------------------------------------------- driving
-def test_ack_frame():
+def test_general_response_is_4_bytes_with_the_request_checksum():
     pelco, _ = make(address=7)
-    assert pelco.ack() == bytes([0xFF, 7, 0x00, 0xFF, 0x00, 0x00, (7 + 0xFF) & 0xFF])
+    frame = make_frame(7, 0x00, PAN_RIGHT, 0x20, 0x00)  # FF 07 00 02 20 00 29
+    assert pelco.ack(frame) == bytes([0xFF, 7, 0x00, 0x29])
+    # the response echoes command 1 (e.g. 0x01 for focus near)
+    assert pelco.ack(make_frame(7, 0x01, 0x00, 0x00, 0x00)) == bytes([0xFF, 7, 0x01, 0x08])
 
 
 def test_pan_right_at_medium_speed():
     pelco, camera = make()
-    replies = run(pelco, make_frame(1, 0x00, PAN_RIGHT, 0x20, 0x00))
-    assert replies == [pelco.ack()]
+    frame = make_frame(1, 0x00, PAN_RIGHT, 0x20, 0x00)
+    assert run(pelco, frame) == [pelco.ack(frame)]  # FF 01 00 23
     # 0x20 = 32 of 0x3F -> round(32 * 24 / 63) = 12 VISCA speed steps
     assert pelco.state.pan_velocity == 12 * st.PAN_TILT_UNITS_PER_SPEED_STEP
     assert pelco.state.tilt_velocity == 0.0
@@ -80,25 +83,40 @@ def test_pan_right_at_medium_speed():
 
 def test_tilt_down_turbo_and_combined_move():
     pelco, _ = make()
-    run(pelco, make_frame(1, 0x00, TILT_DOWN | PAN_LEFT, TURBO := 0xFF, 0x3F))
+    run(pelco, make_frame(1, 0x00, TILT_DOWN | PAN_LEFT, 0xFF, 0x3F))
     assert pelco.state.tilt_velocity == -st.TILT_SPEED_MAX * st.PAN_TILT_UNITS_PER_SPEED_STEP
     assert pelco.state.pan_velocity == -st.PAN_SPEED_MAX * st.PAN_TILT_UNITS_PER_SPEED_STEP
 
 
-def test_speed_zero_stops_the_axis():
+def test_speed_zero_is_the_slowest_motion_not_a_stop():
+    # Pelco manual 3.1.2: 0x00 is a valid but slow speed; stopping needs cleared bits.
     pelco, _ = make()
-    run(pelco, make_frame(1, 0x00, PAN_RIGHT | TILT_UP, 0x00, 0x3F))
+    run(pelco, make_frame(1, 0x00, PAN_RIGHT, 0x00, 0x00))
+    assert pelco.state.pan_velocity == 1 * st.PAN_TILT_UNITS_PER_SPEED_STEP
+
+
+def test_cleared_direction_bits_stop_their_axis():
+    pelco, _ = make()
+    run(pelco, make_frame(1, 0x00, PAN_RIGHT | ZOOM_TELE, 0x20, 0x00))
+    assert pelco.state.pan_velocity > 0.0 and pelco.state.zoom_velocity > 0.0
+    # a zoom-only frame stops the pan: the frame describes the whole motion state
+    run(pelco, make_frame(1, 0x00, ZOOM_TELE, 0x3F, 0x00))
     assert pelco.state.pan_velocity == 0.0
-    assert pelco.state.tilt_velocity > 0.0
+    assert pelco.state.zoom_velocity > 0.0
+    # ... and a pan-only frame stops the zoom
+    run(pelco, make_frame(1, 0x00, PAN_RIGHT, 0x20, 0x00))
+    assert pelco.state.zoom_velocity == 0.0
+    assert pelco.state.pan_velocity > 0.0
 
 
 def test_stop_all():
-    pelco, _ = make()
+    pelco, camera = make()
     run(pelco, make_frame(1, 0x00, PAN_RIGHT, 0x20, 0x00))
     run(pelco, make_frame(1, 0x00, ZOOM_TELE, 0x3F, 0x00))
-    replies = run(pelco, make_frame(1, 0x00, 0x00, 0x00, 0x00))
-    assert replies == [pelco.ack()]
+    frame = make_frame(1, 0x00, 0x00, 0x00, 0x00)
+    assert run(pelco, frame) == [pelco.ack(frame)]
     assert not pelco.state.moving
+    assert camera.log[-1].description == "stop all"
 
 
 def test_zoom_tele_and_wide():
@@ -112,18 +130,18 @@ def test_zoom_tele_and_wide():
 def test_focus_is_ignored_while_autofocus_is_on():
     pelco, camera = make()
     assert pelco.state.autofocus
-    replies = run(pelco, make_frame(1, 0x00, FOCUS_FAR, 0x00, 0x00))
-    assert replies == [pelco.ack()]  # the drive command is acked ...
+    frame = make_frame(1, 0x00, FOCUS_FAR, 0x00, 0x00)
+    assert run(pelco, frame) == [pelco.ack(frame)]  # the command is acked ...
     assert pelco.state.focus_velocity == 0.0  # ... but focus does not move
     assert any("autofocus" in e.description and not e.ok for e in camera.log)
 
 
-def test_focus_drive_in_manual_mode():
+def test_focus_far_in_cmd2_and_focus_near_in_cmd1_bit0():
     pelco, _ = make()
     pelco.state.autofocus = False
-    run(pelco, make_frame(1, 0x00, FOCUS_FAR, 0x00, 0x00))
+    run(pelco, make_frame(1, 0x00, FOCUS_FAR, 0x00, 0x00))  # FF 01 00 80 00 00 81
     assert pelco.state.focus_velocity < 0.0
-    run(pelco, make_frame(1, 0x00, FOCUS_NEAR, 0x00, 0x00))
+    run(pelco, make_frame(1, 0x01, 0x00, 0x00, 0x00))  # FF 01 01 00 00 00 02
     assert pelco.state.focus_velocity > 0.0
 
 
@@ -139,31 +157,39 @@ def test_commands_are_ignored_in_standby():
 def test_preset_set_call_clear():
     pelco, camera = make()
     pelco.state.pan, pelco.state.tilt = 100.0, -50.0
-    assert run(pelco, make_frame(1, 0x03, 0x00, 0x05, 0x00)) == [pelco.ack()]
+    # extended command: opcode in cmd2, preset number in data2
+    assert run(pelco, make_frame(1, 0x00, 0x03, 0x00, 0x05)) == [bytes.fromhex("FF 01 00 09")]
     pelco.state.pan = pelco.state.tilt = 0.0
-    assert run(pelco, make_frame(1, 0x07, 0x00, 0x05, 0x00)) == [pelco.ack()]
+    assert run(pelco, make_frame(1, 0x00, 0x07, 0x00, 0x05)) == [bytes.fromhex("FF 01 00 0D")]
     pelco.state.finish_moves()  # instant mode in tests
     assert (pelco.state.pan, pelco.state.tilt) == (100.0, -50.0)
-    assert run(pelco, make_frame(1, 0x05, 0x00, 0x05, 0x00)) == [pelco.ack()]
+    assert run(pelco, make_frame(1, 0x00, 0x05, 0x00, 0x05)) == [bytes.fromhex("FF 01 00 0B")]
     assert 5 not in pelco.state.presets
 
 
-def test_call_of_an_unset_preset_gets_no_ack():
+def test_preset_frames_do_not_trigger_motion():
+    pelco, _ = make()
+    run(pelco, make_frame(1, 0x00, 0x03, 0x00, 0x05))  # set preset 5: cmd2 0x03 has bit 1 set
+    assert not pelco.state.moving
+
+
+def test_call_of_an_unset_preset_gets_no_reply():
     pelco, camera = make()
-    assert run(pelco, make_frame(1, 0x07, 0x00, 0x09, 0x00)) == []
+    assert run(pelco, make_frame(1, 0x00, 0x07, 0x00, 0x09)) == []
     assert "not set" in camera.log[-1].description
 
 
-def test_preset_number_above_99_gets_no_ack():
+def test_preset_number_above_99_gets_no_reply():
     pelco, camera = make()
-    assert run(pelco, make_frame(1, 0x03, 0x00, 200, 0x00)) == []
+    assert run(pelco, make_frame(1, 0x00, 0x03, 0x00, 200)) == []
     assert "out of range" in camera.log[-1].description
 
 
-def test_unsupported_command_1_gets_no_ack():
+def test_unsupported_extended_commands_get_no_reply():
     pelco, camera = make()
-    assert run(pelco, make_frame(1, 0x45, 0x00, 0x00, 0x00)) == []  # query: not implemented
-    assert "unsupported" in camera.log[-1].description
+    assert run(pelco, make_frame(1, 0x00, 0x45, 0x00, 0x00)) == []  # cmd2 opcode unknown
+    assert run(pelco, make_frame(1, 0x10, 0x00, 0x00, 0x00)) == []  # cmd1 autoscan
+    assert camera.log[-2].ok is False and camera.log[-1].ok is False
 
 
 # ------------------------------------------------------------ end to end pty
@@ -176,7 +202,7 @@ def test_pelco_d_over_pty(tmp_path):
             assert [str(e) for e in ctx.endpoints] == [f"Pelco-D serial {link}"]
             fd = os.open(str(link), os.O_RDWR | os.O_NOCTTY)
             try:
-                os.write(fd, make_frame(7, 0x00, PAN_RIGHT, 0x20, 0x00))
+                os.write(fd, make_frame(7, 0x00, PAN_RIGHT, 0x20, 0x00))  # ... 29
                 data = b""
                 for _ in range(50):
                     await asyncio.sleep(0.02)
@@ -185,14 +211,14 @@ def test_pelco_d_over_pty(tmp_path):
                         data += os.read(fd, 64)
                     except BlockingIOError:
                         pass
-                    if len(data) >= 7:
+                    if len(data) >= 4:
                         break
                 return ctx, data
             finally:
                 os.close(fd)
 
     ctx, data = asyncio.run(run())
-    assert data == bytes([0xFF, 7, 0x00, 0xFF, 0x00, 0x00, (7 + 0xFF) & 0xFF])
+    assert data == bytes([0xFF, 7, 0x00, 0x29])  # 4-byte general response
     assert ctx.state.pan_velocity > 0.0
 
 
