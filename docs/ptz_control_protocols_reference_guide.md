@@ -10,8 +10,8 @@ This document provides a comprehensive technical reference for Pan-Tilt-Zoom (PT
 This is a general protocol reference; not all protocols listed here are
 implemented by the simulator. ptzsim implements ONVIF (Core Specification
 v26.06, PTZ Service Specification v25.12, Imaging Service Specification
-v18.12, WS-Discovery 1.1, WS-Security UsernameToken 1.1, HTTP digest per
-RFC 2617), Sony VISCA (command list v2.00, VISCA over IP) and NDI PTZ
+v18.12, WS-Discovery 1.0 (April 2005 revision), WS-Security UsernameToken 1.1,
+HTTP digest per RFC 2617), Sony VISCA (command list v2.00, VISCA over IP) and NDI PTZ
 metadata (`ntk_ptz_*`); see [supported standards](/guide#supported-standards)
 in the guide for the full list with versions and references.
 

@@ -36,7 +36,7 @@ and [NDI](#ndi); protocols that are not implemented are listed under
 | ONVIF Core Specification (device service, WS-Discovery) | v26.06 | [ONVIF-Core-Spec-v2606.pdf](https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf) |
 | ONVIF PTZ Service Specification | v25.12 | [ONVIF-PTZ-Service-Spec-v2512.pdf](https://www.onvif.org/specs/2512/ONVIF-PTZ-Service-Spec-v2512.pdf) |
 | ONVIF Imaging Service Specification (white balance only) | v18.12 | [ONVIF-Imaging-Service-Spec-v1812.pdf](https://www.onvif.org/specs/srv/img/ONVIF-Imaging-Service-Spec-v1812.pdf) |
-| WS-Discovery on UDP multicast 239.255.255.250:3702 (ONVIF Core spec ch. 7) | OASIS WS-Discovery 1.1 | [WS-Discovery 1.1 spec](https://docs.oasis-open.org/ws-dd/ns/discovery/2009/01/discovery.pdf) |
+| WS-Discovery on UDP multicast 239.255.255.250:3702 (ONVIF Core spec ch. 7) | WS-Discovery 1.0, April 2005 (`http://schemas.xmlsoap.org/ws/2005/04/discovery` namespace) | [WS-Discovery 1.0 spec (2005/04)](https://schemas.xmlsoap.org/ws/2005/04/discovery/) |
 | HTTP digest authentication (ONVIF Core spec ch. 5.9.1) | RFC 2617 | [RFC 2617](https://www.rfc-editor.org/rfc/rfc2617) |
 | WS-Security UsernameToken with PasswordDigest/Text (ONVIF Core spec ch. 5.9.5) | OASIS wss 1.1 | [UsernameToken Profile 1.1](https://docs.oasis-open.org/wss/v1.1/wss-v1.1-spec-pr-UsernameTokenProfile-01.htm) |
 | Sony VISCA command set (classic 4-digit BRC/EVI/Axis commands) | VISCA command list v2.00 | [Sony ILME-FR7 VISCA command list v2.00](https://pro.sony/s3/2022/09/14131603/VISCA-Command-List-Version-2.00.pdf), [Axis VISCA interface description](https://www.axis.com/dam/public/70/3d/31/visca-interface-api-description-en-US-266656.pdf) |
