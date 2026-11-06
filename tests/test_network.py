@@ -11,7 +11,7 @@ import threading
 
 import pytest
 
-from ptzsim import cli, display, network
+from ptzsim import builtin_protocols, cli, display, network
 from ptzsim.network import (InterfaceInfo, format_addresses_for_display, get_all_interfaces_detailed,
                             get_network_addresses, get_resolved_addresses)
 
@@ -148,12 +148,16 @@ def test_startup_dns_allows_event_loop_progress(monkeypatch):
         finished.set()
         return "camera.example.test"
 
+    class NoServer:
+        def close(self):
+            pass
+
     async def no_tcp_server(sim, host, port):
-        pass
+        return NoServer()
 
     monkeypatch.setattr(network.socket, "getfqdn", slow_fqdn)
     monkeypatch.setattr(network, "_getifaddrs", lambda: {})
-    monkeypatch.setattr(cli, "serve_tcp", no_tcp_server)
+    monkeypatch.setattr(builtin_protocols, "serve_tcp", no_tcp_server)
     args = cli.build_parser().parse_args(
         ["serve", "--tcp", "0", "--host", "127.0.0.1", "--no-tui"]
     )
