@@ -126,19 +126,43 @@ default) needs root privileges, so 8080 is the default.
 
 ## ONVIF scope
 
-- **Device**: `GetCapabilities`, `GetServices`, `GetSystemDateAndTime`, `GetDeviceInformation`
-- **Media**: `GetProfiles`/`GetProfile` (one profile `Profile_1` with a PTZ configuration
-  including `DefaultContinuousZoomVelocitySpace`), `GetStreamUri` (`--rtsp-uri`)
+- **Device**: `GetCapabilities`, `GetServices`, `GetSystemDateAndTime`, `GetDeviceInformation`,
+  `GetWsdlUrl`, `GetEndpointReference`, `GetUsers` (the `--onvif-user` as Administrator).
+  Scopes: `GetScopes`, `SetScopes`, `AddScopes`, `RemoveScopes` (type, profile and hardware
+  are fixed, name and location configurable; WS-Discovery announces the current list),
+  `GetDiscoveryMode`/`SetDiscoveryMode` (`NonDiscoverable` stops Hello and ProbeMatches).
+  Network: `GetHostname`/`SetHostname`, `GetNetworkInterfaces` (`eth0` with the address the
+  client connected to), `GetDNS`, `GetNTP`, `GetNetworkProtocols` (HTTP), `GetNetworkDefaultGateway`.
+  `SetNetworkInterfaces`, `SetDNS`, `SetNTP`, `SetNetworkProtocols`, `SetNetworkDefaultGateway`,
+  `SetSystemDateAndTime`, `SetSystemFactoryDefault` and `SystemReboot` are accepted but change
+  nothing. User management (`CreateUsers`, `SetUser`, `DeleteUsers`) is not supported.
+- **Media**: one fixed profile `Profile_1` with a video source configuration
+  (`VideoSourceConfig_1`, 640×360), an H.264 encoder configuration (`VideoEncoderConfig_1`) and
+  the PTZ configuration (including `DefaultContinuousZoomVelocitySpace`). `GetProfiles`/`GetProfile`,
+  `Get(Compatible)VideoSourceConfiguration(s)`, `GetVideoSourceConfigurationOptions`,
+  `SetVideoSourceConfiguration`, `Get(Compatible)VideoEncoderConfiguration(s)`,
+  `GetVideoEncoderConfigurationOptions`, `SetVideoEncoderConfiguration` (stores resolution
+  640×360/320×180, quality 0…10, frame rate 1…25, bitrate, GOV length, H.264 profile; other
+  values give `ter:ConfigModify`), `GetGuaranteedNumberOfVideoEncoderInstances`,
+  `Add`/`Remove` `VideoSource`/`VideoEncoder`/`PTZ` `Configuration`. `GetStreamUri` returns
+  `--rtsp-uri` (default `rtsp://<host>:554/stream`); ptzsim does not stream video itself, and
+  without a source and encoder in the profile it fails with `ter:IncompleteConfiguration`.
+  After `RemovePTZConfiguration`, PTZ moves, status and presets fail with `ter:NoPTZProfile`.
+  `GetSnapshotUri` is not supported (`SnapshotUri="false"`).
 - **PTZ**: `ContinuousMove` (with `Timeout`, default 5 s; every new call extends it),
   `Stop`, `AbsoluteMove`, `RelativeMove`, `GetStatus`, `GotoHomePosition`, `SetHomePosition`,
   `GetPresets`, `SetPreset`, `GotoPreset`, `RemovePreset`, `GetNodes`, `GetConfigurations`,
-  `GetConfigurationOptions`
-- **Authentication**: WS-Security UsernameToken with `PasswordDigest` (or `PasswordText`),
-  only when `--onvif-user` is set. `GetCapabilities`, `GetServices` and
-  `GetSystemDateAndTime` work without login, as on real cameras.
+  `GetConfigurationOptions`, `GetCompatibleConfigurations`
+- **Authentication**: HTTP digest and/or WS-Security UsernameToken with `PasswordDigest`
+  (or `PasswordText`), only when `--onvif-user` is set. Missing or wrong digest credentials
+  get HTTP 401 with a new challenge. `GetCapabilities`, `GetServices`, `GetServiceCapabilities`,
+  `GetWsdlUrl`, `GetHostname`, `GetEndpointReference` and `GetSystemDateAndTime` work without
+  login, as on real cameras.
 - **Imaging** (white balance only): `GetImagingSettings`, `SetImagingSettings` and `GetOptions`
   for video source `VideoSource_1`, mode `AUTO`/`MANUAL`, gains 0…255/128 (1.0 = VISCA 0x80). Media
-  `GetVideoSources` lists `VideoSource_1` (640×360, 25 fps). ONVIF has no
+  `GetVideoSources` lists `VideoSource_1` (640×360, 25 fps). `GetMoveOptions` and `GetStatus`
+  answer empty (no remote focus); imaging `Move`/`Stop` return `ter:ActionNotSupported` and
+  never touch the PTZ unit. ONVIF has no
   one-push trigger, so one push is only available via VISCA, NDI and the `b` key.
 - Not supported: Events, Media2. These calls return a SOAP fault
   (`ter:ActionNotSupported`); Events are also missing from `GetCapabilities`.
@@ -284,10 +308,11 @@ verified against it. Responses are not validated against the XSD schemas automat
   ter:NoProfile`; out-of-range velocity, timeout or position is rejected, SetPreset
   fails while the camera moves (`ter:MovingPTZ`). An omitted axis in ContinuousMove
   keeps moving, a zero velocity stops it.
-- Authentication: HTTP digest (RFC 2617, answers 401 with a challenge) and
+- Authentication: HTTP digest (RFC 2617, answers 401 with a challenge, also for wrong
+  credentials as in Core spec figure 4) and
   WS-UsernameToken with nonce and timestamp; `--onvif-auth` limits it to one of them.
-  GetSystemDateAndTime, GetCapabilities, GetServices and GetServiceCapabilities work
-  without credentials.
+  GetSystemDateAndTime, GetCapabilities, GetServices, GetServiceCapabilities, GetWsdlUrl,
+  GetHostname and GetEndpointReference work without credentials (PRE_AUTH). HTTP methods other than GET and POST get 405.
 - WS-Discovery: Types `dn:NetworkVideoTransmitter tds:Device`, AppSequence, Hello on
   start and Bye on exit, Probe matching by type and scope (rfc3986/strcmp0), Resolve.
 

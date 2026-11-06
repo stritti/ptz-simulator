@@ -183,7 +183,8 @@ def post(port, body, header="", user=None, password=None):
         with urllib.request.build_opener(*handlers).open(request, timeout=3) as response:
             return response.status, response.headers, response.read()
     except urllib.error.HTTPError as err:
-        return err.code, err.headers, err.read()
+        # Python 3.8: urllib's own "digest auth failed" error has no body to read
+        return err.code, err.headers, err.read() if err.fp is not None else b""
 
 
 def test_http_digest_authentication():
@@ -281,3 +282,164 @@ def test_broken_datagram_is_ignored():
     protocol = discovery()
     protocol.datagram_received(b"<not xml", ("10.0.0.1", 5000))
     assert protocol.transport.sent == []
+
+
+# ------------------------------------------------ review fixes (Core 26.06, Imaging 18.12)
+def test_imaging_requests_do_not_reach_ptz():
+    onvif = OnvifCamera(ViscaCamera())
+    call(onvif, f'<tptz:ContinuousMove>{P}<tptz:Velocity><tt:PanTilt x="0.5" y="0"/></tptz:Velocity>'
+                "</tptz:ContinuousMove>")
+    status, root = call(onvif, f"<timg:Stop {IMG_NS}>{SOURCE}</timg:Stop>")
+    assert status == 500 and subcodes(root) == ["ter:ActionNotSupported"]
+    assert onvif.state.pan_velocity != 0  # imaging Stop (focus) must not stop the PTZ unit
+    status, root = call(onvif, f"<timg:GetStatus {IMG_NS}>{SOURCE}</timg:GetStatus>")
+    response = find(root, "Body")[0]
+    assert status == 200 and response.tag == "{http://www.onvif.org/ver20/imaging/wsdl}GetStatusResponse"
+
+
+def test_imaging_move_options_are_empty(onvif):
+    status, root = call(onvif, f"<timg:GetMoveOptions {IMG_NS}>{SOURCE}</timg:GetMoveOptions>")
+    assert status == 200 and find(root, "MoveOptions") is not None and len(find(root, "MoveOptions")) == 0
+
+
+def test_get_wsdl_url_without_login():
+    onvif = OnvifCamera(ViscaCamera(), username="admin", password="secret")
+    status, root = call(onvif, "<tds:GetWsdlUrl/>")
+    assert status == 200 and text_of(root, "WsdlUrl")
+
+
+def test_failed_http_digest_gets_401():
+    onvif = OnvifCamera(ViscaCamera(), username="admin", password="secret")
+    port, stop = serve(onvif)
+    try:
+        assert post(port, "<trt:GetProfiles/>", user="admin", password="wrong")[0] == 401
+    finally:
+        stop()
+
+
+def raw_http(port, method, body=b""):
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    conn.request(method, "/onvif/device_service", body=body,
+                 headers={"Content-Type": "application/soap+xml", "Connection": "close"})
+    response = conn.getresponse()
+    response.read()
+    conn.close()
+    return response.status, response.getheader("WWW-Authenticate")
+
+
+def test_empty_post_gets_digest_challenge_and_other_methods_405():
+    onvif = OnvifCamera(ViscaCamera(), username="admin", password="secret")
+    port, stop = serve(onvif)
+    try:
+        status, challenge = raw_http(port, "POST")
+        assert status == 401 and challenge.startswith("Digest ")
+        assert raw_http(port, "PUT")[0] == 405
+    finally:
+        stop()
+
+
+# ------------------------------------------------ Profile S basics (Core 8.2/8.3, Media 5.2-5.5)
+M = "<trt:ProfileToken>Profile_1</trt:ProfileToken>"
+
+
+def test_profile_has_video_source_encoder_and_ptz(onvif):
+    status, root = call(onvif, "<trt:GetProfiles/>")
+    profile = find(root, "Profiles")
+    names = [e.tag.rsplit("}", 1)[1] for e in profile]
+    assert status == 200 and names == ["Name", "VideoSourceConfiguration", "VideoEncoderConfiguration",
+                                       "PTZConfiguration"]
+
+
+def test_remove_and_add_configurations(onvif):
+    assert call(onvif, f"<trt:RemoveVideoEncoderConfiguration>{M}</trt:RemoveVideoEncoderConfiguration>")[0] == 200
+    status, root = call(onvif, "<trt:GetProfiles/>")
+    assert find(root, "VideoEncoderConfiguration") is None
+    status, root = call(onvif, f"<trt:GetStreamUri>{M}</trt:GetStreamUri>")
+    assert status == 500 and subcodes(root) == ["ter:Action", "ter:IncompleteConfiguration"]
+    body = (f"<trt:AddVideoEncoderConfiguration>{M}<trt:ConfigurationToken>VideoEncoderConfig_1"
+            "</trt:ConfigurationToken></trt:AddVideoEncoderConfiguration>")
+    assert call(onvif, body)[0] == 200
+    assert call(onvif, f"<trt:GetStreamUri>{M}</trt:GetStreamUri>")[0] == 200
+    status, root = call(onvif, body.replace("VideoEncoderConfig_1", "x"))
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:NoConfig"]
+
+
+@pytest.mark.parametrize("config, ok", [
+    ("<tt:Resolution><tt:Width>320</tt:Width><tt:Height>180</tt:Height></tt:Resolution>", True),
+    ("<tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>", False),
+    ("<tt:Quality>11</tt:Quality>", False),
+    ("<tt:Encoding>JPEG</tt:Encoding>", False),
+])
+def test_set_video_encoder_configuration(onvif, config, ok):
+    body = (f'<trt:SetVideoEncoderConfiguration><trt:Configuration token="VideoEncoderConfig_1">{config}'
+            "</trt:Configuration><trt:ForcePersistence>true</trt:ForcePersistence></trt:SetVideoEncoderConfiguration>")
+    status, root = call(onvif, body)
+    if ok:
+        assert status == 200 and onvif.encoder["width"] == 320
+    else:
+        assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:ConfigModify"]
+
+
+def test_scopes_follow_set_add_remove_and_discovery(onvif):
+    status, root = call(onvif, "<tds:GetScopes/>")
+    kinds = {text_of(s, "ScopeItem"): text_of(s, "ScopeDef") for s in find(root, "Body")[0]}
+    assert kinds["onvif://www.onvif.org/type/ptz"] == "Fixed"
+    assert kinds["onvif://www.onvif.org/location/simulator"] == "Configurable"
+    call(onvif, "<tds:SetScopes><tds:Scopes>onvif://www.onvif.org/name/Lab</tds:Scopes></tds:SetScopes>")
+    call(onvif, "<tds:AddScopes><tds:ScopeItem>onvif://www.onvif.org/location/hall</tds:ScopeItem></tds:AddScopes>")
+    assert onvif.configurable_scopes == ["onvif://www.onvif.org/name/Lab", "onvif://www.onvif.org/location/hall"]
+    protocol = DiscoveryProtocol(onvif, 8080, advertise_host="10.0.0.9")
+    assert "onvif://www.onvif.org/location/hall" in protocol.scopes
+    status, root = call(onvif, "<tds:RemoveScopes><tds:ScopeItem>onvif://www.onvif.org/type/ptz</tds:ScopeItem>"
+                               "</tds:RemoveScopes>")
+    assert status == 400 and subcodes(root) == ["ter:OperationProhibited", "ter:FixedScope"]
+    status, root = call(onvif, "<tds:RemoveScopes><tds:ScopeItem>onvif://x/y</tds:ScopeItem></tds:RemoveScopes>")
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:NoScope"]
+
+
+def test_non_discoverable_ignores_probes():
+    protocol = discovery()
+    call(protocol.onvif, "<tds:SetDiscoveryMode><tds:DiscoveryMode>NonDiscoverable</tds:DiscoveryMode>"
+                         "</tds:SetDiscoveryMode>")
+    protocol.datagram_received(probe(), ("10.0.0.1", 5000))
+    assert protocol.transport.sent == []
+    status, root = call(protocol.onvif, "<tds:GetDiscoveryMode/>")
+    assert text_of(root, "DiscoveryMode") == "NonDiscoverable"
+
+
+def test_device_network_and_users():
+    onvif = OnvifCamera(ViscaCamera(), username="admin", password="secret")
+    status, root = onvif.handle(SOAP.format(header="", body="<tds:GetHostname/>").encode(), "192.168.1.20:8080")
+    assert status == 200  # PRE_AUTH
+    _, xml = onvif.handle(SOAP.format(header=username_token("admin", "secret"),
+                                      body="<tds:GetNetworkInterfaces/>").encode(), "192.168.1.20:8080")
+    assert text_of(ET.fromstring(xml), "Manual", "Address") == "192.168.1.20"
+    status, root = call(onvif, "<tds:GetUsers/>", username_token("admin", "secret"))
+    assert text_of(root, "User", "Username") == "admin" and text_of(root, "UserLevel") == "Administrator"
+    status, root = call(onvif, "<tds:SetHostname><tds:Name>bad name</tds:Name></tds:SetHostname>",
+                        username_token("admin", "secret"))
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:InvalidHostname"]
+
+
+def test_ptz_operations_need_the_ptz_configuration(onvif):
+    assert call(onvif, f"<trt:RemovePTZConfiguration>{M}</trt:RemovePTZConfiguration>")[0] == 200
+    status, root = call(onvif, f'<tptz:RelativeMove>{P}<tptz:Translation><tt:PanTilt x="0.1" y="0"/>'
+                               "</tptz:Translation></tptz:RelativeMove>")
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:NoPTZProfile"]
+    assert onvif.state.pan_target is None and onvif.state.pan == 0
+    assert call(onvif, f"<trt:GetStreamUri>{M}</trt:GetStreamUri>")[0] == 200
+    body = (f"<trt:AddPTZConfiguration>{M}<trt:ConfigurationToken>PTZConfig_1</trt:ConfigurationToken>"
+            "</trt:AddPTZConfiguration>")
+    assert call(onvif, body)[0] == 200
+    assert call(onvif, f"<tptz:GetStatus>{P}</tptz:GetStatus>")[0] == 200
+
+
+def test_discovery_escapes_configured_scopes():
+    protocol = discovery()
+    call(protocol.onvif, "<tds:SetScopes><tds:Scopes>onvif://www.onvif.org/location/Lab?a=1&amp;b=2</tds:Scopes>"
+                         "</tds:SetScopes>")
+    root = ET.fromstring(protocol.probe_match("uuid:1", "10.0.0.9"))
+    assert "onvif://www.onvif.org/location/Lab?a=1&b=2" in text_of(root, "Scopes").split()
+    _, root = call(protocol.onvif, "<tds:GetScopes/>")
+    assert "onvif://www.onvif.org/location/Lab?a=1&b=2" in [text_of(s, "ScopeItem") for s in find(root, "Body")[0]]
