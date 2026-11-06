@@ -22,3 +22,26 @@
   --vp-button-brand-active-text: #10232d;
   --vp-button-brand-active-bg: #68b7e9;
 }
+
+.vp-doc .tui-preview {
+  margin: 24px 0 40px;
+}
+
+.vp-doc .tui-preview p {
+  margin: 0;
+}
+
+.vp-doc .tui-preview img {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.12);
+}
+
+.vp-doc .tui-preview figcaption {
+  margin-top: 12px;
+  color: var(--vp-c-text-2);
+  font-size: 14px;
+  line-height: 1.6;
+}

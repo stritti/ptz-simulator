@@ -18,6 +18,18 @@ SPDX-FileCopyrightText: 2026 Stephan Strittmatter
 SPDX-License-Identifier: MIT
 -->
 
+## Control the camera from your terminal
+
+<figure class="tui-preview">
+
+[![PTZ simulator terminal dashboard showing camera controls, presets, recent commands and a text-mode viewfinder](/images/tui-dashboard.png)](/images/tui-dashboard.png)
+
+<figcaption>
+The terminal dashboard combines camera status, presets and a text-mode viewfinder.
+Open the image to zoom in.
+</figcaption>
+</figure>
+
 ## One camera, three ways to connect
 
 The simulator shares position, motion and presets across its interfaces, so you
