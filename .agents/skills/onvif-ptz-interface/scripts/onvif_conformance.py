@@ -137,7 +137,10 @@ class OnvifClient:
             scheme = parts.scheme
             host = parts.hostname
             port = parts.port or (443 if scheme == "https" else 80)
-            status, text = self.post(parts.path or "/", body, host=host, port=port, scheme=scheme)
+            target = parts.path or "/"
+            if parts.query:
+                target += "?" + parts.query  # keep query parameters of advertised XAddrs
+            status, text = self.post(target, body, host=host, port=port, scheme=scheme)
         else:
             status, text = self.post("%s/%s_service" % (self.base, service), body)
         try:
@@ -359,11 +362,23 @@ def main() -> int:
     # --- PTZ service --------------------------------------------------------
     status, text, root = client.call(
         "ptz", "<tptz:GetStatus><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetStatus>" % profile_body)
-    pantilt = find_all(root, "PanTilt") if root is not None else []
-    zoom = find_all(root, "Zoom") if root is not None else []
-    check("GetStatus reports Position PanTilt/Zoom", status == 200 and root is not None
-          and any("x" in el.attrib and "y" in el.attrib for el in pantilt) and len(zoom) > 0,
-          "HTTP %s" % status)
+    # PanTilt/Zoom must be inside PTZStatus/Position — a MoveStatus/Zoom text
+    # element must not satisfy the position check
+    ok, detail = False, "HTTP %s" % status
+    if status == 200 and root is not None:
+        for ptz_status in find_all(root, "PTZStatus"):
+            pos = next((c for c in list(ptz_status) if localname(c.tag) == "Position"), None)
+            if pos is None:
+                continue
+            pantilt = next((c for c in list(pos) if localname(c.tag) == "PanTilt"), None)
+            zoom = next((c for c in list(pos) if localname(c.tag) == "Zoom"), None)
+            if pantilt is not None and "x" in pantilt.attrib and "y" in pantilt.attrib \
+                    and zoom is not None and "x" in zoom.attrib:
+                ok = True
+                detail = "HTTP %s, Position PanTilt x=%s y=%s, Zoom x=%s" % (
+                    status, pantilt.attrib.get("x"), pantilt.attrib.get("y"),
+                    zoom.attrib.get("x"))
+    check("GetStatus reports Position PanTilt(x,y)/Zoom(x) inside PTZStatus", ok, detail)
 
     move = (
         "<tptz:ContinuousMove><tptz:ProfileToken>%s</tptz:ProfileToken><tptz:Velocity>"
