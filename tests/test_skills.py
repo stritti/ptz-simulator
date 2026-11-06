@@ -24,18 +24,37 @@ def skill_dirs():
     return sorted(d for d in SKILLS.iterdir() if d.is_dir() and (d / "SKILL.md").is_file())
 
 
+def parse_scalar(raw: str, path: Path, line_no: int) -> str:
+    """Parse a single-line YAML scalar the way a YAML parser would (stdlib only)."""
+    raw = raw.strip()
+    if raw.startswith('"'):
+        assert len(raw) >= 2 and raw.endswith('"') and '"' not in raw[1:-1].replace('\\"', ""), (
+            "%s:%d: unterminated or invalid double-quoted scalar: %r" % (path, line_no, raw))
+        return raw[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    if raw.startswith("'"):
+        assert len(raw) >= 2 and raw.endswith("'"), (
+            "%s:%d: unterminated single-quoted scalar: %r" % (path, line_no, raw))
+        return raw[1:-1].replace("''", "'")
+    assert raw, "%s:%d: empty value is not a valid scalar" % (path, line_no)
+    assert not re.search(r": | #", raw), (
+        "%s:%d: plain scalar must not contain ': ' or ' #': %r" % (path, line_no, raw))
+    assert raw[0] not in "!&*[]{},#|>@%`\"'" and not re.match(r"^[-?:] ", raw), (
+        "%s:%d: plain scalar starts with a YAML indicator: %r" % (path, line_no, raw))
+    return raw
+
+
 def frontmatter(path: Path):
     lines = path.read_text(encoding="utf-8").splitlines()
     assert lines and lines[0] == "---", "%s must start with '---' frontmatter" % path
     end = next(i for i in range(1, len(lines)) if lines[i] == "---")
     fields = {}
-    for line in lines[1:end]:
+    for i, line in enumerate(lines[1:end], start=2):
         m = re.match(r"^([A-Za-z][\w-]*):\s*(.*)$", line)
         if m:
-            value = m.group(2).strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                value = value[1:-1]
-            fields[m.group(1)] = value
+            raw = m.group(2).strip()
+            # an empty value is a block mapping header (e.g. `metadata:`); its
+            # indented children are not needed here
+            fields[m.group(1)] = parse_scalar(raw, path, i) if raw else ""
     return fields, lines
 
 
@@ -87,3 +106,20 @@ def test_install_skills_copies_into_project(tmp_path):
     for tool_dir in (".claude/skills", ".vibe/skills"):
         for skill in skill_dirs():
             assert (tmp_path / tool_dir / skill.name / "SKILL.md").is_file()
+
+
+def test_install_skills_never_copies_onto_itself(tmp_path):
+    """`install-skills.sh <checkout> agents` must skip instead of deleting the source."""
+    import shutil
+
+    shutil.copytree(SKILLS, tmp_path / ".agents" / "skills")
+    (tmp_path / "scripts").mkdir()
+    shutil.copy(INSTALLER, tmp_path / "scripts" / "install-skills.sh")
+    result = subprocess.run(
+        ["sh", str(tmp_path / "scripts" / "install-skills.sh"), str(tmp_path), "agents"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "skip" in result.stdout
+    for skill in skill_dirs():
+        assert (tmp_path / ".agents" / "skills" / skill.name / "SKILL.md").is_file()

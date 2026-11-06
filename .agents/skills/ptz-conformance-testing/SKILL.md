@@ -1,6 +1,6 @@
 ---
 name: ptz-conformance-testing
-description: Validate a PTZ camera interface implementation (VISCA, ONVIF or other) against the ptzsim reference simulator: start ptzsim with the matching protocol, drive it with ptzsim send or an ONVIF client, or run the bundled visca_conformance.py / onvif_conformance.py smoke scripts against your own camera-side endpoint; follow the conformance checklists for reply framing, error codes, sockets, discovery, auth, faults and timeouts. Use whenever a camera interface must be proven interoperable with real clients/cameras.
+description: "Validate a PTZ camera interface implementation (VISCA, ONVIF or other) against the ptzsim reference simulator: start ptzsim with the matching protocol, drive it with ptzsim send or an ONVIF client, or run the bundled visca_conformance.py / onvif_conformance.py smoke scripts against your own camera-side endpoint; follow the conformance checklists for reply framing, error codes, sockets, discovery, auth, faults and timeouts. Use whenever a camera interface must be proven interoperable with real clients/cameras."
 license: MIT
 compatibility: ptzsim and the bundled scripts need only Python 3.8+ (standard library); optional extras (NDI runtime, onvif-zeep-async client test) are opt-in.
 metadata:

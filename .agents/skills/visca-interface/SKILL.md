@@ -1,6 +1,6 @@
 ---
 name: visca-interface
-description: Implement a VISCA-conformant PTZ camera interface (Sony VISCA over RS-232/RS-422 serial and VISCA over IP on UDP 52381): packet framing and terminator, the command and inquiry set, ACK/completion/error replies, the two command sockets, sequence numbers and value ranges. Use when building a VISCA client or a camera-side VISCA endpoint that must interoperate with real Sony/PTZOptics/Aver cameras and controllers; validate with scripts/visca_conformance.py.
+description: "Implement a VISCA-conformant PTZ camera interface (Sony VISCA over RS-232/RS-422 serial and VISCA over IP on UDP 52381): packet framing and terminator, the command and inquiry set, ACK/completion/error replies, the two command sockets, sequence numbers and value ranges. Use when building a VISCA client or a camera-side VISCA endpoint that must interoperate with real Sony/PTZOptics/Aver cameras and controllers; validate with scripts/visca_conformance.py."
 license: MIT
 compatibility: The bundled conformance script needs only Python 3.8+ (standard library). The reference simulator ptzsim (https://github.com/stritti/ptz-simulator) runs on Python 3.8+ with no dependencies.
 metadata:

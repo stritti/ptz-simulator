@@ -31,6 +31,7 @@ import argparse
 import base64
 import hashlib
 import http.client
+import io
 import os
 import socket
 import sys
@@ -140,10 +141,27 @@ class OnvifClient:
             sock.close()
 
 
-def fault_subcodes(root) -> list:
+def fault_subcodes(root, text: str) -> list:
+    """Local names of ONVIF fault subcode values, whatever prefix the endpoint uses.
+
+    The subcode is a QName in the text of a SOAP `Value` element (e.g.
+    `ter:InvalidArgVal`); the prefix is resolved against the namespace
+    declarations of the response, and any namespace under
+    http://www.onvif.org/ counts as an ONVIF subcode.
+    """
     if root is None:
         return []
-    return [el.text or "" for el in find_all(root, "Value") if (el.text or "").startswith("ter:")]
+    prefixes = {}
+    for _event, (prefix, uri) in ET.iterparse(io.StringIO(text), events=["start-ns"]):
+        prefixes[prefix] = uri
+    out = []
+    for el in find_all(root, "Value"):
+        value = (el.text or "").strip()
+        prefix, _, local = value.rpartition(":")
+        uri = prefixes.get(prefix, "") if prefix else ""
+        if uri.startswith("http://www.onvif.org/"):
+            out.append(local or value)
+    return out
 
 
 def main() -> int:
@@ -258,10 +276,10 @@ def main() -> int:
         % (profile, PT_POSITION_SPACE, ZOOM_POSITION_SPACE)
     )
     status, text, root = client.call("ptz_service", bad_move)
-    subcodes = fault_subcodes(root)
+    subcodes = fault_subcodes(root, text)
     check("out-of-range AbsoluteMove faults env:Sender/ter:InvalidArgVal",
           root is not None and len(find_all(root, "Fault")) > 0
-          and any(c.endswith("ter:InvalidArgVal") for c in subcodes),
+          and "InvalidArgVal" in subcodes,
           "HTTP %s, subcodes %s" % (status, subcodes))
 
     if args.discovery:

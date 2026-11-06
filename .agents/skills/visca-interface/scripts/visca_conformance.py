@@ -45,17 +45,17 @@ def dump(data: bytes) -> str:
 def matches(packet: bytes, pattern: str) -> bool:
     """Match a reply against a VISCA pattern, e.g. '90 4z FF' or '90 50 0p FF'.
 
-    Two-hex-digit tokens match literally, 'z' matches any socket nibble and any
-    other token matches one nibble per character.
+    Literal hex characters match themselves (so '4z'/'5z' keep the ACK/completion
+    discriminator); 'z' matches one socket nibble and any other non-hex pattern
+    character matches one arbitrary nibble.
     """
     regex = ""
     for token in pattern.split():
-        if token == "z":
-            regex += "[0-9A-F]"
-        elif re.fullmatch(r"[0-9A-F]{2}", token):
-            regex += token
-        else:
-            regex += "[0-9A-F]" * len(token)
+        for ch in token:
+            if ch == "z" or ch not in "0123456789ABCDEF":
+                regex += "[0-9A-F]"
+            else:
+                regex += ch
     return re.fullmatch(regex, dump(packet).replace(" ", "")) is not None
 
 
@@ -91,9 +91,11 @@ class Endpoint:
     def exchange(self, payload: bytes, replies: int = 1, timeout: float = None) -> list:
         """Send one payload, return up to `replies` VISCA reply payloads."""
         timeout = self.timeout if timeout is None else timeout
+        seq = None
         if self.transport == "sony":
             kind = SONY_INQUIRY if payload[1] == 0x09 else SONY_COMMAND
-            self._send_raw(SONY_HEADER.pack(kind, len(payload), self.sequence) + payload)
+            seq = self.sequence
+            self._send_raw(SONY_HEADER.pack(kind, len(payload), seq) + payload)
             self.sequence += 1
         else:
             self._send_raw(payload)
@@ -110,7 +112,10 @@ class Endpoint:
             if self.transport == "sony":
                 if len(data) < SONY_HEADER.size:
                     continue
-                ptype, length, _seq = SONY_HEADER.unpack_from(data)
+                ptype, length, rseq = SONY_HEADER.unpack_from(data)
+                if rseq != seq:
+                    control_errors.append("sequence %d != %d" % (rseq, seq))
+                    continue
                 body = data[SONY_HEADER.size:SONY_HEADER.size + length]
                 if ptype == SONY_REPLY:
                     out.append(body)
@@ -171,8 +176,9 @@ def main() -> int:
             if len(got) != 2:
                 return False, "expected ACK + completion, got %s" % [dump(g) for g in got]
             ack, completion = got
+            socket = ack[1] & 0x0F
             ok = matches(ack, "90 4z FF") and matches(completion, "90 5z FF") \
-                and ack[1] & 0x0F == completion[1] & 0x0F
+                and socket in (1, 2) and socket == completion[1] & 0x0F
             return ok, "ACK %s, completion %s" % (dump(ack), dump(completion))
         return _expect
 

@@ -1,6 +1,6 @@
 ---
 name: ptz-reference-interface
-description: Implement a reference-conformant PTZ camera control interface (VISCA over serial or IP, ONVIF Profile S/T PTZ, or another PTZ protocol) that interoperates with real cameras, VMS and controllers: choose the protocol, implement framing and operations exactly per the standard, and validate the result against the ptzsim reference simulator. Use this skill when a project needs to expose or consume a camera interface for pan/tilt/zoom/presets and the wire behaviour must match the standard.
+description: "Implement a reference-conformant PTZ camera control interface (VISCA over serial or IP, ONVIF Profile S/T PTZ, or another PTZ protocol) that interoperates with real cameras, VMS and controllers: choose the protocol, implement framing and operations exactly per the standard, and validate the result against the ptzsim reference simulator. Use this skill when a project needs to expose or consume a camera interface for pan/tilt/zoom/presets and the wire behaviour must match the standard."
 license: MIT
 compatibility: No runtime requirements. The bundled conformance scripts and the ptzsim reference simulator need only Python 3.8+ (standard library).
 metadata:

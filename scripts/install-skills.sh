@@ -110,6 +110,12 @@ for tool in $TOOLS; do
     mkdir -p "$dest"
     for skill in $SKILLS; do
         if [ -f "$SKILLS_DIR/$skill/SKILL.md" ]; then
+            src=$(CDPATH= cd -- "$SKILLS_DIR/$skill" && pwd)
+            dst=$(CDPATH= cd -- "$dest" && pwd)/$skill
+            if [ "$src" = "$dst" ]; then
+                printf 'skip %s: destination is the source directory %s\n' "$skill" "$dest"
+                continue
+            fi
             rm -rf "$dest/$skill"
             cp -R "$SKILLS_DIR/$skill" "$dest/$skill"
         fi

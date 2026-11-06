@@ -1,6 +1,6 @@
 ---
 name: onvif-ptz-interface
-description: Implement an ONVIF Profile S/T conformant PTZ service (SOAP 1.2 over HTTP): Device, Media and PTZ services with their operations, WS-Discovery on UDP 3702, HTTP digest and WS-Security UsernameToken (PasswordDigest) authentication, generic pan/tilt/zoom coordinate spaces (-1..1 / 0..1), spec fault chains (env:Sender/ter:InvalidArgVal/...) and timeout semantics. Use when building a camera-side ONVIF endpoint or an ONVIF client that must work with VMS like Milestone or Genetec; validate with scripts/onvif_conformance.py against the ptzsim reference.
+description: "Implement an ONVIF Profile S/T conformant PTZ service (SOAP 1.2 over HTTP): Device, Media and PTZ services with their operations, WS-Discovery on UDP 3702, HTTP digest and WS-Security UsernameToken (PasswordDigest) authentication, generic pan/tilt/zoom coordinate spaces (-1..1 / 0..1), spec fault chains (env:Sender/ter:InvalidArgVal/...) and timeout semantics. Use when building a camera-side ONVIF endpoint or an ONVIF client that must work with VMS like Milestone or Genetec; validate with scripts/onvif_conformance.py against the ptzsim reference."
 license: MIT
 compatibility: The bundled conformance script needs only Python 3.8+ (standard library). The reference simulator ptzsim (https://github.com/stritti/ptz-simulator) runs on Python 3.8+ with no dependencies.
 metadata:
@@ -63,8 +63,11 @@ Reference documents:
    (e.g. 640×360), an encoder configuration and a PTZ configuration token. `GetProfiles`
    must return it with the PTZ configuration; `GetStreamUri` returns the RTSP URI.
 8. **Presets**: `SetPreset`/`GotoPreset`/`RemovePreset`/`GetPresets` with `PresetToken`;
-   `GotoPreset` may carry a `Speed` that overrides the preset speed. VISCA-style wire
-   values 0…99 map to tokens hex `00`…`63`.
+   `GotoPreset` may carry a `Speed` that overrides the preset speed. The reference
+   simulator parses tokens as **decimal** (`int(token)` in `OnvifCamera._preset_number`)
+   and emits decimal tokens in `GetPresets` (`token="5"`), so use `0`…`99`; the hex
+   `00`…`63` form is the VISCA command byte, not the ONVIF token — match the target
+   camera's convention.
 
 ## Validate
 
