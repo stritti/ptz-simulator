@@ -166,8 +166,8 @@ snapshot; DNS resolution runs outside the event loop so it cannot stall camera
 control. Native interface information remains live.
 
 ### Health-Check API
-The simulator provides a health-check endpoint at `/health` (or `/`) that returns
-detailed JSON information:
+The simulator provides a health-check endpoint at `/health` (or `/`). Without
+configured ONVIF credentials, it returns detailed JSON information:
 
 ```bash
 curl http://127.0.0.1:8080/health
@@ -205,6 +205,22 @@ Clients can use this endpoint to:
 
 The `interfaces` list contains up to 10 interfaces with an address, main
 interfaces first.
+
+With `--onvif-user`, ordinary health requests return only `{"status":"ok"}`.
+Request `?details=1` to retrieve network details with HTTP Digest authentication
+in the `both` or `digest` auth mode:
+
+```bash
+curl --digest --user admin 'http://127.0.0.1:8080/health?details=1'
+```
+
+curl prompts for the password. `/?details=1` is an alias. Missing or invalid
+credentials receive a `401` challenge; WSSE-only mode rejects detail requests
+with `403`, without changing SOAP authentication. The `details` parameter must
+appear once with value `1`; invalid values receive `400`.
+
+Network lookups for detailed responses run outside the simulator event loop,
+so health polling cannot delay camera control or movement timeouts.
 
 ## Keyboard control (TUI)
 

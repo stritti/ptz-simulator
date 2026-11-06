@@ -23,6 +23,7 @@ import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Callable, Dict, Optional, Tuple
+from urllib.parse import parse_qs
 from xml.sax.saxutils import escape
 
 from . import state as st
@@ -782,6 +783,28 @@ class OnvifCamera:
 async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.AbstractServer:
     """Minimal HTTP/1.1 server (keep-alive capable) carrying the SOAP services."""
 
+    def detailed_health(local_ip: str, local_port: int) -> str:
+        hostname, fqdn = get_hostname_and_fqdn()
+        interfaces = get_all_interfaces_detailed()
+        iface_list = []
+        for iface in sorted(interfaces.values(), key=interface_sort_key):
+            ipv4_addrs = [addr for addr, _ in iface.ipv4_addresses]
+            if ipv4_addrs or iface.ipv6_addresses:
+                iface_list.append({
+                    "name": iface.name,
+                    "ipv4": ipv4_addrs,
+                    "ipv6": iface.ipv6_addresses,
+                })
+        return json.dumps({
+            "status": "ok",
+            "camera": onvif.name,
+            "hostname": hostname,
+            "fqdn": fqdn,
+            "address": local_ip,
+            "port": local_port,
+            "interfaces": iface_list[:10],
+        }) + "\n"
+
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         local_ip, local_port = writer.get_extra_info("sockname")[:2]
         try:
@@ -808,43 +831,44 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
                         content_type = "text/plain; charset=utf-8"
                         extra = f"WWW-Authenticate: {onvif.digest_challenge()}\r\n"
                 else:
-                    # Handle GET requests
-                    if path == "/health" or path == "/":
-                        # Health check endpoint for frontend with detailed network info
-                        status = 200
-                        hostname, fqdn = get_hostname_and_fqdn()
-                        interfaces = get_all_interfaces_detailed()
-
-                        # Build a list of interfaces with addresses, main interfaces first
-                        iface_list = []
-                        for iface in sorted(interfaces.values(), key=interface_sort_key):
-                            ipv4_addrs = [addr for addr, _ in iface.ipv4_addresses]
-                            ipv6_addrs = iface.ipv6_addresses
-                            if ipv4_addrs or ipv6_addrs:
-                                iface_list.append({
-                                    "name": iface.name,
-                                    "ipv4": ipv4_addrs,
-                                    "ipv6": ipv6_addrs
-                                })
-
-                        health_data = {
-                            "status": "ok",
-                            "camera": onvif.name,
-                            "hostname": hostname,
-                            "fqdn": fqdn,
-                            "address": local_ip,
-                            "port": local_port,
-                            "interfaces": iface_list[:10] if iface_list else []  # Limit to 10 to avoid huge responses
-                        }
-                        payload = json.dumps(health_data) + "\n"
+                    health_path, _, query = path.partition("?")
+                    if health_path in ("/health", "/"):
                         content_type = "application/json; charset=utf-8"
+                        status, health_data = 200, {"status": "ok"}
+                        details = onvif.username is None
+                        params = parse_qs(query, keep_blank_values=True)
+                        request_details = params.get("details") == ["1"]
+                        if "details" in params and not request_details:
+                            status, health_data = 400, {"error": "details must be specified once as 1"}
+                        elif onvif.username is not None and request_details:
+                            if onvif.auth == "wsse":
+                                status, health_data = 403, {
+                                    "error": "Network details require HTTP Digest, disabled in WSSE-only mode",
+                                }
+                            else:
+                                try:
+                                    authorization = headers.get("authorization")
+                                    if not authorization or not authorization.lower().startswith("digest "):
+                                        raise Unauthorized()
+                                    onvif._check_http_digest(authorization, method, path)
+                                except (Unauthorized, OnvifFault):
+                                    status, health_data = 401, {"error": "HTTP Digest authentication required"}
+                                    extra = f"WWW-Authenticate: {onvif.digest_challenge()}\r\n"
+                                else:
+                                    details = True
+                        if status == 200 and details:
+                            payload = await asyncio.get_running_loop().run_in_executor(
+                                None, detailed_health, local_ip, local_port,
+                            )
+                        else:
+                            payload = json.dumps(health_data) + "\n"
                     else:
                         # Default response for other GET requests
                         status = 200
                         payload = f"ptzsim ONVIF camera '{onvif.name}'\n"
                         content_type = "text/plain; charset=utf-8"
                 data = payload.encode()
-                reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized",
+                reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
                           500: "Internal Server Error"}[status]
                 close = headers.get("connection", "").lower() == "close"
                 writer.write(
