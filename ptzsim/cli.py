@@ -12,10 +12,9 @@ import socket
 import sys
 from typing import List, Optional
 
+from . import protocol
 from .display import dashboard, log_printer
-from .transports import (SONY_HEADER, SONY_VISCA_COMMAND, SONY_VISCA_INQUIRY,
-                         Simulator, serve_pty, serve_tcp, serve_udp)
-from .onvif import OnvifCamera, serve_discovery, serve_onvif
+from .transports import SONY_HEADER, SONY_VISCA_COMMAND, SONY_VISCA_INQUIRY, Simulator
 from .visca import ViscaCamera, hexdump, parse_hex
 
 DEFAULT_PORTS = {"sony": 52381, "tcp": 5678, "udp": 1259, "onvif": 8080}
@@ -27,30 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = sub.add_parser("serve", help="run a simulated camera")
     serve.add_argument("--host", default="0.0.0.0", help="address to listen on (default 0.0.0.0)")
-    serve.add_argument("--sony", type=int, metavar="PORT", nargs="?", const=DEFAULT_PORTS["sony"],
-                       help="Sony VISCA over IP on UDP (default port 52381)")
-    serve.add_argument("--tcp", type=int, metavar="PORT", nargs="?", const=DEFAULT_PORTS["tcp"],
-                       help="raw VISCA over TCP, e.g. PTZOptics (default port 5678)")
-    serve.add_argument("--udp", type=int, metavar="PORT", nargs="?", const=DEFAULT_PORTS["udp"],
-                       help="raw VISCA over UDP (default port 1259)")
-    serve.add_argument("--pty", nargs="?", const="", metavar="LINK",
-                       help="emulate a serial port via a pseudo terminal; optional symlink path")
-    serve.add_argument("--onvif", type=int, metavar="PORT", nargs="?", const=DEFAULT_PORTS["onvif"],
-                       help="ONVIF (SOAP over HTTP) with WS-Discovery (default port 8080)")
-    serve.add_argument("--onvif-user", metavar="USER", help="require authentication (see --onvif-auth) with this user")
-    serve.add_argument("--onvif-password", metavar="PASSWORD", default="", help="password for --onvif-user")
-    serve.add_argument("--ndi", action="store_true",
-                       help="publish an NDI source with PTZ control (needs: pip install ndi-python numpy)")
-    serve.add_argument("--ndi-fps", type=int, default=25, metavar="FPS", help="NDI frame rate (default 25)")
     serve.add_argument("--name", default="PTZ-Simulator", help="camera name (ONVIF scope/profile, NDI source name)")
-    serve.add_argument("--no-discovery", action="store_true", help="do not answer WS-Discovery probes")
-    serve.add_argument("--advertise-host", metavar="IP",
-                       help="address announced in WS-Discovery (default: detected per request)")
-    serve.add_argument("--onvif-auth", choices=("both", "digest", "wsse"), default="both",
-                       help="ONVIF authentication: HTTP digest and/or WS-UsernameToken (default both)")
-    serve.add_argument("--onvif-no-absolute", action="store_true",
-                       help="simulate a camera without AbsoluteMove (presets only via SetPreset/GotoPreset)")
-    serve.add_argument("--rtsp-uri", metavar="URI", help="stream URI returned by ONVIF GetStreamUri")
     serve.add_argument("--address", type=int, default=1, choices=range(1, 8),
                        help="VISCA camera address (default 1)")
     serve.add_argument("--instant", action="store_true",
@@ -59,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--view-only", action="store_true",
                        help="show the dashboard without keyboard control")
     serve.add_argument("-v", "--verbose", action="store_true", help="log every packet sent and received")
+    protocol.add_arguments(serve)  # one option group per protocol plugin
 
     send = sub.add_parser("send", help="send VISCA hex packets to a camera and print the replies")
     send.add_argument("packets", nargs="+", help='VISCA packets as hex, e.g. "81 01 06 04 FF"')
@@ -72,57 +49,27 @@ def build_parser() -> argparse.ArgumentParser:
 async def _serve(args: argparse.Namespace) -> None:
     camera = ViscaCamera(address=args.address, instant=args.instant)
     sim = Simulator(camera)
-    endpoints: List[str] = []
-    discovery = None
-
-    if all(v is None for v in (args.sony, args.tcp, args.udp, args.pty, args.onvif)) and not args.ndi:
-        args.sony = DEFAULT_PORTS["sony"]
-    if args.sony is not None:
-        await serve_udp(sim, args.host, args.sony, sony=True)
-        endpoints.append(f"Sony VISCA/IP udp://{args.host}:{args.sony}")
-    if args.tcp is not None:
-        await serve_tcp(sim, args.host, args.tcp)
-        endpoints.append(f"VISCA tcp://{args.host}:{args.tcp}")
-    if args.udp is not None:
-        await serve_udp(sim, args.host, args.udp, sony=False)
-        endpoints.append(f"VISCA udp://{args.host}:{args.udp}")
-    if args.pty is not None:
-        endpoints.append(f"VISCA serial {serve_pty(sim, args.pty or None)}")
-    if args.onvif is not None:
-        onvif = OnvifCamera(camera, name=args.name, username=args.onvif_user,
-                            password=args.onvif_password, rtsp_uri=args.rtsp_uri,
-                            absolute=not args.onvif_no_absolute, auth=args.onvif_auth)
-        await serve_onvif(onvif, args.host, args.onvif)
-        endpoints.append(f"ONVIF http://{args.host}:{args.onvif}/onvif/device_service")
-        if not args.no_discovery:
-            discovery = await serve_discovery(onvif, args.onvif, advertise_host=args.advertise_host)
-            endpoints.append("WS-Discovery udp/3702")
-    if args.ndi:
-        from .ndi import start_ndi
-
-        source = start_ndi(camera, args.name, args.ndi_fps)
-        endpoints.append(f"NDI {source.source_name}")
-
-    title = " | ".join(endpoints)
-    logging.getLogger("ptzsim").info("listening: %s", title)
-    if args.no_tui:
-        view = log_printer(camera)
-    elif args.view_only or not _interactive_terminal():
-        view = dashboard(camera, title)
-    else:
-        from .tui import interactive
-
-        view = interactive(camera, title)
-    tasks = [asyncio.ensure_future(sim.run()), asyncio.ensure_future(view)]
+    ctx = protocol.ServeContext(camera, sim, args)
     try:
+        await ctx.start_plugins()
+        title = " | ".join(str(e) for e in ctx.endpoints)
+        logging.getLogger("ptzsim").info("listening: %s", title)
+        if args.no_tui:
+            view = log_printer(camera)
+        elif args.view_only or not _interactive_terminal():
+            view = dashboard(camera, title)
+        else:
+            from .tui import interactive
+
+            view = interactive(camera, title)
+        tasks = [asyncio.ensure_future(sim.run()), asyncio.ensure_future(view)]
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
         for task in done:
             task.result()  # re-raise errors from the simulator or the view
     finally:
-        if discovery is not None:
-            discovery.get_protocol().bye()  # WS-Discovery Bye when leaving the network
+        ctx.stop_plugins()
 
 
 def _interactive_terminal() -> bool:
