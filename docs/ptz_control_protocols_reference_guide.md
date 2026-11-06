@@ -11,7 +11,8 @@ This is a general protocol reference; not all protocols listed here are
 implemented by the simulator. ptzsim implements ONVIF (Core Specification
 v26.06, PTZ Service Specification v25.12, Imaging Service Specification
 v18.12, WS-Discovery 1.0 (April 2005 revision), WS-Security UsernameToken 1.1,
-HTTP digest per RFC 2617), Sony VISCA (command list v2.00, VISCA over IP) and NDI PTZ
+HTTP digest per RFC 2617), Sony VISCA (command list v2.00, VISCA over IP), Pelco-D
+(7-byte frames with checksum: drive, stop and preset commands) and NDI PTZ
 metadata (`ntk_ptz_*`); see [supported standards](/guide#supported-standards)
 in the guide for the full list with versions and references.
 
@@ -48,7 +49,7 @@ Pelco-D is a widely used 7-byte framing protocol operating over RS-485 different
 ```
 
 * **Motion Command Field Bitmasks (Byte 4 - Command 2):**
-  * Bit 0: Fixed to 0
+  * Bit 0: Focus Near (`0x01`) in most implementations; the original Pelco manual marks it as fixed to 0
   * Bit 1: Pan Right
   * Bit 2: Pan Left
   * Bit 3: Tilt Up
@@ -67,6 +68,11 @@ Pelco-D is a widely used 7-byte framing protocol operating over RS-485 different
 
 * **Example Command Frame (Pan Right, Camera Address 1, Pan Speed `0x20`):**
   `FF 01 00 02 20 00 23`
+
+ptzsim implements the drive, stop-all and preset (set `0x03` / call `0x07` / clear
+`0x05`) commands described here and answers executed commands with the ACK frame
+`FF <addr> 00 FF 00 00 <checksum>`; see
+[Testing Pelco-D clients](/guide#testing-pelco-d-clients) in the guide.
 
 ### 2.2 Pelco-P
 
