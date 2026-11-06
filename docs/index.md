@@ -23,7 +23,7 @@ SPDX-License-Identifier: MIT
 [![CI](https://img.shields.io/github/actions/workflow/status/stritti/ptz-simulator/ci.yml?branch=main&label=CI)](https://github.com/stritti/ptz-simulator/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/github/actions/workflow/status/stritti/ptz-simulator/pages.yml?branch=main&label=docs)](https://stritti.github.io/ptz-simulator/)
 [![Latest release](https://img.shields.io/github/v/release/stritti/ptz-simulator)](https://github.com/stritti/ptz-simulator/releases/latest)
-[![PyPI](https://img.shields.io/pypi/v/ptzsim)](https://pypi.org/project/ptzsim/)
+[![PyPI](https://img.shields.io/badge/dynamic/json?label=pypi&url=https%3A%2F%2Fpypi.org%2Fpypi%2Fptzsim%2Fjson&query=%24.info.version&color=orange&cacheSeconds=300)](https://pypi.org/project/ptzsim/)
 [![Python versions](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fstritti%2Fptz-simulator%2Fmain%2Fpyproject.toml)](https://github.com/stritti/ptz-simulator/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/github/license/stritti/ptz-simulator)](https://github.com/stritti/ptz-simulator/blob/main/LICENSE)
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-fe5196?logo=conventionalcommits&logoColor=white)](https://www.conventionalcommits.org/en/v1.0.0/)
