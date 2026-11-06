@@ -78,6 +78,31 @@ class ViscaSerial(ProtocolPlugin):
 
 
 @register
+class PelcoDSerial(ProtocolPlugin):
+    name = "pelco-d"
+    title = "Pelco-D (serial)"
+
+    @classmethod
+    def add_arguments(cls, group) -> None:
+        group.add_argument("--pelco-d", nargs="?", const="", metavar="LINK",
+                           help="Pelco-D over a serial port (RS-485) via a pseudo terminal; optional symlink path")
+        group.add_argument("--pelco-d-address", type=int, default=1, choices=range(1, 256), metavar="ADDR",
+                           help="Pelco-D camera address 1-255 (default 1)")
+
+    @classmethod
+    def enabled(cls, args) -> bool:
+        return args.pelco_d is not None
+
+    async def start(self, ctx: ServeContext) -> List[Endpoint]:
+        from .pelco import PelcoCamera, split_frames
+
+        pelco = PelcoCamera(ctx.camera, address=ctx.args.pelco_d_address)
+        port = PtyPort(pelco, ctx.args.pelco_d or None, split=split_frames)
+        self.servers.append(port)
+        return [Endpoint("Pelco-D", f"serial {port.path}")]
+
+
+@register
 class Onvif(PortPlugin):
     name = "onvif"
     title = "ONVIF"

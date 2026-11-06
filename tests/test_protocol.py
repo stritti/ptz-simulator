@@ -49,7 +49,7 @@ def example_plugin(isolated_registry):
 
 # ----------------------------------------------------------------- registry
 def test_builtin_plugins_in_option_order():
-    assert [p.name for p in protocol.plugins()] == ["sony", "tcp", "udp", "pty", "onvif", "ndi"]
+    assert [p.name for p in protocol.plugins()] == ["sony", "tcp", "udp", "pty", "pelco-d", "onvif", "ndi"]
 
 
 def test_sony_is_started_when_no_protocol_is_given():

@@ -5,7 +5,7 @@ SPDX-License-Identifier: MIT
 
 # ptzsim — Agent Instructions
 
-Command-line PTZ camera simulator (ONVIF, VISCA, NDI) for testing PTZ clients
+Command-line PTZ camera simulator (ONVIF, VISCA, Pelco-D, NDI) for testing PTZ clients
 without a real camera.
 User-facing docs are in [README.md](README.md); keep it in sync with every change to
 options, ports or commands.
@@ -102,8 +102,8 @@ the PR is merged; a renamed PR title re-runs the check automatically.
 
 ## Constraints
 
-- **Runtime is standard library only.** ONVIF and VISCA must keep working with plain
-  `python3 -m ptzsim` and no installed packages. Third-party packages go into the
+- **Runtime is standard library only.** ONVIF, VISCA and Pelco-D must keep working with
+  plain `python3 -m ptzsim` and no installed packages. Third-party packages go into the
   `ndi` extra (runtime, optional) or a dependency group (dev/test only).
 - `requires-python = ">=3.8"`: no syntax or stdlib APIs newer than 3.8
   (`from __future__ import annotations` is used for type hints).
@@ -124,11 +124,14 @@ the PR is merged; a renamed PR title re-runs the check automatically.
   end-to-end tests; `free_port()`.
 - `ptzsim/visca.py` — `ViscaCamera`: VISCA command parser on top of `CameraState`; the
   other protocols drive the same `ViscaCamera` instance.
+- `ptzsim/pelco.py` — `PelcoCamera`: Pelco-D parser (7-byte frames with checksum, ACK
+  replies) driving the same `ViscaCamera`; used by the `--pelco-d` plugin.
 - `ptzsim/onvif.py` — `OnvifCamera`: SOAP over HTTP (Device, Media, PTZ services,
   WS-Security digest auth) and the WS-Discovery responder on UDP 3702. Converts between
   VISCA units and the ONVIF generic spaces (pan/tilt −1…1, zoom 0…1).
 - `ptzsim/transports.py` — Sony VISCA over IP (UDP 52381), raw VISCA over TCP/UDP, serial
-  via pseudo terminal.
+  via pseudo terminal (`PtyPort` takes any `process(packet, send)` handler plus a frame
+  `split`, e.g. VISCA packets or Pelco-D frames).
 - `ptzsim/ndi.py` — optional NDI source with PTZ control and a rendered test picture.
 - `ptzsim/display.py` — renders the dashboard (`render`), read-only view and `--no-tui` log.
 - `ptzsim/tui.py` — interactive keyboard UI. `TuiController` maps keys to `CameraState`
