@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.3.0](https://github.com/stritti/ptz-simulator/compare/v0.2.0...v0.3.0) (2026-11-06)
+
+
+### Features
+
+* add protocol plugin interface for adding new protocols ([d2ecf5a](https://github.com/stritti/ptz-simulator/commit/d2ecf5a83bed20adc0e78dfcca24f00b7c797c62))
+* **onvif:** add network health endpoint ([2c18e8d](https://github.com/stritti/ptz-simulator/commit/2c18e8d00bb7553bb4c825c8302ed0894d2423cf))
+* **tui:** add landmarks to the simulated camera picture ([82c79e8](https://github.com/stritti/ptz-simulator/commit/82c79e8c2cdb386c717d51d3b7f420c084cc72e3))
+* **tui:** add network-aware terminal dashboard ([cb74e86](https://github.com/stritti/ptz-simulator/commit/cb74e86a2bd48ce3566a1214cfedf3ffed0c1cbf))
+
+
+### Bug Fixes
+
+* **onvif:** protect health details without blocking camera control ([dc93aeb](https://github.com/stritti/ptz-simulator/commit/dc93aeb546f8a409a8b9e0de3ddb55aab0c5e3dd))
+* release the serial pty and the NDI source when the simulator stops ([bb2e29e](https://github.com/stritti/ptz-simulator/commit/bb2e29e5e254ae68843704c83d48929ab965ffc8))
+* stop a protocol plugin that fails during start-up ([2689a6e](https://github.com/stritti/ptz-simulator/commit/2689a6efbf653f0fae2b0e8d390fd782e7170095))
+* **visca:** let a newer move supersede an older socket, keep cancel retransmit protected ([9f141a4](https://github.com/stritti/ptz-simulator/commit/9f141a479b22e96e48925cd278417c2af7141bfe))
+* **visca:** two command sockets, IF_Clear, address set and 100 presets ([e350a2e](https://github.com/stritti/ptz-simulator/commit/e350a2e8f5544b79e64e668c34006096871131db))
+* **visca:** two command sockets, IF_Clear, address set and 100 presets per Sony list ([e8fe66e](https://github.com/stritti/ptz-simulator/commit/e8fe66e78f5dc97cd82f621f40e07fbd79f436fd))
+
+
+### Documentation
+
+* add camera scene page with landmark images and coordinates ([a919846](https://github.com/stritti/ptz-simulator/commit/a91984624d7aa3d1c1b33cffb6de3a6d15158ab2))
+* add status badges to README and website ([e6670b6](https://github.com/stritti/ptz-simulator/commit/e6670b66548ae6088fdac9ea2acc263ced52bdf8))
+* link the protocol guide from README and AGENTS.md ([a050ece](https://github.com/stritti/ptz-simulator/commit/a050ece6f3ae426dbeb8cb8eceda7c6e487fddd2))
+* **site:** add copyright and MIT license notice to footer ([fab9de1](https://github.com/stritti/ptz-simulator/commit/fab9de1e3764cdcec39be2609f7d27f1e82cc438))
+* **website:** unify documentation under docs ([869e44a](https://github.com/stritti/ptz-simulator/commit/869e44ab6f0b1070e1380686cf19dc2e90dc38e8))
+
 ## [0.2.0](https://github.com/stritti/ptz-simulator/compare/v0.1.0...v0.2.0) (2026-11-06)
 
 
