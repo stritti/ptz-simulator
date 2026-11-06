@@ -39,7 +39,7 @@ project_dir_for() {
         agents)   echo .agents/skills ;;
         cursor)   echo .cursor/skills ;;
         vibe)     echo .vibe/skills ;;
-        codex)    echo .codex/skills ;;
+        codex)    echo .agents/skills ;;  # Codex loads repo skills from .agents/skills
         gemini)   echo .gemini/skills ;;
         windsurf) echo .windsurf/skills ;;
         opencode) echo .opencode/skills ;;

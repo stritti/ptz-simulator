@@ -53,6 +53,8 @@ WSU = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utilit
 DISCOVERY = "http://schemas.xmlsoap.org/ws/2005/04/discovery"
 DN = "http://www.onvif.org/ver10/network/wsdl"
 ONVIF_ERROR_NS = "http://www.onvif.org/ver10/error"  # namespace of ter: fault subcodes
+# WS-Discovery 2005/04 uses the 2004/08 addressing namespace (not the 2005/08 one)
+WSA = "http://schemas.xmlsoap.org/ws/2004/08/addressing"
 PT_POSITION_SPACE = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace"
 PT_VELOCITY_SPACE = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"
 ZOOM_POSITION_SPACE = "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"
@@ -156,13 +158,13 @@ class OnvifClient:
         # MessageID, To = the multicast discovery destination)
         probe = (
             '<s:Envelope xmlns:s="%s" xmlns:d="%s" xmlns:dn="%s" '
-            'xmlns:wsa="http://www.w3.org/2005/08/addressing"><s:Header>'
+            'xmlns:wsa="%s"><s:Header>'
             "<wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</wsa:Action>"
             "<wsa:MessageID>urn:uuid:%s</wsa:MessageID>"
             "<wsa:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To>"
             '</s:Header><s:Body><d:Probe>'
             "<d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></s:Body></s:Envelope>"
-            % (SOAP, DISCOVERY, DN, uuid.uuid4())
+            % (SOAP, DISCOVERY, DN, WSA, uuid.uuid4())
         )
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(timeout)
