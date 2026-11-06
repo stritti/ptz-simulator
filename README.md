@@ -312,3 +312,37 @@ These PTZ protocols are common but **not supported** by the simulator:
 - Sony BRC-X400 CGI Command List: https://shop.ccisolutions.com/StoreFront/jsp/pdf/SON-BRCX400W_cgiCommandList.pdf
 - Axis VAPIX Pan/Tilt/Zoom API: https://developer.axis.com/vapix/network-video/pantiltzoom-api/
 - Canon CR-N300 specifications (lists the XC Protocol): https://www.canon.co.uk/ptz-cameras/cr-n300/specifications/
+
+## Documentation website
+
+The VitePress site in `website/` uses this README as its guide. Before publishing
+it, review the examples for machine-specific hostnames and network addresses.
+
+Node.js 20.19+ (20.x) or 22.12+ is required. From the repository directory:
+
+```bash
+cd website
+npm ci
+npm run docs:dev      # local development server
+npm test              # check root and GitHub Pages subpath builds
+npm run docs:build    # production build
+npm run docs:preview  # preview the production build
+```
+
+For a local preview under a project subpath, set the same base path when building
+and previewing:
+
+```bash
+BASE_PATH=/ptz-simulator npm run docs:build
+BASE_PATH=/ptz-simulator npm run docs:preview
+```
+
+To publish on GitHub Pages, select **GitHub Actions** under **Settings > Pages >
+Build and deployment > Source** in the repository. The `Deploy documentation`
+workflow runs on pushes to `main` and can also be started manually. It gets the
+site's base path from GitHub Pages, so project sites and root domains both work.
+
+VitePress 1.x depends on an older Vite with development-server security
+advisories. The website overrides it with a patched Vite 6 release; VitePress
+data and path loaders are not used because they are not fully compatible with
+that override. See the [upstream compatibility guidance](https://github.com/vuejs/vitepress/issues/4494).
