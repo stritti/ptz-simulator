@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 from ptzsim import state as st
 from ptzsim.state import CameraState
 from ptzsim.tui import DASHBOARD_WIDTH, TuiController

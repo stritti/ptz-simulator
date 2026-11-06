@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """VISCA command interpreter.
 
 Takes raw VISCA packets (``8x ... FF``), applies them to a :class:`CameraState`

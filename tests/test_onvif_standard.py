@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """Behaviour required by the ONVIF Core and PTZ service specifications (26.06)."""
 
 import asyncio

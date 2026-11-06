@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 [build-system]
 requires = ["setuptools>=62"]
 build-backend = "setuptools.build_meta"
@@ -8,7 +11,7 @@ version = "0.1.0"
 description = "CLI simulator for testing ONVIF, VISCA and NDI PTZ clients"
 readme = "README.md"
 # SPDX expressions in project.license require setuptools 77, which drops Python 3.8.
-# The license metadata is supplied by setup.cfg for compatibility with Python 3.8.
+# Keep license metadata in setup.cfg for compatibility with the supported Python versions.
 dynamic = ["license"]
 requires-python = ">=3.8"
 dependencies = []

@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+SPDX-License-Identifier: MIT
+-->
+
 # ptzsim – command-line PTZ camera simulator
 
 Simulates a PTZ camera controlled via **ONVIF**, **VISCA** and **NDI**, so PTZ
@@ -366,3 +371,9 @@ VitePress 1.x depends on an older Vite with development-server security
 advisories. The website overrides it with a patched Vite 6 release; VitePress
 data and path loaders are not used because they are not fully compatible with
 that override. See the [upstream compatibility guidance](https://github.com/vuejs/vitepress/issues/4494).
+
+## License
+
+ptzsim is licensed under the [MIT License](https://github.com/stritti/ptz-simulator/blob/main/LICENSE).
+The optional NDI runtime and third-party reference documents are subject to
+their respective terms.

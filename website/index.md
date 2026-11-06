@@ -13,6 +13,11 @@ hero:
       link: /guide
 ---
 
+<!--
+SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+SPDX-License-Identifier: MIT
+-->
+
 ## One camera, three ways to connect
 
 The simulator shares position, motion and presets across its interfaces, so you

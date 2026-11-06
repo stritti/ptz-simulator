@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """Interactive terminal UI: the live dashboard plus keyboard control of the camera."""
 
 from __future__ import annotations

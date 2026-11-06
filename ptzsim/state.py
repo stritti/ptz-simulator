@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """Simulated camera state: position, motion and presets."""
 
 from __future__ import annotations

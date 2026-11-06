@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """Network / serial transports carrying VISCA to the simulated camera."""
 
 from __future__ import annotations

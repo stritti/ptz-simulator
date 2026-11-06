@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+// SPDX-License-Identifier: MIT
+
 import { defineConfig } from 'vitepress'
 
 const pagesBase = process.env.BASE_PATH || '/'
