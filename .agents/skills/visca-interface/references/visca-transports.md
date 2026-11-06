@@ -79,7 +79,7 @@ the end-stop bits.
 | Pan speed | 1 … 0x18 | in drive and absolute/relative moves |
 | Tilt speed | 1 … 0x17 | `00` in absolute/relative moves = "same as pan" |
 | Presets | 0 … 99 (hex 00…63) | wire value is shown as 1…100 in UIs |
-| Preset speed | 1 … 32 (hex 01…20) | common or per-preset |
+| Preset speed | 1 … 50 (hex 01…32) | common or per-preset |
 
 In absolute/relative moves both 4- and 5-digit coordinates are accepted (classic
 BRC/EVI/Axis and newer Sony models).

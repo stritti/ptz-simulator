@@ -99,20 +99,24 @@ class OnvifClient:
         self.host, self.port, self.base = host, port, base
         self.user, self.password = user, password
         self.timeout = timeout
-        # service name -> path, filled from the XAddrs advertised in GetCapabilities
-        self.service_paths = {}
+        # service name -> full advertised XAddr URL, filled from GetCapabilities
+        self.service_urls = {}
 
     def remember_service(self, capability: str, xaddr: str) -> None:
-        """Route later calls for this service to the advertised XAddr path."""
-        m = re.match(r"^https?://[^/]+(/.*)$", xaddr.strip())
-        if m:
-            self.service_paths[capability.lower()] = m.group(1)
+        """Route later calls for this service to the advertised XAddr (scheme/host/port/path)."""
+        if re.match(r"^https?://[^/]+/", xaddr.strip()):
+            self.service_urls[capability.lower()] = xaddr.strip()
 
-    def post(self, path: str, body: str):
+    def post(self, path: str, body: str, host: str = None, port: int = None, scheme: str = "http"):
         # fresh UsernameToken (nonce/created/digest) for every request: cameras may
         # reject replayed nonces
         security = security_header(self.user, self.password) if self.user else ""
-        conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
+        host = host or self.host
+        port = port or self.port
+        if scheme == "https":
+            conn = http.client.HTTPSConnection(host, port, timeout=self.timeout)
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=self.timeout)
         try:
             conn.request(
                 "POST", path,
@@ -125,8 +129,14 @@ class OnvifClient:
             conn.close()
 
     def call(self, service: str, body: str):
-        path = self.service_paths.get(service) or "%s/%s_service" % (self.base, service)
-        status, text = self.post(path, body)
+        url = self.service_urls.get(service)
+        if url:
+            m = re.match(r"^(https?)://([^/:]+)(?::(\d+))?(/.*)$", url)
+            scheme, host, port, path = m.group(1), m.group(2), m.group(3), m.group(4)
+            port = int(port) if port else (443 if scheme == "https" else 80)
+            status, text = self.post(path, body, host=host, port=port, scheme=scheme)
+        else:
+            status, text = self.post("%s/%s_service" % (self.base, service), body)
         try:
             root = ET.fromstring(text)
         except ET.ParseError:
@@ -191,6 +201,21 @@ class OnvifClient:
             sock.close()
 
 
+def ns_prefixes(text: str) -> dict:
+    """prefix -> namespace URI map of an XML document."""
+    prefixes = {}
+    for _event, (prefix, uri) in ET.iterparse(io.StringIO(text), events=["start-ns"]):
+        prefixes[prefix] = uri
+    return prefixes
+
+
+def resolve_qname(value: str, prefixes: dict):
+    """Resolve a QName string like 'ter:InvalidArgVal' to (namespace URI, local name)."""
+    prefix, _, local = value.rpartition(":")
+    uri = prefixes.get(prefix, "") if prefix else ""
+    return uri, (local or value)
+
+
 def fault_subcodes(root, text: str) -> list:
     """Local names of ONVIF fault subcode values, whatever prefix the endpoint uses.
 
@@ -200,17 +225,25 @@ def fault_subcodes(root, text: str) -> list:
     """
     if root is None:
         return []
-    prefixes = {}
-    for _event, (prefix, uri) in ET.iterparse(io.StringIO(text), events=["start-ns"]):
-        prefixes[prefix] = uri
+    prefixes = ns_prefixes(text)
     out = []
     for el in find_all(root, "Value"):
-        value = (el.text or "").strip()
-        prefix, _, local = value.rpartition(":")
-        uri = prefixes.get(prefix, "") if prefix else ""
+        uri, local = resolve_qname((el.text or "").strip(), prefixes)
         if uri == ONVIF_ERROR_NS:
-            out.append(local or value)
+            out.append(local)
     return out
+
+
+def fault_code(root, text: str):
+    """Primary SOAP fault code as (namespace URI, local name), e.g. (SOAP, 'Sender')."""
+    if root is None:
+        return None
+    prefixes = ns_prefixes(text)
+    for code in find_all(root, "Code"):
+        values = find_all(code, "Value")
+        if values:
+            return resolve_qname((values[0].text or "").strip(), prefixes)
+    return None
 
 
 def main() -> int:
@@ -279,10 +312,14 @@ def main() -> int:
 
     # --- Media service ------------------------------------------------------
     status, text, root = client.call("media", "<trt:GetProfiles/>")
-    tokens = [el.get("token") or "" for el in find_all(root, "Profiles")] if root is not None else []
-    check("GetProfiles returns the profile with a PTZ configuration",
-          status == 200 and profile in tokens and root is not None
-          and len(find_all(root, "PTZConfiguration")) > 0,
+    profiles = find_all(root, "Profiles") if root is not None else []
+    tokens = [el.get("token") or "" for el in profiles]
+    # the selected profile itself must carry the PTZ configuration, not just any
+    # profile in the response
+    selected = next((p for p in profiles if (p.get("token") or "") == profile), None)
+    check("GetProfiles returns the selected profile with its own PTZ configuration",
+          status == 200 and selected is not None
+          and len(find_all(selected, "PTZConfiguration")) > 0,
           "HTTP %s, tokens %s" % (status, tokens))
 
     # --- PTZ service --------------------------------------------------------
@@ -365,10 +402,11 @@ def main() -> int:
     )
     status, text, root = client.call("ptz", bad_move)
     subcodes = fault_subcodes(root, text)
+    code = fault_code(root, text)
     check("out-of-range AbsoluteMove faults env:Sender/ter:InvalidArgVal",
           root is not None and len(find_all(root, "Fault")) > 0
-          and "InvalidArgVal" in subcodes,
-          "HTTP %s, subcodes %s" % (status, subcodes))
+          and code == (SOAP, "Sender") and "InvalidArgVal" in subcodes,
+          "HTTP %s, code %s, subcodes %s" % (status, code, subcodes))
 
     if args.discovery:
         ok, xaddrs = client.discovery_probe(args.timeout)
