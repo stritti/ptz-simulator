@@ -57,3 +57,6 @@ async def serve(*argv: str, instant: bool = True, tick_interval: float = 0.01) -
     finally:
         task.cancel()
         ctx.stop_plugins()
+        # Transports close their sockets in a loop callback; let it run so the
+        # ports are free again when the context is left.
+        await asyncio.sleep(0)

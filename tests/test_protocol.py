@@ -229,3 +229,13 @@ def test_serial_plugin_releases_the_pty(tmp_path):
     port = asyncio.run(run())
     assert (port.master, port.slave) == (-1, -1)
     assert not link.exists()
+
+
+def test_port_can_be_reused_right_after_the_context():
+    async def run():
+        port = free_port(socket.SOCK_DGRAM)
+        for _ in range(2):
+            async with serve("--udp", str(port)):
+                pass
+
+    asyncio.run(run())
