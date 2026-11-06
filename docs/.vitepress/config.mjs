@@ -56,6 +56,7 @@ export default defineConfig({
       {
         text: 'Protocols',
         items: [
+          { text: 'Supported standards', link: '/guide#supported-standards' },
           { text: 'Protocol reference', link: '/ptz_control_protocols_reference_guide' },
           { text: 'ONVIF integration', link: '/guide#testing-onvif-clients' },
           { text: 'ONVIF scope', link: '/guide#onvif-scope' },
