@@ -40,6 +40,7 @@ import socket
 import sys
 import time
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape
 
 SOAP = "http://www.w3.org/2003/05/soap-envelope"
 TDS = "http://www.onvif.org/ver10/device/wsdl"
@@ -50,6 +51,7 @@ WSSE = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secex
 WSU = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"
 DISCOVERY = "http://schemas.xmlsoap.org/ws/2005/04/discovery"
 DN = "http://www.onvif.org/ver10/network/wsdl"
+ONVIF_ERROR_NS = "http://www.onvif.org/ver10/error"  # namespace of ter: fault subcodes
 PT_POSITION_SPACE = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace"
 PT_VELOCITY_SPACE = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"
 ZOOM_POSITION_SPACE = "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"
@@ -85,7 +87,7 @@ def security_header(user: str, password: str) -> str:
         '<Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/'
         'oasis-200401-wss-soap-message-security-1.0#Base64Binary">%s</Nonce>'
         '<Created xmlns="%s">%s</Created></UsernameToken></Security>'
-        % (WSSE, user, digest, base64.b64encode(nonce).decode(), WSU, created)
+        % (WSSE, escape(user), digest, base64.b64encode(nonce).decode(), WSU, created)
     )
 
 
@@ -174,9 +176,8 @@ def fault_subcodes(root, text: str) -> list:
     """Local names of ONVIF fault subcode values, whatever prefix the endpoint uses.
 
     The subcode is a QName in the text of a SOAP `Value` element (e.g.
-    `ter:InvalidArgVal`); the prefix is resolved against the namespace
-    declarations of the response, and any namespace under
-    http://www.onvif.org/ counts as an ONVIF subcode.
+    `ter:InvalidArgVal`); the prefix is arbitrary, but the resolved namespace
+    must be exactly the ONVIF error namespace http://www.onvif.org/ver10/error.
     """
     if root is None:
         return []
@@ -188,7 +189,7 @@ def fault_subcodes(root, text: str) -> list:
         value = (el.text or "").strip()
         prefix, _, local = value.rpartition(":")
         uri = prefixes.get(prefix, "") if prefix else ""
-        if uri.startswith("http://www.onvif.org/"):
+        if uri == ONVIF_ERROR_NS:
             out.append(local or value)
     return out
 
@@ -206,7 +207,7 @@ def main() -> int:
     args = parser.parse_args()
 
     client = OnvifClient(args.host, args.port, args.base, args.user, args.password, args.timeout)
-    profile = args.profile
+    profile = escape(args.profile)  # interpolated into SOAP request bodies
     results = []
 
     def check(name, ok, detail=""):
@@ -228,11 +229,17 @@ def main() -> int:
 
     status, text, root = client.call(
         "device_service", "<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>")
-    xaddrs = [el.text or "" for el in find_all(root, "XAddr")] if root is not None else []
-    check("GetCapabilities advertises Device/Media/PTZ XAddrs",
-          status == 200 and any("device_service" in x for x in xaddrs)
-          and any("media_service" in x for x in xaddrs) and any("ptz_service" in x for x in xaddrs),
-          "HTTP %s, XAddrs %s" % (status, xaddrs))
+    # services are identified by the capability elements (Device/Media/PTZ), each
+    # with an XAddr; the URL path spelling is not mandated by the spec
+    services = {}
+    for caps in find_all(root, "Capabilities") if root is not None else []:
+        for cap in list(caps):
+            xaddr = find_all(cap, "XAddr")
+            if xaddr and (xaddr[0].text or "").strip().startswith("http"):
+                services[localname(cap.tag)] = xaddr[0].text.strip()
+    check("GetCapabilities advertises Device/Media/PTZ capabilities with XAddrs",
+          status == 200 and all(s in services for s in ("Device", "Media", "PTZ")),
+          "HTTP %s, capabilities %s" % (status, services))
 
     status, text, root = client.call(
         "device_service", "<tds:GetServices><tds:IncludeCapability>true</tds:IncludeCapability></tds:GetServices>")
