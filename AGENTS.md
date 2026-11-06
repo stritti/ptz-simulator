@@ -51,8 +51,8 @@ becomes the commit message; with a merge commit the PR's own commits are read. S
 ```
 
 - `type` is one of the types in `release-please-config.json`. Types with a visible
-  changelog section trigger a release; hidden types do not, but still show up once a
-  release is cut for other reasons:
+  changelog section trigger a release; hidden types neither trigger a
+  release nor appear in `CHANGELOG.md`:
 
   | Type | Use for | Version effect | Changelog |
   |------|---------|----------------|-----------|
