@@ -70,6 +70,158 @@ default both), `--onvif-no-absolute` (camera without `AbsoluteMove`, presets onl
 positions instead of moving at motor speed), `--host` (bind address). In
 dashboard mode, log messages go to `ptzsim.log`.
 
+## Dashboard and Network Discovery
+
+### TUI Dashboard Views
+The interactive TUI uses a Midnight-Commander-style layout: the active view and
+tabs stay at the top, while status feedback and the command bar stay fixed at the
+bottom, including the terminal's last row. Only the content between them scrolls.
+The active tab is highlighted and marked with brackets, even without color.
+
+#### Camera Control View (Press `c`)
+The main camera control view shows real-time PTZ status and commands:
+```
+CAMERA | PTZ camera simulator
+[c]:Camera  n:Network  | ONVIF http://0.0.0.0:8103/onvif/device_service
+Power: ON   Address: 1   Commands: 0
+
+Pan        0     +0.0°  [──────────────●───────────────]  idle
+Tilt       0     +0.0°  [───────●──────────────────────]  idle
+Zoom  0x0000      1.0x  [●─────────────────────────────]  idle
+Focus 0x8000        AF  [──────────────●───────────────]  idle
+White balance  auto          R 0x80  B 0x80
+
+No presets stored
+
+Last commands
+(waiting for commands)
+
+Speed 4/8 | Ready
+MOVE                                     PRESET                   CAMERA                 VIEW
+[Arrows/WASD] Pan/Tilt                   [1-9]        Recall      [f] Autofocus          [c]         Camera
+[+/-]         Zoom      [h]   Home       [P then 1-9] Save        [b] White balance      [n]         Network  [?] Help
+[Space]       Stop      [ / ] Speed      [C then 1-9] Clear       [o] Power              [PgUp/PgDn] Scroll   [q] Quit
+```
+
+#### Network Information View (Press `n`)
+Lists the hostname and every network interface of the machine (also interfaces
+that are down or have no address), the main interfaces first:
+```
+NETWORK | Network Information
+c:Camera  [n]:Network  | ONVIF http://0.0.0.0:8103/onvif/device_service
+
+Hostname: camera-host
+FQDN:     camera-host.example.test
+
+Interfaces (24)
+  Interface        State  IPv4                IPv6
+  eth0             up     192.0.2.10/24       fe80::1
+  br-0123456789ab  down   172.18.0.1/16
+  br-abcdef012345  up     172.19.0.1/16       fe80::2
+  docker0          down   172.17.0.1/16       fe80::3
+  lo               up     127.0.0.1/8
+  veth0123456      up                         fe80::4
+  ...
+
+Speed 4/8 | Ready
+MOVE                                     PRESET                   CAMERA                 VIEW
+[Arrows/WASD] Pan/Tilt                   [1-9]        Recall      [f] Autofocus          [c]         Camera
+[+/-]         Zoom      [h]   Home       [P then 1-9] Save        [b] White balance      [n]         Network  [?] Help
+[Space]       Stop      [ / ] Speed      [C then 1-9] Clear       [o] Power              [PgUp/PgDn] Scroll   [q] Quit
+```
+
+### Keyboard Shortcuts
+The bottom command bar uses four compact columns for movement, presets, camera
+settings and view navigation, separated by six spaces. Key labels are highlighted
+and enclosed in brackets:
+- **`n`** - Network Information View (IP addresses, interfaces, hostname)
+- **`c`** - Camera Control View (PTZ controls, presets, commands)
+- **`q`** - Quit the simulator (or use Ctrl+C)
+- **`?`** - Open/close the full keyboard help; `Esc` also closes it
+- **`PgUp` / `PgDn`** - Scroll long camera, network or help content; the status
+  line shows the visible line range when content overflows
+
+The interactive TUI requires at least **120 columns and 8 rows**. If the
+terminal is smaller, a resize notice replaces the dashboard; `Space` (stop)
+and `q` (quit) remain available. Resizing back restores the current view and
+any pending preset action. On terminals 8 to 14 rows high, the bottom bar keeps
+Stop, Help and Quit visible. Open `?` for the complete command list.
+Camera controls remain available in Network view. In Help, camera commands are
+paused except for `Space` (stop); `c` or `n` returns directly to that view.
+
+### Startup Information
+When the simulator starts, it displays comprehensive network information in the startup logs:
+- **Hostname and FQDN** (e.g., `camera-host` and `camera-host.example.test`)
+- **All Network Interfaces** with their IP addresses:
+  - IPv4 addresses with netmasks (e.g., `eth0: 192.0.2.10/255.255.255.0`)
+  - IPv6 addresses (e.g., `eth0: fe80::1`)
+- **Summary of available addresses** in log output (`Available on: …`, main interface
+  first, without loopback and link-local addresses)
+
+The network addresses are detected automatically from the system's network
+interfaces with `getifaddrs(3)` (Linux, macOS, BSD; no extra packages). Where
+`getifaddrs` is not available (Windows), the simulator falls back to the addresses
+of the hostname. Hostname/FQDN and DNS-derived fallback addresses are a startup
+snapshot; DNS resolution runs outside the event loop so it cannot stall camera
+control. Native interface information remains live.
+
+### Health-Check API
+The simulator provides a health-check endpoint at `/health` (or `/`). Without
+configured ONVIF credentials, it returns detailed JSON information:
+
+```bash
+curl http://127.0.0.1:8080/health
+```
+
+Response example:
+```json
+{
+    "status": "ok",
+    "camera": "PTZ-Simulator",
+    "hostname": "camera-host",
+    "fqdn": "camera-host.example.test",
+    "address": "192.0.2.10",
+    "port": 8080,
+    "interfaces": [
+        {
+            "name": "eth0",
+            "ipv4": ["192.0.2.10"],
+            "ipv6": ["fe80::1"]
+        },
+        {
+            "name": "docker0",
+            "ipv4": ["172.17.0.1"],
+            "ipv6": ["fe80::3"]
+        }
+    ]
+}
+```
+
+Clients can use this endpoint to:
+- Verify connectivity to the simulator
+- Discover available network interfaces
+- Identify the correct IP address to use for the connection
+- Get the hostname and FQDN for display purposes
+
+The `interfaces` list contains up to 10 interfaces with an address, main
+interfaces first.
+
+With `--onvif-user`, ordinary health requests return only `{"status":"ok"}`.
+Request `?details=1` to retrieve network details with HTTP Digest authentication
+in the `both` or `digest` auth mode:
+
+```bash
+curl --digest --user admin 'http://127.0.0.1:8080/health?details=1'
+```
+
+curl prompts for the password. `/?details=1` is an alias. Missing or invalid
+credentials receive a `401` challenge; WSSE-only mode rejects detail requests
+with `403`, without changing SOAP authentication. The `details` parameter must
+appear once with value `1`; invalid values receive `400`.
+
+Network lookups for detailed responses run outside the simulator event loop,
+so health polling cannot delay camera control or movement timeouts.
+
 ## Keyboard control (TUI)
 
 In a terminal, `serve` shows the live dashboard and lets you drive the camera
@@ -80,6 +232,7 @@ current position using `GetStatus`.
 
 | Key | Action |
 |-----|--------|
+| `n` / `c` | show network information / return to the camera view (no Enter needed) |
 | arrows or `W` `A` `S` `D` | pan/tilt while the key is held (stops ~0.35 s after the last key repeat) |
 | `+` / `-` | zoom tele / wide while the key is held |
 | space | stop all movement |
@@ -92,14 +245,21 @@ current position using `GetStatus`.
 | `b` | one-push white balance (sets gains to neutral, locks manual) |
 | `o` | power on / standby |
 | `q` | quit |
+| `?` / `Esc` | toggle help / close help or cancel a pending preset action |
+| `PgUp` / `PgDn` | scroll the current view or help |
 
-Next to the dashboard (or above it in narrow terminals) the TUI shows the
+View switching uses lowercase `n` and `c`; uppercase `C` still clears a preset.
+The network view uses the full width without the camera picture. Returning with
+`c` restores the camera layout without resetting the camera or its presets.
+
+Next to the dashboard, when there is enough vertical space, the TUI shows the
 **camera picture** at the current position: the same virtual scene as the NDI test
 picture, drawn with text characters. The horizon is at 0° tilt, the ground has a
 5° checker pattern, a post with its angle stands every 45° of pan, and a 1° grid
 appears when zoomed in. The field of view is 60° at 1× and narrows with the zoom
 (3° at 20×); the caption shows pan, tilt and zoom. Moves from any client show up
 in the picture as they happen.
+The picture is omitted on short terminals so status and commands stay visible.
 
 The landscape has landmarks at fixed coordinates, so you can check by eye that a
 client's absolute moves and presets land where they should. Small details (↳) only
@@ -139,7 +299,10 @@ and images from `ptzsim/scenery.py`.
 
 The keyboard UI uses `curses` and needs a terminal, so it is not available on
 native Windows Python (use WSL) or when stdin/stdout are redirected; `serve` then
-falls back to the read-only dashboard.
+falls back to the read-only dashboard. On Unix, that dashboard still accepts
+`n`, `c` and `q` for view navigation and quitting. Closed or unavailable stdin
+only disables keyboard input; it does not stop the simulator. On native Windows,
+use Ctrl+C to exit the read-only dashboard.
 
 ## Testing ONVIF clients
 
@@ -205,7 +368,7 @@ default) needs root privileges, so 8080 is the default.
 
 Coordinates use the generic ONVIF spaces: pan −1…1 (≈ ±170°), tilt −1…1
 (−1 = −30°, 0 = level, 1 = +90°), zoom 0…1 (1×…20×), velocities −1…1.
-VISCA and ONVIF presets are the same. The ONVIF token and the NDI index are the VISCA wire value (0–63); the dashboard and the keys 1–9 show it as 1–64. Recall uses the preset speed setting; ONVIF `GotoPreset` with a `Speed` element overrides it.
+VISCA and ONVIF presets are the same. The ONVIF token and the NDI index are the VISCA wire value (0–99, hex `00`–`63`); the dashboard and the keys 1–9 show it as 1–100. Recall uses the preset speed setting; ONVIF `GotoPreset` with a `Speed` element overrides it.
 
 ## Testing VISCA clients
 
@@ -224,7 +387,7 @@ picture (640×360, `--ndi-fps`, default 25): a grid with sky, ground, horizon,
 red posts every 45° and the same landmarks as the
 [TUI camera picture](#keyboard-control-tui) (mountains, house, UFO, billboards, …),
 moving with pan, tilt and zoom. It announces PTZ support
-(`<ndi_capabilities ntk_ptz="true" .../>` with pan/tilt, zoom, focus, autofocus, white balance and preset speed; NDI preset indexes 0–99, of which the camera has 64), so NDI Studio Monitor, vMix, OBS
+(`<ndi_capabilities ntk_ptz="true" .../>` with pan/tilt, zoom, focus, autofocus, white balance and preset speed; NDI preset indexes 0–99, the same 100 presets as VISCA), so NDI Studio Monitor, vMix, OBS
 (DistroAV) etc. offer PTZ control.
 
 It executes the NDI PTZ commands that receivers send as metadata:
@@ -258,8 +421,8 @@ uv run ptzsim send "81 09 06 12 FF"                    # query position
 
 VISCA commands follow `docs/visca-interface-api-description-en-US-266656.pdf` (AXIS example). The Sony list in `docs/VISCA-Command-List-Version-2.00.pdf` uses other white balance codes (`04` = ATW).
 
-Commands (reply: ACK `90 41 FF` + completion `90 51 FF`; for absolute moves the
-completion is sent once the position has been reached):
+Commands (reply: ACK `90 4z FF` + completion `90 5z FF`, z = socket; for absolute
+moves the completion is sent once the axes of that command have reached the target):
 
 | Command | Bytes |
 |---|---|
@@ -273,7 +436,7 @@ completion is sent once the position has been reached):
 | White balance mode (00 auto, 01 indoor, 02 outdoor, 04 auto outdoor, 05 manual) | `8x 01 04 35 0p FF` |
 | Red / blue gain, relative and absolute | `8x 01 04 03/04 0p FF`, `8x 01 04 43/44 00 00 0p 0q FF` |
 | One push white balance | `8x 01 04 10 05 FF` |
-| Preset reset / set / recall (pp 00–63, shown as 1–64) | `8x 01 04 3F 00/01/02 pp FF` |
+| Preset reset / set / recall (pp hex 00–63 = 0–99, shown as 1–100) | `8x 01 04 3F 00/01/02 pp FF` |
 | Preset speed select (1 separate, 2 common) | `8x 01 7E 04 1B 0p FF` |
 | Common preset speed (01–32 hex) | `8x 01 7E 04 1C 0p 0p FF` |
 | Separate preset speed (01–32 hex) | `8x 01 7E 01 0B pp qq FF` |
@@ -282,15 +445,25 @@ completion is sent once the position has been reached):
 | Home / reset | `8x 01 06 04 FF` / `8x 01 06 05 FF` |
 | Command cancel | `8x 2z FF` (z = socket) |
 | IF_Clear | `8x 01 00 01 FF`, `88 01 00 01 FF` |
-| Address set | `88 30 01 FF` |
+| Address set (takes address w, answers `88 30 0w+1 FF`) | `88 30 0w FF` |
 
 Inquiries (reply `90 50 ... FF`): power `09 04 00`, zoom `09 04 47`,
 focus `09 04 48`, focus mode `09 04 38`, white balance mode `09 04 35`, preset speed `09 7E 04 1B`, `09 7E 04 1C`, `09 7E 01 0B`,
 pan/tilt position `09 06 12`, max speed `09 06 11`,
 pan/tilt status `09 06 10`, version `09 00 02`.
 
-Errors: syntax error `90 60 02 FF`, not executable `90 61 41 FF` (e.g. standby
-or preset not set). `IF_Clear` answers `90 50 FF` without ACK. Pan/tilt status
+Like Sony cameras the simulator has two command sockets. A command takes the lowest
+free socket (`90 41 FF`, then `90 42 FF`); a socket stays busy until its absolute
+move, home or preset recall has finished. A command that arrives while both sockets
+are busy is answered with "command buffer full" `90 60 03 FF`. A newer move takes
+over the axes of an older one; an older command left without axes completes at once; inquiries and
+`IF_Clear` do not use a socket. `8x 2z FF` cancels socket z (`90 6z 04 FF`, no
+completion follows) or answers "no socket" `90 6z 05 FF`. `IF_Clear` answers
+`90 50 FF` (broadcast: `88 01 00 01 FF`) without ACK, stops all motion and empties
+both sockets, so no completion follows.
+
+Errors: syntax error `90 60 02 FF`, not executable `90 6z 41 FF` (e.g. standby,
+preset not set, or manual focus `04 08`/`04 48` while auto focus is on). Pan/tilt status
 reports "initialization completes" (`20 00`) plus "operating" (`04 00`) or
 "operations complete" (`08 00`) and the end-stop bits. In absolute/relative moves
 tilt speed `00` means "same as pan", and both 4- and 5-digit coordinates are
@@ -301,19 +474,19 @@ command `RESET` (`02 00`) is acknowledged with `02 01 ... 01` and resets the
 sequence number; replies carry the sequence number of the request. A repeated
 sequence number is not executed again and answered with control reply `0F 01`, a
 payload type that does not match the packet (inquiry sent as command or vice versa)
-with `0F 02`. The camera address is fixed to 1 over IP: any address is accepted and
+with `0F 02`. A message that was answered with a VISCA error was not performed, so
+its retransmission with the same sequence number is executed again. The camera address is fixed to 1 over IP: any address is accepted and
 replies always come from `90`.
 
 **VISCA is not one standard.** The transport (VISCA over IP, replies, error codes,
 sockets) is common to Sony cameras, the command set differs per model. The simulator
 follows the classic 4-digit Sony BRC/EVI and Axis command set; check the command
 list of the target camera before relying on model-specific commands (e.g. white
-balance codes, speed ranges, 5-digit positions on newer Sony models). Simplification:
-only one command socket, so "command buffer full" never occurs.
+balance codes, speed ranges, 5-digit positions on newer Sony models).
 
 Value ranges: pan −2448…2448 (≈ ±170°), tilt −432…1296 (≈ −30…+90°),
 zoom 0x0000…0x4000 (1×…20×), focus 0x1000…0xF000, pan speed 1…0x18,
-tilt speed 1…0x17, presets 0…63 (shown as 1…64).
+tilt speed 1…0x17, presets 0…99 / hex 00…63 (shown as 1…100).
 
 ## Tests
 
