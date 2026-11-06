@@ -165,6 +165,63 @@ of the hostname. Hostname/FQDN and DNS-derived fallback addresses are a startup
 snapshot; DNS resolution runs outside the event loop so it cannot stall camera
 control. Native interface information remains live.
 
+### Health-Check API
+The simulator provides a health-check endpoint at `/health` (or `/`). Without
+configured ONVIF credentials, it returns detailed JSON information:
+
+```bash
+curl http://127.0.0.1:8080/health
+```
+
+Response example:
+```json
+{
+    "status": "ok",
+    "camera": "PTZ-Simulator",
+    "hostname": "camera-host",
+    "fqdn": "camera-host.example.test",
+    "address": "192.0.2.10",
+    "port": 8080,
+    "interfaces": [
+        {
+            "name": "eth0",
+            "ipv4": ["192.0.2.10"],
+            "ipv6": ["fe80::1"]
+        },
+        {
+            "name": "docker0",
+            "ipv4": ["172.17.0.1"],
+            "ipv6": ["fe80::3"]
+        }
+    ]
+}
+```
+
+Clients can use this endpoint to:
+- Verify connectivity to the simulator
+- Discover available network interfaces
+- Identify the correct IP address to use for the connection
+- Get the hostname and FQDN for display purposes
+
+The `interfaces` list contains up to 10 interfaces with an address, main
+interfaces first.
+
+With `--onvif-user`, ordinary health requests return only `{"status":"ok"}`.
+Request `?details=1` to retrieve network details with HTTP Digest authentication
+in the `both` or `digest` auth mode:
+
+```bash
+curl --digest --user admin 'http://127.0.0.1:8080/health?details=1'
+```
+
+curl prompts for the password. `/?details=1` is an alias. Missing or invalid
+credentials receive a `401` challenge; WSSE-only mode rejects detail requests
+with `403`, without changing SOAP authentication. The `details` parameter must
+appear once with value `1`; invalid values receive `400`.
+
+Network lookups for detailed responses run outside the simulator event loop,
+so health polling cannot delay camera control or movement timeouts.
+
 ## Keyboard control (TUI)
 
 In a terminal, `serve` shows the live dashboard and lets you drive the camera
