@@ -162,6 +162,21 @@ def test_if_clear_drops_waiting_completion():
     assert not sim.camera.sockets
 
 
+def test_newer_move_supersedes_older_socket():
+    sim = Simulator(ViscaCamera(), tick_interval=0.01)
+    out = []
+    sim.process(parse_hex("81 01 06 02 01 01 00 01 00 00 00 00 00 00 FF"), out.append)  # pan 256
+    sim.process(parse_hex("81 01 06 02 01 01 00 02 00 00 00 00 00 00 FF"), out.append)  # pan 512
+    sim.step(0.01)
+    # socket 1 lost its axes to socket 2 and completes; cancelling it finds nothing
+    assert out == [parse_hex("90 41 FF"), parse_hex("90 42 FF"), parse_hex("90 51 FF")]
+    sim.process(parse_hex("81 21 FF"), out.append)
+    assert out[-1] == parse_hex("90 61 05 FF")
+    assert sim.camera.state.pan_target is not None  # socket 2 keeps moving
+    sim.step(100)
+    assert out[-1] == parse_hex("90 52 FF") and sim.camera.state.position()[0] == 512
+
+
 class FakeTransport:
     def __init__(self):
         self.sent = []
@@ -217,3 +232,16 @@ def test_sony_ip_retransmission_after_error_is_executed_again():
     camera.state.power = True  # error cause removed
     protocol.datagram_received(home, ("10.0.0.1", 1))
     assert [d[8:] for d in protocol.transport.sent[-2:]] == [parse_hex("90 41 FF"), parse_hex("90 51 FF")]
+
+
+def test_sony_ip_retransmitted_cancel_is_not_executed_again():
+    protocol = Simulator(ViscaCamera())
+    protocol = SonyViscaIpProtocol(protocol)
+    protocol.connection_made(FakeTransport())
+    peer = ("10.0.0.1", 1)
+    protocol.datagram_received(sony(SONY_VISCA_COMMAND, 1, "81 01 06 02 01 01 00 01 00 00 00 00 00 00 FF"), peer)
+    cancel = sony(SONY_VISCA_COMMAND, 2, "81 21 FF")
+    protocol.datagram_received(cancel, peer)
+    assert protocol.transport.sent[-1][8:] == parse_hex("90 61 04 FF")
+    protocol.datagram_received(cancel, peer)
+    assert protocol.transport.sent[-1] == SONY_HEADER.pack(SONY_CONTROL_REPLY, 2, 2) + b"\x0f\x01"

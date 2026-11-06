@@ -10,7 +10,7 @@ import logging
 import os
 import struct
 import time
-from typing import Callable, FrozenSet, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from .visca import ViscaCamera, hexdump, split_packets
 
@@ -37,8 +37,8 @@ class Simulator:
     def __init__(self, camera: ViscaCamera, tick_interval: float = 0.02):
         self.camera = camera
         self.tick_interval = tick_interval
-        # Completions waiting for motion: (sender, reply, socket, axes).
-        self._pending: List[Tuple[Send, bytes, Optional[int], FrozenSet[str]]] = []
+        # Completions waiting for motion: (sender, reply, socket).
+        self._pending: List[Tuple[Send, bytes, Optional[int]]] = []
         self.clients = 0
 
     def process(self, packet: bytes, send: Send) -> None:
@@ -50,7 +50,7 @@ class Simulator:
             if reply.cancel_socket is not None:
                 self._pending = [p for p in self._pending if p[2] != reply.cancel_socket]
             if reply.after_motion:
-                self._pending.append((send, reply.data, reply.socket, reply.axes))
+                self._pending.append((send, reply.data, reply.socket))
             else:
                 self._send(send, reply.data)
 
@@ -63,11 +63,11 @@ class Simulator:
 
     def _flush(self) -> None:
         """Send every completion whose axes have stopped moving."""
-        state = self.camera.state
-        due = [p for p in self._pending if not state.axes_busy(p[3])]
+        done = self.camera.socket_done
+        due = [p for p in self._pending if done(p[2])]
         if due:
-            self._pending = [p for p in self._pending if state.axes_busy(p[3])]
-            for send, data, _, _ in due:
+            self._pending = [p for p in self._pending if not done(p[2])]
+            for send, data, _ in due:
                 self._send(send, data)
 
     def step(self, dt: float) -> None:
@@ -170,7 +170,8 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
         errors = []
 
         def send(reply: bytes, a=addr, seq=sequence) -> None:
-            if reply[1] & 0xF0 == 0x60:
+            # "Command canceled" (6z 04) reports a cancel that was performed.
+            if reply[1] & 0xF0 == 0x60 and reply[2] != 0x04:
                 errors.append(reply)
             self._reply(a, SONY_VISCA_REPLY, seq, bytes([0x90]) + reply[1:])
 

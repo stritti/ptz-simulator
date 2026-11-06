@@ -254,7 +254,8 @@ pan/tilt status `09 06 10`, version `09 00 02`.
 Like Sony cameras the simulator has two command sockets. A command takes the lowest
 free socket (`90 41 FF`, then `90 42 FF`); a socket stays busy until its absolute
 move, home or preset recall has finished. A command that arrives while both sockets
-are busy is answered with "command buffer full" `90 60 03 FF`; inquiries and
+are busy is answered with "command buffer full" `90 60 03 FF`. A newer move takes
+over the axes of an older one; an older command left without axes completes at once; inquiries and
 `IF_Clear` do not use a socket. `8x 2z FF` cancels socket z (`90 6z 04 FF`, no
 completion follows) or answers "no socket" `90 6z 05 FF`. `IF_Clear` answers
 `90 50 FF` (broadcast: `88 01 00 01 FF`) without ACK, stops all motion and empties

@@ -148,6 +148,11 @@ class ViscaCamera:
             socket = 0
         return bytes([self._reply_header, 0x60 | socket, code, TERMINATOR])
 
+    def socket_done(self, socket: Optional[int]) -> bool:
+        """True once the command in ``socket`` no longer waits for motion."""
+        axes = self.sockets.get(socket)
+        return axes is None or not self.state.axes_busy(axes)
+
     def _free_socket(self) -> Optional[int]:
         """Lowest free command socket; sockets whose motion has finished are freed first."""
         for socket, axes in list(self.sockets.items()):
@@ -525,6 +530,14 @@ class ViscaCamera:
             self.state.finish_moves()
         wait = after_motion and not self.instant and self.state.axes_busy(axes)
         if wait:
+            # A newer move takes over the axes of an older one; an older command
+            # left without axes has been superseded and completes now.
+            for other, owned in list(self.sockets.items()):
+                if owned & axes:
+                    if owned - axes:
+                        self.sockets[other] = owned - axes
+                    else:
+                        del self.sockets[other]
             self.sockets[socket] = axes
         return [Reply(self._ack(socket)),
                 Reply(self._completion(socket), after_motion=wait, socket=socket, axes=axes)]
