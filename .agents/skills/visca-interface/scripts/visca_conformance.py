@@ -16,7 +16,9 @@ Usage:
     python3 visca_conformance.py --host 192.168.1.50 --transport sony   # UDP 52381
     python3 visca_conformance.py --host 127.0.0.1 --transport udp --port 1259
 
-Exits 0 when every check passes, 1 otherwise. Standard library only, Python 3.8+.
+The preset checks store and recall one preset (default 90, `--preset N` to choose);
+no preset is ever deleted. Exits 0 when every check passes, 1 otherwise.
+Standard library only, Python 3.8+.
 """
 
 from __future__ import annotations
@@ -113,6 +115,9 @@ class Endpoint:
                 if len(data) < SONY_HEADER.size:
                     continue
                 ptype, length, rseq = SONY_HEADER.unpack_from(data)
+                if len(data) != SONY_HEADER.size + length:
+                    control_errors.append("length %d != %d" % (length, len(data) - SONY_HEADER.size))
+                    continue
                 if rseq != seq:
                     control_errors.append("sequence %d != %d" % (rseq, seq))
                     continue
@@ -144,8 +149,15 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=2.0, help="reply timeout in seconds")
     parser.add_argument("--move-timeout", type=float, default=20.0,
                         help="timeout for completions that wait for motion (preset recall)")
+    parser.add_argument("--preset", type=int, default=90, metavar="N",
+                        help="preset number 0..99 to store/recall (default 90; the script "
+                             "overwrites that preset but never deletes presets)")
     args = parser.parse_args()
+    if not 0 <= args.preset <= 99:
+        parser.error("--preset must be 0..99")
     port = args.port or DEFAULT_PORTS[args.transport]
+    print("note: store/recall uses preset %d (pass --preset to choose another unused one)"
+          % args.preset)
 
     ep = Endpoint(args.host, port, args.transport, args.timeout)
     results = []
@@ -191,9 +203,11 @@ def main() -> int:
     check("zoom inquiry (4 payload bytes)", "81 09 04 47 FF", expect_inquiry(7))
     check("pan/tilt drive stop (ACK + completion)", "81 01 06 01 01 01 03 03 FF",
           expect_ack_completion(), replies=2)
-    check("preset set 5 (ACK + completion)", "81 01 04 3F 01 05 FF",
-          expect_ack_completion(), replies=2)
-    check("preset recall 5 (ACK + completion after motion)", "81 01 04 3F 02 05 FF",
+    preset_hex = "%02X" % args.preset
+    check("preset set %d (ACK + completion)" % args.preset,
+          "81 01 04 3F 01 %s FF" % preset_hex, expect_ack_completion(), replies=2)
+    check("preset recall %d (ACK + completion after motion)" % args.preset,
+          "81 01 04 3F 02 %s FF" % preset_hex,
           expect_ack_completion(), replies=2, timeout=args.move_timeout)
     check("cancel free socket 1 -> no socket", "81 21 FF", expect_single("90 61 05 FF"))
     check("malformed command -> syntax error", "81 01 06 01 FF", expect_single("90 60 02 FF"))

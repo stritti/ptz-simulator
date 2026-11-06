@@ -10,7 +10,8 @@ faults a conformant PTZ service must produce:
 - GetDeviceInformation, GetCapabilities (XAddrs for Device/Media/PTZ), GetServices
   (PTZ namespace), GetProfiles (profile with PTZ configuration), PTZ GetStatus
   (Position PanTilt/Zoom), ContinuousMove + Stop, presets
-  (SetPreset/GetPresets/GotoPreset/RemovePreset),
+  (SetPreset/GetPresets/GotoPreset/RemovePreset on a free slot — existing
+  presets on the camera are preserved and only the new preset is removed),
 - an out-of-range AbsoluteMove that must fault env:Sender/ter:InvalidArgVal,
 - optionally (--discovery) a WS-Discovery Probe to 239.255.255.250:3702 expecting
   a ProbeMatches that identifies the target (sender address or XAddrs must match
@@ -53,7 +54,7 @@ PT_POSITION_SPACE = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGener
 PT_VELOCITY_SPACE = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"
 ZOOM_POSITION_SPACE = "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"
 
-PRESET_TOKEN = "5"
+PRESET_COUNT = 100  # preset tokens are decimal 0..99 in the reference
 
 
 def localname(tag: str) -> str:
@@ -91,15 +92,18 @@ def security_header(user: str, password: str) -> str:
 class OnvifClient:
     def __init__(self, host: str, port: int, base: str, user: str, password: str, timeout: float):
         self.host, self.port, self.base = host, port, base
-        self.security = security_header(user, password) if user else ""
+        self.user, self.password = user, password
         self.timeout = timeout
 
     def post(self, path: str, body: str):
+        # fresh UsernameToken (nonce/created/digest) for every request: cameras may
+        # reject replayed nonces
+        security = security_header(self.user, self.password) if self.user else ""
         conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
         try:
             conn.request(
                 "POST", path,
-                body=envelope(body, self.security).encode(),
+                body=envelope(body, security).encode(),
                 headers={"Content-Type": "application/soap+xml; charset=utf-8"},
             )
             resp = conn.getresponse()
@@ -267,32 +271,45 @@ def main() -> int:
     check("Stop accepted", status == 200 and root is not None
           and response_name(root) == "StopResponse", "HTTP %s" % status)
 
-    status, text, root = client.call(
-        "ptz_service",
-        "<tptz:SetPreset><tptz:ProfileToken>%s</tptz:ProfileToken><tptz:PresetName>conformance</tptz:PresetName>"
-        "<tptz:PresetToken>%s</tptz:PresetToken></tptz:SetPreset>" % (profile, PRESET_TOKEN))
-    check("SetPreset accepted", status == 200 and root is not None
-          and response_name(root) == "SetPresetResponse", "HTTP %s" % status)
-
+    # pick a free preset slot so existing presets on the camera are preserved;
+    # only the newly created preset is removed again
     status, text, root = client.call(
         "ptz_service", "<tptz:GetPresets><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetPresets>" % profile)
-    preset_tokens = [el.get("token") or "" for el in find_all(root, "Preset")] if root is not None else []
-    check("GetPresets lists the new preset", status == 200 and PRESET_TOKEN in preset_tokens,
-          "HTTP %s, tokens %s" % (status, preset_tokens))
+    used = {el.get("token") or "" for el in find_all(root, "Preset")} if root is not None else set()
+    preset_token = next((str(n) for n in range(PRESET_COUNT) if str(n) not in used), None)
+    check("picked a free preset slot (existing presets kept)", preset_token is not None,
+          "preset %s, existing %s" % (preset_token, sorted(used)))
 
-    status, text, root = client.call(
-        "ptz_service",
-        "<tptz:GotoPreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
-        "<tptz:PresetToken>%s</tptz:PresetToken></tptz:GotoPreset>" % (profile, PRESET_TOKEN))
-    check("GotoPreset accepted", status == 200 and root is not None
-          and response_name(root) == "GotoPresetResponse", "HTTP %s" % status)
+    if preset_token is not None:
+        status, text, root = client.call(
+            "ptz_service",
+            "<tptz:SetPreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
+            "<tptz:PresetName>conformance</tptz:PresetName>"
+            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:SetPreset>" % (profile, preset_token))
+        check("SetPreset %s accepted" % preset_token, status == 200 and root is not None
+              and response_name(root) == "SetPresetResponse", "HTTP %s" % status)
 
-    status, text, root = client.call(
-        "ptz_service",
-        "<tptz:RemovePreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
-        "<tptz:PresetToken>%s</tptz:PresetToken></tptz:RemovePreset>" % (profile, PRESET_TOKEN))
-    check("RemovePreset accepted", status == 200 and root is not None
-          and response_name(root) == "RemovePresetResponse", "HTTP %s" % status)
+        status, text, root = client.call(
+            "ptz_service", "<tptz:GetPresets><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetPresets>" % profile)
+        preset_tokens = [el.get("token") or "" for el in find_all(root, "Preset")] if root is not None else []
+        check("GetPresets lists the new preset %s" % preset_token,
+              status == 200 and preset_token in preset_tokens,
+              "HTTP %s, tokens %s" % (status, preset_tokens))
+
+        status, text, root = client.call(
+            "ptz_service",
+            "<tptz:GotoPreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
+            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:GotoPreset>" % (profile, preset_token))
+        check("GotoPreset %s accepted" % preset_token, status == 200 and root is not None
+              and response_name(root) == "GotoPresetResponse", "HTTP %s" % status)
+
+        status, text, root = client.call(
+            "ptz_service",
+            "<tptz:RemovePreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
+            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:RemovePreset>" % (profile, preset_token))
+        check("RemovePreset %s accepted (only the new preset)" % preset_token,
+              status == 200 and root is not None
+              and response_name(root) == "RemovePresetResponse", "HTTP %s" % status)
 
     bad_move = (
         "<tptz:AbsoluteMove><tptz:ProfileToken>%s</tptz:ProfileToken><tptz:Position>"
