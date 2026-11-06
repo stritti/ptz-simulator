@@ -89,6 +89,15 @@ for (const { name, input, base } of [
     assert.ok(scene.includes(`src="${base}images/scene/ufo-tui.svg"`))
     assert.ok(existsSync(join(output, 'images', 'scene', 'ufo-tui.svg')), 'scene images must be built')
 
+    const skillsPath = join(output, 'skills.html')
+    assert.ok(existsSync(skillsPath), 'the agent skills page must be generated')
+    const skills = readFileSync(skillsPath, 'utf8')
+    assert.ok(skills.includes('Agent skills'), 'the skills page must contain its heading')
+    assert.ok(
+      guide.includes(`href="${base}skills.html"`),
+      'the README link to docs/skills.md must point to the site page'
+    )
+
     const assets = [...home.matchAll(/(?:href|src)="([^"]*\/assets\/[^"]+)"/g)].map(
       (match) => match[1]
     )

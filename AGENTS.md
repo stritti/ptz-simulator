@@ -170,3 +170,5 @@ inside `.agents/skills/`, refer to this repo by absolute GitHub URLs) with valid
 frontmatter: `name` matches the directory (lowercase-hyphen, ≤64 chars), `description`
 ≤1024 chars, SKILL.md ≤500 lines with details in `references/` — `tests/test_skills.py`
 enforces this. Bundled `scripts/*.py` must stay Python 3.8+ standard-library only.
+The documentation site has a page for them, `docs/skills.md` (register new pages in
+`docs/.vitepress/config.mjs`; `docs/tests/site.test.mjs` builds the site and must pass).

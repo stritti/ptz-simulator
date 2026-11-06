@@ -40,6 +40,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide' },
       { text: 'Camera scene', link: '/scene' },
       { text: 'Protocol reference', link: '/ptz_control_protocols_reference_guide' },
+      { text: 'Agent skills', link: '/skills' },
       { text: 'Get started', link: '/guide#running' }
     ],
     sidebar: [
@@ -69,6 +70,15 @@ export default defineConfig({
         items: [
           { text: 'Tests', link: '/guide#tests' },
           { text: 'References', link: '/guide#references' }
+        ]
+      },
+      {
+        text: 'Agent skills',
+        items: [
+          { text: 'Overview', link: '/skills' },
+          { text: 'Install into your project', link: '/skills#install-into-your-project' },
+          { text: 'Skill directories per agent', link: '/skills#skill-directories-per-agent' },
+          { text: 'Conformance scripts', link: '/skills#using-the-bundled-conformance-scripts' }
         ]
       }
     ],

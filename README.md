@@ -555,7 +555,7 @@ the `ptzsim.protocols` entry point. The step-by-step guide with a tested example
 `.agents/skills/` ships [Agent Skills](https://agentskills.io) (a `SKILL.md` plus
 `references/` and `scripts/` per skill) that other projects can install to implement a
 reference-conformant camera interface — wire-exact VISCA or ONVIF — and to validate it
-against this simulator:
+against this simulator (details on the [agent skills](docs/skills.md) page):
 
 | Skill | Purpose |
 |---|---|
