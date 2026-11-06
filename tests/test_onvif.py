@@ -458,3 +458,40 @@ def test_with_real_onvif_client():
     assert (final.Position.PanTilt.x, final.Position.PanTilt.y, final.Position.Zoom.x) == \
         pytest.approx((-0.5, 0.1, 0.2))
     assert final.MoveStatus.PanTilt == "IDLE"
+
+
+@pytest.mark.skipif(not os.environ.get("PTZSIM_ONVIF_CLIENT"),
+                    reason="set PTZSIM_ONVIF_CLIENT=1 with onvif-zeep-async installed")
+def test_real_onvif_client_profile_s_basics():
+    """Device and media calls a Profile S client makes when it adds a camera."""
+    from onvif import ONVIFCamera
+
+    async def run():
+        port = free_port()
+        await serve_onvif(OnvifCamera(ViscaCamera(), username="admin", password="secret"), "127.0.0.1", port)
+        client = ONVIFCamera("127.0.0.1", port, "admin", "secret")
+        try:
+            await client.update_xaddrs()
+            device = await client.create_devicemgmt_service()
+            media = await client.create_media_service()
+            scopes = await device.GetScopes()
+            interfaces = await device.GetNetworkInterfaces()
+            hostname = await device.GetHostname()
+            profile = (await media.GetProfiles())[0]
+            options = await media.GetVideoEncoderConfigurationOptions({"ProfileToken": profile.token})
+            config = profile.VideoEncoderConfiguration
+            config.Resolution.Width, config.Resolution.Height = 320, 180
+            await media.SetVideoEncoderConfiguration({"Configuration": config, "ForcePersistence": True})
+            changed = (await media.GetVideoEncoderConfigurations())[0]
+            return scopes, interfaces, hostname, profile, options, changed
+        finally:
+            await client.close()
+
+    scopes, interfaces, hostname, profile, options, changed = asyncio.run(run())
+    assert any(s.ScopeItem.endswith("Profile/Streaming") for s in scopes)
+    assert interfaces[0].IPv4.Config.Manual[0].Address == "127.0.0.1"
+    assert hostname.Name.startswith("ptzsim-")
+    assert profile.VideoSourceConfiguration.SourceToken == "VideoSource_1"
+    assert profile.VideoEncoderConfiguration.Encoding == "H264" and profile.PTZConfiguration is not None
+    assert options.H264.ResolutionsAvailable[0].Width == 640
+    assert (changed.Resolution.Width, changed.Resolution.Height) == (320, 180)

@@ -38,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="emulate a serial port via a pseudo terminal; optional symlink path")
     serve.add_argument("--onvif", type=int, metavar="PORT", nargs="?", const=DEFAULT_PORTS["onvif"],
                        help="ONVIF (SOAP over HTTP) with WS-Discovery (default port 8080)")
-    serve.add_argument("--onvif-user", metavar="USER", help="require WS-Security UsernameToken with this user")
+    serve.add_argument("--onvif-user", metavar="USER", help="require authentication (see --onvif-auth) with this user")
     serve.add_argument("--onvif-password", metavar="PASSWORD", default="", help="password for --onvif-user")
     serve.add_argument("--ndi", action="store_true",
                        help="publish an NDI source with PTZ control (needs: pip install ndi-python numpy)")
