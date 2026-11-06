@@ -41,7 +41,7 @@ class ViscaTcp(PortPlugin):
     async def start(self, ctx: ServeContext) -> List[Endpoint]:
         port = self.port(ctx.args)
         self.servers.append(await serve_tcp(ctx.simulator, ctx.host, port))
-        return [Endpoint("VISCA", f"tcp://{ctx.host}:{port}", port)]
+        return [Endpoint("VISCA", f"tcp://{ctx.host}:{port}", port, service="VISCA/TCP")]
 
 
 @register
@@ -54,7 +54,7 @@ class ViscaUdp(PortPlugin):
     async def start(self, ctx: ServeContext) -> List[Endpoint]:
         port = self.port(ctx.args)
         self.servers.append(await serve_udp(ctx.simulator, ctx.host, port, sony=False))
-        return [Endpoint("VISCA", f"udp://{ctx.host}:{port}", port)]
+        return [Endpoint("VISCA", f"udp://{ctx.host}:{port}", port, service="VISCA/UDP")]
 
 
 @register
@@ -114,7 +114,7 @@ class Onvif(PortPlugin):
         if not args.no_discovery:
             self.discovery = await serve_discovery(onvif, port, advertise_host=args.advertise_host)
             self.servers.append(self.discovery)
-            endpoints.append(Endpoint("WS-Discovery", "udp/3702", 3702))
+            endpoints.append(Endpoint("WS-Discovery", "udp/3702"))
         return endpoints
 
     def stop(self) -> None:

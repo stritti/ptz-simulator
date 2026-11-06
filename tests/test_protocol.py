@@ -133,14 +133,15 @@ def test_builtin_endpoints_and_shutdown():
     async def run():
         tcp, onvif = free_port(), free_port()
         async with serve("--tcp", str(tcp), "--onvif", str(onvif), "--no-discovery") as ctx:
-            titles = [str(e) for e in ctx.endpoints]
+            titles, ports = [str(e) for e in ctx.endpoints], ctx.ports()
             replies = await ctx.loop.run_in_executor(
                 None, send_packets, [parse_hex("81 09 06 12 FF")], "127.0.0.1", tcp, "tcp", 1.0)
-        return tcp, onvif, titles, replies
+        return tcp, onvif, titles, ports, replies
 
-    tcp, onvif, titles, replies = asyncio.run(run())
+    tcp, onvif, titles, ports, replies = asyncio.run(run())
     assert titles == [f"VISCA tcp://127.0.0.1:{tcp}",
                       f"ONVIF http://127.0.0.1:{onvif}/onvif/device_service"]
+    assert ports == {"VISCA/TCP": tcp, "ONVIF": onvif}
     assert replies == [parse_hex("90 50 00 00 00 00 00 00 00 00 FF")]
     with pytest.raises(OSError):  # servers are closed when the plugins stop
         socket.create_connection(("127.0.0.1", tcp), timeout=1).close()

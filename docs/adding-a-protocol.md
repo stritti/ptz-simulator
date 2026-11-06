@@ -38,7 +38,7 @@ your protocol shows up in the dashboard, in VISCA inquiries and in ONVIF
 | `ProtocolPlugin` | base class of a protocol | `name`, `title`, `add_arguments`, `enabled`, `start`, `stop` |
 | `PortPlugin` | `ProtocolPlugin` switched on by `--<name> [PORT]` | `default_port`, `help`, `port(args)`, `add_options` |
 | `ServeContext` (`ctx`) | handed to `start()` | `ctx.state`, `ctx.camera`, `ctx.host`, `ctx.name`, `ctx.args`, `ctx.simulator` |
-| `Endpoint` | an address shown in the dashboard title | `Endpoint(label, address, port)` |
+| `Endpoint` | an address shown in the dashboard title (and its port in the network view) | `Endpoint(label, address, port, service="")` |
 | `register` | class decorator | makes the plugin known to `ptzsim serve` |
 | `CameraState` | the camera model, in VISCA units | `move_pan_tilt_to`, `drive_pan_tilt`, `zoom_to`, `drive_zoom`, `stop_all`, `save_preset`, `recall_preset`, `pan_degrees`, … |
 | `ViscaCamera` | owns the state and the command log | `camera.record(label, text, ok)`, `camera.instant` |

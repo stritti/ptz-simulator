@@ -16,6 +16,7 @@ from . import protocol
 from .display import dashboard, log_printer
 from .transports import SONY_HEADER, SONY_VISCA_COMMAND, SONY_VISCA_INQUIRY, Simulator
 from .visca import ViscaCamera, hexdump, parse_hex
+from .network import get_resolved_addresses, format_network_info_for_startup, format_network_summary
 
 DEFAULT_PORTS = {"sony": 52381, "tcp": 5678, "udp": 1259, "onvif": 8080}
 
@@ -53,11 +54,29 @@ async def _serve(args: argparse.Namespace) -> None:
     try:
         await ctx.start_plugins()
         title = " | ".join(str(e) for e in ctx.endpoints)
+        ports = ctx.ports()
         logging.getLogger("ptzsim").info("listening: %s", title)
+        loop = asyncio.get_running_loop()
+
+        # Show network information
+        if args.host == "0.0.0.0":
+            resolved = await loop.run_in_executor(None, get_resolved_addresses, args.host)
+            if resolved:
+                addr_str = ", ".join(resolved[:3])
+                if len(resolved) > 3:
+                    addr_str += f", +{len(resolved) - 3} more"
+                logging.getLogger("ptzsim").info("Available on: %s", addr_str)
+
+        # Show full network info on startup
+        network_info = await loop.run_in_executor(None, format_network_info_for_startup)
+        for line in network_info.split("\n"):
+            if line:
+                logging.getLogger("ptzsim").info(line)
+
         if args.no_tui:
-            view = log_printer(camera)
+            view = log_printer(camera, bind_address=args.host, ports=ports)
         elif args.view_only or not _interactive_terminal():
-            view = dashboard(camera, title)
+            view = dashboard(camera, title, bind_address=args.host, ports=ports)
         else:
             from .tui import interactive
 

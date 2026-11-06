@@ -43,7 +43,8 @@ class Endpoint:
 
     label: str  # protocol name for humans, e.g. "Sony VISCA/IP"
     address: str = ""  # e.g. "udp://0.0.0.0:52381" or a device path
-    port: Optional[int] = None  # network port, if any
+    port: Optional[int] = None  # network port, if any; listed in the dashboard's network view
+    service: str = ""  # name for the network view's port list; defaults to ``label``
 
     def __str__(self) -> str:
         return f"{self.label} {self.address}" if self.address else self.label
@@ -75,6 +76,10 @@ class ServeContext:
             # Registered before start() so a plugin that fails halfway is stopped too.
             self.plugins.append(plugin)
             self.endpoints += await plugin.start(self)
+
+    def ports(self) -> Dict[str, int]:
+        """Network ports of the started endpoints, by service name (for the dashboard)."""
+        return {e.service or e.label: e.port for e in self.endpoints if e.port is not None}
 
     def stop_plugins(self) -> None:
         """Stop the started plugins, last started first."""

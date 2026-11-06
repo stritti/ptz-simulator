@@ -7,13 +7,18 @@ import asyncio
 import base64
 import hashlib
 import http.client
+import json
 import os
 import socket
+import time
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
 
 import pytest
 
 from ptzsim import state as st
+from ptzsim.network import InterfaceInfo
 from ptzsim.onvif import (OnvifCamera, find, parse_duration, pan_from_onvif, pan_to_onvif,
                           serve_discovery, serve_onvif, text_of, tilt_from_onvif, tilt_to_onvif)
 from ptzsim.transports import Simulator
@@ -210,6 +215,36 @@ def free_port(kind=socket.SOCK_STREAM):
         return s.getsockname()[1]
 
 
+def get_health(port, path="/health", user=None, password=None):
+    url = f"http://127.0.0.1:{port}{path}"
+    handlers = [urllib.request.ProxyHandler({})]
+    if user is not None:
+        manager = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+        manager.add_password(None, f"http://127.0.0.1:{port}/", user, password)
+        handlers.append(urllib.request.HTTPDigestAuthHandler(manager))
+    request = urllib.request.Request(url, headers={"Connection": "close"})
+    try:
+        response = urllib.request.build_opener(*handlers).open(request, timeout=3)
+    except urllib.error.HTTPError as err:
+        # Python 3.8 can return a body-less digest-auth failure.
+        if err.fp is None:
+            return err.code, err.headers, b""
+        response = err
+    with response:
+        return response.status, response.headers, response.read()
+
+
+@pytest.fixture
+def health_network(monkeypatch):
+    eth0 = InterfaceInfo("eth0")
+    eth0.add_ipv4("192.0.2.10", "255.255.255.0")
+    interfaces = {"eth0": eth0}
+    monkeypatch.setattr("ptzsim.onvif.get_hostname_and_fqdn",
+                        lambda: ("camera", "camera.example.test"))
+    monkeypatch.setattr("ptzsim.onvif.get_all_interfaces_detailed", lambda: interfaces)
+    return interfaces
+
+
 def test_http_server_keep_alive():
     async def run():
         onvif = OnvifCamera(ViscaCamera(instant=True))
@@ -232,6 +267,124 @@ def test_http_server_keep_alive():
     results = asyncio.run(run())
     assert [s for s, _ in results] == [200, 200]
     assert b"ptz_service" in results[0][1] and b"Profile_1" in results[1][1]
+
+
+@pytest.mark.parametrize("path", ["/health", "/"])
+def test_health_lists_main_interface_first(monkeypatch, path):
+    interfaces = {}
+    for i in range(12):
+        bridge = InterfaceInfo(f"br-{i:02d}")
+        bridge.add_ipv4(f"172.{18 + i}.0.1", "255.255.0.0")
+        interfaces[bridge.name] = bridge
+    eth0 = InterfaceInfo("eth0")
+    eth0.add_ipv4("172.28.67.216", "255.255.240.0")
+    interfaces["eth0"] = eth0
+    monkeypatch.setattr("ptzsim.onvif.get_all_interfaces_detailed", lambda: interfaces)
+
+    async def run():
+        server = await serve_onvif(OnvifCamera(ViscaCamera(instant=True)), "127.0.0.1", 0)
+        async with server:
+            port = server.sockets[0].getsockname()[1]
+            return await asyncio.get_running_loop().run_in_executor(None, get_health, port, path)
+
+    status, _, payload = asyncio.run(run())
+    health = json.loads(payload)
+    assert status == 200 and health["status"] == "ok"
+    assert health["interfaces"][0] == {"name": "eth0", "ipv4": ["172.28.67.216"], "ipv6": []}
+
+
+@pytest.mark.parametrize("path", ["/health", "/"])
+@pytest.mark.parametrize("auth", ["both", "digest", "wsse"])
+def test_health_with_credentials_exposes_only_availability(health_network, auth, path):
+    async def run():
+        onvif = OnvifCamera(ViscaCamera(), name="private-camera",
+                            username="admin", password="secret", auth=auth)
+        server = await serve_onvif(onvif, "127.0.0.1", 0)
+        async with server:
+            port = server.sockets[0].getsockname()[1]
+            return await asyncio.get_running_loop().run_in_executor(None, get_health, port, path)
+
+    status, _, payload = asyncio.run(run())
+    assert status == 200
+    assert json.loads(payload) == {"status": "ok"}
+
+
+@pytest.mark.parametrize("path", ["/health", "/"])
+@pytest.mark.parametrize("auth", ["both", "digest", "wsse"])
+def test_health_details_require_supported_digest_authentication(health_network, auth, path):
+    async def run():
+        onvif = OnvifCamera(ViscaCamera(), username="admin", password="secret", auth=auth)
+        server = await serve_onvif(onvif, "127.0.0.1", 0)
+        async with server:
+            port = server.sockets[0].getsockname()[1]
+
+            def requests():
+                return [get_health(port, path + "?details=1", user, password)
+                        for user, password in ((None, None), ("admin", "wrong"),
+                                               ("admin", "secret"))]
+
+            return await asyncio.get_running_loop().run_in_executor(None, requests)
+
+    responses = asyncio.run(run())
+    if auth == "wsse":
+        assert [status for status, _, _ in responses] == [403, 403, 403]
+        assert all("error" in json.loads(payload) for _, _, payload in responses)
+    else:
+        assert [status for status, _, _ in responses] == [401, 401, 200]
+        assert all(headers["WWW-Authenticate"].startswith("Digest ")
+                   for _, headers, _ in responses[:2])
+        health = json.loads(responses[2][2])
+        assert health["hostname"] == "camera"
+        assert health["fqdn"] == "camera.example.test"
+        assert health["interfaces"] == [{"name": "eth0", "ipv4": ["192.0.2.10"], "ipv6": []}]
+    assert all(b"camera.example.test" not in payload and b"192.0.2.10" not in payload
+               for status, _, payload in responses if status != 200)
+
+
+@pytest.mark.parametrize("query", ["details=", "details=invalid", "details=1&details=1"])
+def test_health_rejects_invalid_details_query(health_network, query):
+    async def run():
+        server = await serve_onvif(OnvifCamera(ViscaCamera()), "127.0.0.1", 0)
+        async with server:
+            port = server.sockets[0].getsockname()[1]
+            return await asyncio.get_running_loop().run_in_executor(
+                None, get_health, port, "/health?" + query,
+            )
+
+    status, _, payload = asyncio.run(run())
+    assert status == 400
+    assert "error" in json.loads(payload)
+
+
+@pytest.mark.parametrize("lookup", ["hostname", "interfaces"])
+def test_health_lookup_does_not_delay_continuous_move_timeout(monkeypatch, health_network, lookup):
+    onvif = OnvifCamera(ViscaCamera())
+    stopped_during_lookup = []
+
+    def slow_lookup():
+        time.sleep(0.25)
+        stopped_during_lookup.append(onvif.state.pan_velocity == 0)
+        time.sleep(0.15)
+        return ("camera", "camera.example.test") if lookup == "hostname" else health_network
+
+    target = "get_hostname_and_fqdn" if lookup == "hostname" else "get_all_interfaces_detailed"
+    monkeypatch.setattr(f"ptzsim.onvif.{target}", slow_lookup)
+
+    async def run():
+        server = await serve_onvif(onvif, "127.0.0.1", 0)
+        async with server:
+            port = server.sockets[0].getsockname()[1]
+            status, _ = call(
+                onvif, '<tptz:ContinuousMove><tptz:ProfileToken>Profile_1</tptz:ProfileToken>'
+                '<tptz:Velocity><tt:PanTilt x="0.5" y="0"/></tptz:Velocity>'
+                '<tptz:Timeout>PT0.1S</tptz:Timeout></tptz:ContinuousMove>',
+            )
+            assert status == 200 and onvif.state.pan_velocity > 0
+            return await asyncio.get_running_loop().run_in_executor(None, get_health, port)
+
+    status, _, payload = asyncio.run(run())
+    assert status == 200 and json.loads(payload)["status"] == "ok"
+    assert stopped_during_lookup == [True]
 
 
 PROBE = ('<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope" '
