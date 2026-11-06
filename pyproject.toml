@@ -1,5 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=62"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +10,9 @@ name = "ptzsim"
 version = "0.1.0"
 description = "CLI simulator for ONVIF, VISCA and NDI PTZ cameras, for testing the hai-end streaming-server"
 readme = "README.md"
+# SPDX expressions in project.license require setuptools 77, which drops Python 3.8.
+# Keep license metadata in setup.cfg for compatibility with the supported Python versions.
+dynamic = ["license"]
 requires-python = ">=3.8"
 dependencies = []
 

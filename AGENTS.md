@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+SPDX-License-Identifier: MIT
+-->
+
 # ptzsim — Agent Instructions
 
 Command-line PTZ camera simulator (ONVIF, VISCA, NDI) used to test the PTZ control of

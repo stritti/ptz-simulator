@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """NDI PTZ commands (metadata XML) and, if ndi-python is installed, a real NDI round trip."""
 
 import asyncio

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """Command line entry point: ``ptzsim serve`` and ``ptzsim send``."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """ONVIF PTZ camera: SOAP services (Device, Media, PTZ) and a WS-Discovery responder.
 
 All ONVIF positions use the generic spaces: pan/tilt in [-1, 1], zoom in [0, 1].

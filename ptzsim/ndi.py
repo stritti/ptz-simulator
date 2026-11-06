@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """NDI PTZ camera: an NDI source with PTZ support and a rendered test picture.
 
 NDI receivers send PTZ commands as XML metadata (``<ntk_ptz_pan_tilt .../>`` and

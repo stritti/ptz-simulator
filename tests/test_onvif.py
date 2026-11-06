@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """ONVIF SOAP services and WS-Discovery."""
 
 import asyncio

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 from ptzsim import state as st
 from ptzsim.tui import JOG_TIMEOUT, SPEED_LEVELS, TuiController
 from ptzsim.visca import ViscaCamera

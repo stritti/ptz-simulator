@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """Terminal dashboard showing the simulated camera."""
 
 from __future__ import annotations

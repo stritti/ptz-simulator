@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
 """Text-mode camera picture: what the simulated camera sees at its current pan/tilt/zoom.
 
 Same virtual scene as the NDI test picture (``ndi.SceneRenderer``): a horizon at 0°
