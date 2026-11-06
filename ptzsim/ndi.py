@@ -24,6 +24,7 @@ import threading
 import xml.etree.ElementTree as ET
 from typing import Callable, Optional
 
+from . import scenery
 from . import state as st
 from .onvif import tilt_from_onvif
 from .visca import ViscaCamera
@@ -169,8 +170,77 @@ class NdiPtzController:
 
 
 # ---------------------------------------------------------------- picture
+# 3x5 pixel font for text on landmarks (signs, banner); other characters become a dot.
+FONT = {ch: rows.split() for ch, rows in {
+    "A": "010 101 111 101 101", "B": "110 101 110 101 110", "C": "011 100 100 100 011",
+    "D": "110 101 101 101 110", "E": "111 100 110 100 111", "F": "111 100 110 100 100",
+    "G": "011 100 101 101 011", "H": "101 101 111 101 101", "I": "111 010 010 010 111",
+    "J": "001 001 001 101 010", "K": "101 101 110 101 101", "L": "100 100 100 100 111",
+    "M": "101 111 111 101 101", "N": "110 101 101 101 101", "O": "010 101 101 101 010",
+    "P": "110 101 110 100 100", "Q": "010 101 101 110 011", "R": "110 101 110 101 101",
+    "S": "011 100 010 001 110", "T": "111 010 010 010 010", "U": "101 101 101 101 111",
+    "V": "101 101 101 101 010", "W": "101 101 111 111 101", "X": "101 101 010 101 101",
+    "Y": "101 101 010 010 010", "Z": "111 001 010 100 111",
+    "0": "111 101 101 101 111", "1": "010 110 010 010 111", "2": "110 001 010 100 111",
+    "3": "110 001 010 001 110", "4": "101 101 111 001 001", "5": "111 100 110 001 110",
+    "6": "011 100 111 101 111", "7": "111 001 010 010 010", "8": "111 101 111 101 111",
+    "9": "111 101 111 001 110", "!": "010 010 010 000 010", ",": "000 000 000 010 100",
+    ".": "000 000 000 000 010", ":": "000 010 000 010 000", "<": "001 010 100 010 001",
+    ">": "100 010 001 010 100", "/": "001 001 010 100 100", "\\": "100 100 010 001 001",
+    "(": "010 100 100 100 010", ")": "010 001 001 001 010", "|": "010 010 010 010 010",
+    "'": "010 010 000 000 000", "`": "100 010 000 000 000", "?": "110 001 010 000 010",
+}.items()}
+SUB_X, SUB_Y = 4, 8  # sub-pixels per art character (square: art cells are 1:2)
+
+
+def _landmark_bitmap(lm: scenery.Landmark):
+    """Colours (BGR) and coverage mask of a landmark at SUB_X x SUB_Y per character."""
+    import numpy as np
+
+    rgb = np.zeros((lm.rows * SUB_Y, lm.cols * SUB_X, 3), dtype=np.uint8)
+    mask = np.zeros(rgb.shape[:2], dtype=bool)
+    for row in range(lm.rows):
+        for col in range(lm.cols):
+            ch = lm.char(row, col)
+            if ch is None:
+                continue
+            block = np.zeros((SUB_Y, SUB_X), dtype=bool)
+            if ch in scenery.SOLID:
+                block[:] = True
+            elif ch in scenery.H_LINES:
+                block[{"_": slice(6, 8), "=": slice(2, 6)}.get(ch, slice(3, 5))] = True
+            elif ch in scenery.V_LINES:
+                block[:, 1:3] = True
+            elif ch in scenery.CORNERS:
+                arms = scenery.CORNERS[ch]
+                block[3:5, 1:3] = True
+                if "r" in arms:
+                    block[3:5, 2:] = True
+                if "l" in arms:
+                    block[3:5, :2] = True
+                if "d" in arms:
+                    block[4:, 1:3] = True
+                if "u" in arms:
+                    block[:4, 1:3] = True
+            else:  # text: a glyph on the sign's board
+                if lm.fill is not None:
+                    sub = rgb[row * SUB_Y:(row + 1) * SUB_Y, col * SUB_X:(col + 1) * SUB_X]
+                    sub[:] = lm.fill.bgr
+                    mask[row * SUB_Y:(row + 1) * SUB_Y, col * SUB_X:(col + 1) * SUB_X] = True
+                glyph = FONT.get(ch.upper())
+                if glyph is None:
+                    block[3:6, 1:3] = True
+                else:
+                    block[1:6, 0:3] = np.array([[bit == "1" for bit in line] for line in glyph])
+            ys, xs = np.nonzero(block)
+            rgb[row * SUB_Y + ys, col * SUB_X + xs] = lm.paint(ch).bgr
+            mask[row * SUB_Y + ys, col * SUB_X + xs] = True
+    return rgb, mask
+
+
 class SceneRenderer:
-    """Draws what the camera "sees": a panorama grid that follows pan/tilt/zoom."""
+    """Draws what the camera "sees": a panorama grid that follows pan/tilt/zoom, with the
+    landmarks of ``scenery`` at fixed positions (same scene as the text viewfinder)."""
 
     BASE_FOV = 60.0  # horizontal field of view at 1x, degrees
 
@@ -181,6 +251,31 @@ class SceneRenderer:
         self.width, self.height = width, height
         self.u = (np.arange(width, dtype=np.float32) / width - 0.5)[None, :]
         self.v = (np.arange(height, dtype=np.float32) / height - 0.5)[:, None]
+        self.landmarks = [(lm,) + _landmark_bitmap(lm) for lm in scenery.LANDMARKS]
+
+    def _draw_landmarks(self, frame, az, el, fov: float, s: st.CameraState) -> None:
+        np = self.np
+        half_h = fov * self.height / self.width / 2
+        for lm, rgb, mask in self.landmarks:
+            if not lm.overlaps(s.pan_degrees - fov / 2, s.pan_degrees + fov / 2,
+                               s.tilt_degrees - half_h, s.tilt_degrees + half_h):
+                continue
+            sub_w = lm.px / SUB_X
+            sub_h = lm.px * scenery.ART_ASPECT / SUB_Y
+            # Pan depends only on the column and tilt only on the row of the frame.
+            cols = np.floor((lm.offset(az[0]) + lm.width / 2) / sub_w).astype(np.int64)
+            rows = np.floor((lm.top - el[:, 0]) / sub_h).astype(np.int64)
+            xs = np.nonzero((cols >= 0) & (cols < mask.shape[1]))[0]
+            ys = np.nonzero((rows >= 0) & (rows < mask.shape[0]))[0]
+            if not len(xs) or not len(ys):
+                continue
+            grid = np.ix_(rows[ys], cols[xs])
+            hit = mask[grid]
+            # xs need not be contiguous: a very wide view can see a landmark twice.
+            target = np.ix_(ys, xs)
+            region = frame[target]
+            region[hit, :3] = rgb[grid][hit]
+            frame[target] = region
 
     def render(self, s: st.CameraState):
         np = self.np
@@ -204,6 +299,7 @@ class SceneRenderer:
         post = np.abs(((az + 22.5) % 45) - 22.5) < line * 2
         frame[np.broadcast_to(post, frame.shape[:2])] = (40, 40, 220, 255)
         frame[np.broadcast_to(np.abs(el) < line, frame.shape[:2])] = (255, 255, 255, 255)
+        self._draw_landmarks(frame, az, el, fov, s)
         # Centre crosshair.
         cx, cy = self.width // 2, self.height // 2
         frame[cy, cx - 12:cx + 13] = (0, 255, 255, 255)

@@ -13,9 +13,8 @@ import time
 from typing import Callable, List, Optional, Tuple
 
 from . import state as st
-from . import viewfinder as vf
 from .display import render_camera, render_network
-from .viewfinder import CELL_ASPECT, framed_view
+from .viewfinder import CELL_ASPECT, Styles, framed_picture
 from .visca import ViscaCamera
 
 ViewBox = Tuple[int, int, int, int]
@@ -73,6 +72,7 @@ class TuiController:
         self._pan_tilt_until = 0.0
         self._zoom_jog: Optional[int] = None
         self._zoom_until = 0.0
+        self.view_styles: Styles = []  # colours of the picture from the last layout()
 
     @property
     def state(self) -> st.CameraState:
@@ -269,7 +269,7 @@ class TuiController:
             if side_by_side:
                 cols = min(width - DASHBOARD_WIDTH - 2, MAX_VIEW_COLS)
                 rows = min(room, _view_rows(cols))
-                picture = framed_view(self.state, cols, rows)
+                picture, self.view_styles = framed_picture(self.state, cols, rows)
                 box = (2, DASHBOARD_WIDTH + 2, rows, cols)
 
         self._page_rows = max(1, room)
@@ -373,7 +373,8 @@ async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05) -
                 controller.handle_key(CURSES_KEYS.get(key, key))
             controller.tick()
             height, width = screen.getmaxyx()
-            _draw(screen, *controller.layout(title, width, height), colors,
+            lines, view = controller.layout(title, width, height)
+            _draw(screen, lines, view, colors, controller.view_styles,
                   footer_rows=len(controller.shortcuts(width, height)) + 1)
             await asyncio.sleep(interval)
     finally:
@@ -404,7 +405,8 @@ def _escape_sequence(screen) -> str:
 
 
 def _init_colors() -> dict:
-    """Colour attribute per picture character (empty without colour support)."""
+    """Colour attributes of the chrome (empty without colour support); picture colours
+    are added on demand by ``_style_attr``."""
     import curses
 
     try:
@@ -414,28 +416,49 @@ def _init_colors() -> dict:
         curses.use_default_colors()
     except curses.error:
         return {}
-    pairs = {
-        vf.STAR: curses.COLOR_BLUE, vf.GROUND_A: curses.COLOR_GREEN, vf.GROUND_B: curses.COLOR_GREEN,
-        vf.POST: curses.COLOR_RED, vf.CROSS: curses.COLOR_YELLOW, vf.FINE: curses.COLOR_CYAN,
-    }
-    colors = {}
-    for number, (ch, color) in enumerate(pairs.items(), start=1):
-        curses.init_pair(number, color, -1)
-        colors[ch] = curses.color_pair(number) | (curses.A_BOLD if ch == vf.CROSS else 0)
-    colors[vf.HORIZON] = curses.A_BOLD
+    colors: dict = {}
     for number, (name, foreground, background) in enumerate([
         ("header", curses.COLOR_WHITE, curses.COLOR_BLUE),
         ("commands", curses.COLOR_WHITE, curses.COLOR_BLUE),
         ("shortcut", curses.COLOR_BLACK, curses.COLOR_CYAN),
         ("status", curses.COLOR_BLACK, curses.COLOR_WHITE),
-    ], start=len(pairs) + 1):
+    ], start=1):
         curses.init_pair(number, foreground, background)
         colors[name] = curses.color_pair(number)
+    colors["_pairs"] = {}  # (fg, bg) -> attribute, for the picture
     return colors
 
 
+def _style_attr(colors: dict, style: Optional[str]) -> int:
+    """curses attribute for a picture style "fg[/bg][+bold]" (see scenery.Paint)."""
+    if not style or not colors:
+        return 0
+    key = ("style", style)
+    if key not in colors:
+        import curses
+
+        names, _, flag = style.partition("+")
+        bold = curses.A_BOLD if flag == "bold" or names == "bold" else 0
+        attr = bold
+        if names != "bold":
+            fg, _, bg = names.partition("/")
+            pair = (getattr(curses, "COLOR_" + fg.upper()),
+                    getattr(curses, "COLOR_" + bg.upper()) if bg else -1)
+            pairs = colors["_pairs"]
+            if pair not in pairs:
+                number = 5 + len(pairs)  # 1-4 are the chrome colours
+                try:
+                    curses.init_pair(number, *pair)
+                    pairs[pair] = curses.color_pair(number)
+                except curses.error:  # out of colour pairs
+                    pairs[pair] = 0
+            attr |= pairs[pair]
+        colors[key] = attr
+    return colors[key]
+
+
 def _draw(screen, lines: List[str], view: Optional[ViewBox], colors: dict,
-          footer_rows: int = 0) -> None:
+          styles: Optional[Styles] = None, footer_rows: int = 0) -> None:
     import curses
 
     height, width = screen.getmaxyx()
@@ -471,8 +494,10 @@ def _draw(screen, lines: List[str], view: Optional[ViewBox], colors: dict,
         # Colour the inside of the picture, not its border.
         for row in range(top + 1, min(top + rows - 1, height - 1)):
             line = lines[row]
+            style_row = (styles or [])[row - top - 1] if row - top - 1 < len(styles or []) else []
             for col in range(left + 1, min(left + cols - 1, width - 1, len(line))):
-                attr = colors.get(line[col])
+                index = col - left - 1
+                attr = _style_attr(colors, style_row[index] if index < len(style_row) else None)
                 if attr:
                     try:
                         screen.addstr(row, col, line[col], attr)

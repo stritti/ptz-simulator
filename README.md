@@ -269,6 +269,42 @@ appears when zoomed in. The field of view is 60° at 1× and narrows with the zo
 in the picture as they happen.
 The picture is omitted on short terminals so status and commands stay visible.
 
+The landscape has landmarks at fixed coordinates, so you can check by eye that a
+client's absolute moves and presets land where they should. Small details (↳) only
+become readable when you zoom in:
+
+![Panorama of the simulated scene from pan −200° to +200° with the landmarks labelled](docs/public/images/scene/panorama.svg)
+
+<!-- scene-tour:start -->
+| Landmark | Pan | Tilt | Zoom |
+|---|---|---|---|
+| Alps | 80° | 6° | 1× |
+| ↳ Summit cross | 78.2° | 14.1° | 20× |
+| Forest | −18° | 4° | 1.5× |
+| ↳ Fox | −14.3° | 0.4° | 10× |
+| House | −95° | 5° | 1.5× |
+| Sun | −50° | 32° | 2× |
+| Flock of birds | 22° | 24° | 2× |
+| ↳ Straggler | 17.8° | 24.7° | 15× |
+| Plane with banner | 48° | 35.5° | 2.5× |
+| UFO | 140° | 10° | 1.5× |
+| ↳ Abducted cow | 140° | 6° | 5× |
+| Hot-air balloon | −140° | 24° | 2× |
+| Lake | −60° | −9° | 2× |
+| ↳ Rubber duck | −63° | −7.9° | 12× |
+| ↳ Lake monster | −55° | −10.2° | 8× |
+| VISCA billboard | −165° | 2.5° | 4× |
+| ONVIF billboard | 165° | 2.5° | 4× |
+| Rocket | 10° | 63° | 2× |
+| Buried treasure | 30° | −27.5° | 4× |
+<!-- scene-tour:end -->
+
+The billboards stand behind the camera, near the pan limits (±170°). The
+*Camera scene* page of the documentation website (`docs/scene.md`) shows every
+landmark in the NDI picture and in the viewfinder, with the VISCA packets and ONVIF
+`AbsoluteMove` values to get there. `scripts/scene_docs.py` generates the tables
+and images from `ptzsim/scenery.py`.
+
 The keyboard UI uses `curses` and needs a terminal, so it is not available on
 native Windows Python (use WSL) or when stdin/stdout are redirected; `serve` then
 falls back to the read-only dashboard. On Unix, that dashboard still accepts
@@ -355,8 +391,10 @@ uv run --extra ndi ptzsim serve --ndi --name "Camera 1"
 ```
 
 The simulator shows up as the NDI source `HOSTNAME (Camera 1)` and sends a test
-picture (640×360, `--ndi-fps`, default 25): a grid with sky, ground, horizon and
-red posts every 45° that moves with pan, tilt and zoom. It announces PTZ support
+picture (640×360, `--ndi-fps`, default 25): a grid with sky, ground, horizon,
+red posts every 45° and the same landmarks as the
+[TUI camera picture](#keyboard-control-tui) (mountains, house, UFO, billboards, …),
+moving with pan, tilt and zoom. It announces PTZ support
 (`<ndi_capabilities ntk_ptz="true" .../>` with pan/tilt, zoom, focus, autofocus, white balance and preset speed; NDI preset indexes 0–99, the same 100 presets as VISCA), so NDI Studio Monitor, vMix, OBS
 (DistroAV) etc. offer PTZ control.
 

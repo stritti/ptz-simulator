@@ -42,6 +42,18 @@ Open the image to zoom in.
 </figcaption>
 </figure>
 
+## Find the landmarks
+
+The camera looks at a landscape with mountains, a house, a UFO beaming up a cow,
+billboards with VISCA and ONVIF commands and more, each at fixed pan/tilt
+coordinates. Drive your client there and check by eye that it lands where it should.
+Some details only show up when you zoom in.
+
+[![Panorama of the simulated scene with the landmarks labelled](/images/scene/panorama.svg)](/scene)
+
+See the [camera scene](/scene) for every viewpoint with its VISCA packets and ONVIF
+values.
+
 ## One camera, three ways to connect
 
 The simulator shares position, motion and presets across its interfaces, so you

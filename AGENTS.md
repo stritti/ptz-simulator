@@ -135,9 +135,17 @@ the PR is merged; a renamed PR title re-runs the check automatically.
   actions and is curses-free so it can be unit-tested with a fake clock; only
   `interactive()` touches curses. Terminals send no key-release events, so jogs stop
   after `JOG_TIMEOUT` without key repeat.
-- `ptzsim/viewfinder.py` — text-mode camera picture for the TUI (`render_view`), same
-  scene geometry as `ndi.SceneRenderer` (60° FOV at 1×); keep both in sync. Grid lines
-  use half-open cells (`_on_line`) so each line is drawn exactly once.
+- `ptzsim/viewfinder.py` — text-mode camera picture for the TUI (`render_view`;
+  `render_picture` also returns the colour of every cell), same scene geometry as
+  `ndi.SceneRenderer` (60° FOV at 1×); keep both in sync. Grid lines use half-open
+  cells (`_on_line`) so each line is drawn exactly once.
+- `ptzsim/scenery.py` — landmarks at fixed pan/tilt (text art, colours for terminal and
+  NDI), drawn by both renderers. One art character is `px` degrees wide and twice as
+  high; when zoomed in, solid characters fill, lines stretch and text is drawn once.
+  `scripts/scene_docs.py` generates the landmark tables in README.md and
+  `docs/scene.md` and the images in `docs/public/images/scene/`; after changing
+  the scene run `uv run --with numpy python scripts/scene_docs.py --images`
+  (`tests/test_scene_docs.py` fails while the tables are out of date).
 - `ptzsim/cli.py` — `serve` and `send`; picks TUI, `--view-only` dashboard or `--no-tui`.
 
 ## ONVIF interoperability
