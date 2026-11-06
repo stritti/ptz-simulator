@@ -183,7 +183,8 @@ def post(port, body, header="", user=None, password=None):
         with urllib.request.build_opener(*handlers).open(request, timeout=3) as response:
             return response.status, response.headers, response.read()
     except urllib.error.HTTPError as err:
-        return err.code, err.headers, err.read()
+        # Python 3.8: urllib's own "digest auth failed" error has no body to read
+        return err.code, err.headers, err.read() if err.fp is not None else b""
 
 
 def test_http_digest_authentication():
