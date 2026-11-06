@@ -331,6 +331,14 @@ SetConfiguration returns success for the known configuration token but changes n
 Not simulated: device management beyond what PTZ clients need (network, users,
 scopes, firmware), events, imaging beyond white balance, Media2, preset tours, auxiliary commands, HTTPS.
 
+## Adding a protocol
+
+Every protocol is a small plugin on top of the shared camera model, so a new one
+(e.g. Pelco-D or Panasonic AW) is one module with one class; options, start-up and
+dashboard come for free. Plugins can also live in a separate package and be found via
+the `ptzsim.protocols` entry point. The step-by-step guide with a tested example is in
+[docs/adding-a-protocol.md](docs/adding-a-protocol.md).
+
 ## Unsupported protocols
 
 These PTZ protocols are common but **not supported** by the simulator:
