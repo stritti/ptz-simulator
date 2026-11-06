@@ -111,10 +111,11 @@ async def _serve(args: argparse.Namespace) -> None:
 
     title = " | ".join(endpoints)
     logging.getLogger("ptzsim").info("listening: %s", title)
+    loop = asyncio.get_running_loop()
 
     # Show network information
     if args.host == "0.0.0.0":
-        resolved = get_resolved_addresses(args.host)
+        resolved = await loop.run_in_executor(None, get_resolved_addresses, args.host)
         if resolved:
             addr_str = ", ".join(resolved[:3])
             if len(resolved) > 3:
@@ -122,7 +123,7 @@ async def _serve(args: argparse.Namespace) -> None:
             logging.getLogger("ptzsim").info("Available on: %s", addr_str)
 
     # Show full network info on startup
-    network_info = format_network_info_for_startup()
+    network_info = await loop.run_in_executor(None, format_network_info_for_startup)
     for line in network_info.split("\n"):
         if line:
             logging.getLogger("ptzsim").info(line)

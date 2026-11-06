@@ -161,7 +161,9 @@ When the simulator starts, it displays comprehensive network information in the 
 The network addresses are detected automatically from the system's network
 interfaces with `getifaddrs(3)` (Linux, macOS, BSD; no extra packages). Where
 `getifaddrs` is not available (Windows), the simulator falls back to the addresses
-of the hostname.
+of the hostname. Hostname/FQDN and DNS-derived fallback addresses are a startup
+snapshot; DNS resolution runs outside the event loop so it cannot stall camera
+control. Native interface information remains live.
 
 ## Keyboard control (TUI)
 
@@ -204,7 +206,10 @@ The picture is omitted on short terminals so status and commands stay visible.
 
 The keyboard UI uses `curses` and needs a terminal, so it is not available on
 native Windows Python (use WSL) or when stdin/stdout are redirected; `serve` then
-falls back to the read-only dashboard.
+falls back to the read-only dashboard. On Unix, that dashboard still accepts
+`n`, `c` and `q` for view navigation and quitting. Closed or unavailable stdin
+only disables keyboard input; it does not stop the simulator. On native Windows,
+use Ctrl+C to exit the read-only dashboard.
 
 ## Testing ONVIF clients
 

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Stephan Strittmatter
 # SPDX-License-Identifier: MIT
 
+import asyncio
+from contextlib import suppress
 import os
 from pathlib import Path
 import re
@@ -13,7 +15,7 @@ import time
 
 import pytest
 
-from ptzsim import state as st
+from ptzsim import display, state as st
 from ptzsim.tui import JOG_TIMEOUT, SPEED_LEVELS, TuiController, _draw
 from ptzsim.visca import ViscaCamera
 
@@ -499,3 +501,89 @@ def test_resize_preserves_pending_preset_and_current_view():
     assert tui.pending == "save"
     assert tui.current_view == "network"
     assert any("save preset: press 1-9" in line for line in lines)
+
+
+def test_cli_help_without_unix_terminal_modules(tmp_path):
+    script = """\
+import builtins
+original_import = builtins.__import__
+def import_without_terminal_modules(name, *args, **kwargs):
+    if name in ("termios", "tty", "fcntl"):
+        raise ModuleNotFoundError(name)
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = import_without_terminal_modules
+from ptzsim.cli import main
+main(["serve", "--help"])
+"""
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]))
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp_path, env=env,
+        capture_output=True, text=True, timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--no-tui" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="select monitors Unix file descriptors")
+def test_dashboard_input_eof_does_not_request_shutdown(monkeypatch):
+    state = display.DashboardState()
+
+    async def run():
+        await asyncio.wait_for(
+            display.read_keyboard_input(state, asyncio.get_running_loop()), timeout=2,
+        )
+        assert not state.should_quit
+
+    with open(os.devnull) as stream:
+        monkeypatch.setattr(sys, "stdin", stream)
+        asyncio.run(run())
+
+
+@pytest.mark.parametrize("check", ["output-processing", "cancellation"])
+def test_dashboard_input_preserves_terminal_modes(monkeypatch, check):
+    pty = pytest.importorskip("pty")
+    termios = pytest.importorskip("termios")
+    master, slave = pty.openpty()
+    before = termios.tcgetattr(slave)
+    state = display.DashboardState()
+
+    async def run():
+        task = asyncio.create_task(
+            display.read_keyboard_input(state, asyncio.get_running_loop())
+        )
+
+        async def wait_until(predicate):
+            deadline = time.monotonic() + 2
+            while not predicate():
+                if task.done():
+                    task.result()
+                assert time.monotonic() < deadline, "dashboard input did not become ready"
+                await asyncio.sleep(0.01)
+
+        try:
+            await wait_until(lambda: not termios.tcgetattr(slave)[3] & termios.ICANON)
+            os.write(master, b"n")
+            await wait_until(lambda: state.current_view == "network")
+            if check == "output-processing":
+                assert termios.tcgetattr(slave)[1] & termios.OPOST == before[1] & termios.OPOST
+            else:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert termios.tcgetattr(slave) == before
+        finally:
+            state.should_quit = True
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            deadline = time.monotonic() + 2
+            while termios.tcgetattr(slave) != before and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+    try:
+        with os.fdopen(os.dup(slave)) as stream:
+            monkeypatch.setattr(sys, "stdin", stream)
+            asyncio.run(run())
+    finally:
+        os.close(master)
+        os.close(slave)
