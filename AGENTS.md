@@ -27,6 +27,20 @@ uv run pytest
 
 Run the `onvif-client` variant as well whenever `ptzsim/onvif.py` changes.
 
+## Releases
+
+Versions and `CHANGELOG.md` are managed by [Release Please](https://github.com/googleapis/release-please)
+(`release-please-config.json`, `.release-please-manifest.json`). Commit messages must
+follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`,
+`docs:`, …; `!` or `BREAKING CHANGE:` for breaking changes) — they decide the next version.
+Never bump the version in `pyproject.toml` or `ptzsim/__init__.py` by hand.
+
+- `.github/workflows/ci.yml` — tests on Python 3.8 and 3.13, builds the release artifacts.
+- `.github/workflows/release-please.yml` — maintains the release PR (and its `uv.lock`);
+  merging it tags the release and attaches wheel, sdist and `ptzsim.pyz` built by
+  `scripts/build-release.sh`. PyPI upload runs only when the repository variable
+  `PYPI_PUBLISH` is `true` (requires a PyPI trusted publisher, environment `pypi`).
+
 ## Constraints
 
 - **Runtime is standard library only.** ONVIF and VISCA must keep working with plain

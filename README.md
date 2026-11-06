@@ -11,6 +11,25 @@ additionally needs the `ndi` extra (see [NDI](#ndi)). The project is managed
 with [uv](https://docs.astral.sh/uv/): `uv sync` creates `.venv` with the dev
 dependencies.
 
+## Installation
+
+ptzsim needs only Python ≥ 3.8. Pick one:
+
+```bash
+# Single file, nothing to install: download and run with any Python 3
+curl -LO https://github.com/stritti/ptz-simulator/releases/latest/download/ptzsim.pyz
+python3 ptzsim.pyz serve --onvif          # Windows: py ptzsim.pyz serve --onvif
+
+# As a command on the PATH (with uv or pipx)
+uv tool install git+https://github.com/stritti/ptz-simulator
+pipx install git+https://github.com/stritti/ptz-simulator
+ptzsim serve --onvif
+```
+
+Wheel, sdist and `ptzsim.pyz` of every version are attached to the
+[GitHub releases](https://github.com/stritti/ptz-simulator/releases). For NDI,
+install the extra: `uv tool install "ptzsim[ndi] @ git+https://github.com/stritti/ptz-simulator"`.
+
 ## Supported transports
 
 | Option           | Protocol                                             | Default port |
