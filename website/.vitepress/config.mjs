@@ -28,7 +28,7 @@ export default defineConfig({
       {
         text: 'Protocols',
         items: [
-          { text: 'ONVIF integration', link: '/guide#testing-the-streaming-server-onvif' },
+          { text: 'ONVIF integration', link: '/guide#testing-onvif-clients' },
           { text: 'ONVIF scope', link: '/guide#onvif-scope' },
           { text: 'VISCA clients', link: '/guide#testing-visca-clients' },
           { text: 'VISCA commands', link: '/guide#supported-visca-commands' },
