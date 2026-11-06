@@ -45,8 +45,9 @@ class InterfaceInfo:
         return "\n".join(parts)
 
 
+@functools.lru_cache(maxsize=1)
 def get_hostname_and_fqdn() -> Tuple[str, str]:
-    """Get the hostname and fully qualified domain name."""
+    """Resolve the hostname and fully qualified domain name once per process."""
     try:
         hostname = socket.gethostname()
         fqdn = socket.getfqdn()
@@ -185,8 +186,9 @@ def get_network_addresses(
 
 
 
+@functools.lru_cache(maxsize=1)
 def _get_all_interfaces_fallback() -> Dict[str, InterfaceInfo]:
-    """Fallback for get_all_interfaces_detailed when getifaddrs is unavailable."""
+    """Startup DNS snapshot when getifaddrs is unavailable."""
     interfaces_info: Dict[str, InterfaceInfo] = {}
     hostname = socket.gethostname()
 
@@ -212,11 +214,12 @@ def _get_all_interfaces_fallback() -> Dict[str, InterfaceInfo]:
     return interfaces_info
 
 
+@functools.lru_cache(maxsize=None)
 def _get_network_addresses_fallback(
     bind_address: str = "0.0.0.0",
     include_ipv6: bool = True,
 ) -> Dict[str, List[str]]:
-    """Fallback for get_network_addresses when getifaddrs is unavailable."""
+    """Startup DNS snapshot of reachable addresses when getifaddrs is unavailable."""
     addresses: Dict[str, List[str]] = {}
 
     try:

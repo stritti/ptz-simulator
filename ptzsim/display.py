@@ -7,18 +7,18 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-import sys
-import select
-import threading
-import termios
-import tty
+import logging
 import os
-import fcntl
+import select
+import sys
+import threading
 from typing import Dict, List, Optional
 
 from . import state as st
 from .visca import ViscaCamera
 from .network import get_all_interfaces_detailed, get_hostname_and_fqdn, interface_sort_key
+
+log = logging.getLogger("ptzsim")
 
 CLEAR = "\x1b[H\x1b[2J"
 HIDE_CURSOR, SHOW_CURSOR = "\x1b[?25l", "\x1b[?25h"
@@ -182,7 +182,6 @@ def render(camera: ViscaCamera, title: str, color: bool = True, log_lines: int =
 class DashboardState:
     """Manage dashboard state including current view."""
     def __init__(self):
-        import threading
         self._lock = threading.Lock()
         self._current_view = "camera"  # "camera" or "network"
         self.should_quit = False
@@ -211,100 +210,60 @@ class DashboardState:
 
 async def read_keyboard_input(state: DashboardState, loop) -> None:
     """Read keyboard input in a separate thread."""
-    import threading
+    try:
+        import termios
+        import tty
+    except ImportError:
+        log.debug("Dashboard keyboard input is unavailable on this platform")
+        return
+    try:
+        fd = sys.stdin.fileno()
+    except (AttributeError, OSError, ValueError) as err:
+        log.debug("Dashboard keyboard input is unavailable: %s", err)
+        return
+    stopped = threading.Event()
 
     def input_reader():
-        """Run in a thread to read individual characters."""
-        fd = sys.stdin.fileno()
         old_settings = None
-        old_fl = None
-        is_tty = False
-
         try:
-            # Check if stdin is a TTY
-            is_tty = sys.stdin.isatty()
-
-            if is_tty:
-                # Save old terminal settings
+            if sys.stdin.isatty():
                 old_settings = termios.tcgetattr(fd)
-                # Set to raw mode to read individual characters without waiting for Enter
-                tty.setraw(fd)
-
-                # Also make it non-blocking
-                old_fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-                fcntl.fcntl(fd, fcntl.F_SETFL, old_fl | os.O_NONBLOCK)
-        except Exception:
-            is_tty = False
-
-        try:
-            input_buffer = ""
-
-            while not state.should_quit:
+                tty.setcbreak(fd)
+            while not stopped.is_set() and not state.should_quit:
                 try:
-                    # Use select() + os.read() for both TTY and non-TTY modes
-                    # This works reliably across all terminal types (VS Code, real TTY, piped input)
                     ready, _, _ = select.select([fd], [], [], 0.1)
-
-                    if ready:
-                        try:
-                            # Use os.read() on the raw FD - reliable with select()
-                            chunk_bytes = os.read(fd, 1024)
-                            chunk = chunk_bytes.decode('utf-8', errors='ignore')
-                        except Exception:
-                            chunk = ""
-
-                        if not chunk:  # EOF
-                            state.should_quit = True
-                            break
-
-                        input_buffer += chunk
-
-                        # Process each character
-                        while input_buffer:
-                            ch = input_buffer[0]
-                            input_buffer = input_buffer[1:]
-
-                            # Skip whitespace
-                            if ch in ('\n', '\r', ' ', '\t'):
-                                continue
-
-                            ch = ch.lower()
-
-                            if ch == 'n':
-                                state.switch_view('network')
-                            elif ch == 'c':
-                                state.switch_view('camera')
-                            elif ch == 'q':
-                                state.should_quit = True
-                            elif ch == '\x03':  # Ctrl+C
-                                state.should_quit = True
-                except Exception:
-                    pass
-
-                # Small sleep to avoid busy-waiting
-                import time
-                time.sleep(0.01)
+                except InterruptedError:
+                    continue
+                if not ready:
+                    continue
+                chunk = os.read(fd, 1024)
+                if not chunk:
+                    break
+                for ch in chunk.decode("utf-8", errors="ignore").lower():
+                    if ch == "n":
+                        state.switch_view("network")
+                    elif ch == "c":
+                        state.switch_view("camera")
+                    elif ch in ("q", "\x03"):
+                        state.should_quit = True
+                        return
+        except (OSError, ValueError, termios.error) as err:
+            log.warning("Dashboard keyboard input stopped: %s", err)
         finally:
-            # Restore old terminal settings
-            if is_tty:
+            if old_settings is not None:
                 try:
-                    if old_fl is not None:
-                        fcntl.fcntl(fd, fcntl.F_SETFL, old_fl)
-                    if old_settings is not None:
-                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                except Exception:
-                    pass
+                    termios.tcsetattr(fd, termios.TCSANOW, old_settings)
+                except termios.error as err:
+                    log.warning("Could not restore dashboard terminal settings: %s", err)
 
-    # Start the input reader thread as a daemon
     reader_thread = threading.Thread(target=input_reader, daemon=True)
     reader_thread.start()
-
-    # Keep the async task alive while the reader thread runs
     try:
-        while not state.should_quit:
+        while reader_thread.is_alive() and not state.should_quit:
             await asyncio.sleep(0.1)
     finally:
-        reader_thread.join(timeout=0.1)
+        stopped.set()
+        reader_thread.join()
 
 
 async def dashboard(camera: ViscaCamera, title: str, interval: float = 0.1,
@@ -326,6 +285,7 @@ async def dashboard(camera: ViscaCamera, title: str, interval: float = 0.1,
     except KeyboardInterrupt:
         pass
     finally:
+        state.should_quit = True
         keyboard_task.cancel()
         try:
             await keyboard_task
