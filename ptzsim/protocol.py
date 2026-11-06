@@ -72,8 +72,9 @@ class ServeContext:
         """Start every plugin selected in :attr:`args` (see :func:`selected`)."""
         for plugin_class in selected(self.args):
             plugin = plugin_class()
-            self.endpoints += await plugin.start(self)
+            # Registered before start() so a plugin that fails halfway is stopped too.
             self.plugins.append(plugin)
+            self.endpoints += await plugin.start(self)
 
     def stop_plugins(self) -> None:
         """Stop the started plugins, last started first."""

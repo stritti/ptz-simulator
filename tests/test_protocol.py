@@ -190,3 +190,24 @@ def test_example_plugin_end_to_end(example_plugin):
     assert reply == b"OK\r\nPOS 10.0 5.0 1.0\r\nOK\r\n"
     assert [str(e) for e in ctx.endpoints] == [f"TEXT tcp://127.0.0.1:{port}"]
     assert ctx.camera.log[0].label == "TEXT"
+
+
+def test_plugin_failing_during_start_is_stopped(isolated_registry):
+    class HalfStarted(protocol.PortPlugin):
+        name, title, default_port = "half", "half started", 1
+
+        async def start(self, ctx):
+            self.servers.append(await asyncio.start_server(lambda r, w: None, ctx.host, self.port(ctx.args)))
+            raise OSError("second socket failed")
+
+    protocol.register(HalfStarted)
+    port = free_port()
+
+    async def run():
+        async with serve("--half", str(port)):
+            pass
+
+    with pytest.raises(OSError, match="second socket"):
+        asyncio.run(run())
+    with pytest.raises(OSError):  # the server opened before the failure is closed
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
