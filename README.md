@@ -70,6 +70,99 @@ default both), `--onvif-no-absolute` (camera without `AbsoluteMove`, presets onl
 positions instead of moving at motor speed), `--host` (bind address). In
 dashboard mode, log messages go to `ptzsim.log`.
 
+## Dashboard and Network Discovery
+
+### TUI Dashboard Views
+The interactive TUI uses a Midnight-Commander-style layout: the active view and
+tabs stay at the top, while status feedback and the command bar stay fixed at the
+bottom, including the terminal's last row. Only the content between them scrolls.
+The active tab is highlighted and marked with brackets, even without color.
+
+#### Camera Control View (Press `c`)
+The main camera control view shows real-time PTZ status and commands:
+```
+CAMERA | PTZ camera simulator
+[c]:Camera  n:Network  | ONVIF http://0.0.0.0:8103/onvif/device_service
+Power: ON   Address: 1   Commands: 0
+
+Pan        0     +0.0°  [──────────────●───────────────]  idle
+Tilt       0     +0.0°  [───────●──────────────────────]  idle
+Zoom  0x0000      1.0x  [●─────────────────────────────]  idle
+Focus 0x8000        AF  [──────────────●───────────────]  idle
+White balance  auto          R 0x80  B 0x80
+
+No presets stored
+
+Last commands
+(waiting for commands)
+
+Speed 4/8 | Ready
+MOVE                                     PRESET                   CAMERA                 VIEW
+[Arrows/WASD] Pan/Tilt                   [1-9]        Recall      [f] Autofocus          [c]         Camera
+[+/-]         Zoom      [h]   Home       [P then 1-9] Save        [b] White balance      [n]         Network  [?] Help
+[Space]       Stop      [ / ] Speed      [C then 1-9] Clear       [o] Power              [PgUp/PgDn] Scroll   [q] Quit
+```
+
+#### Network Information View (Press `n`)
+Lists the hostname and every network interface of the machine (also interfaces
+that are down or have no address), the main interfaces first:
+```
+NETWORK | Network Information
+c:Camera  [n]:Network  | ONVIF http://0.0.0.0:8103/onvif/device_service
+
+Hostname: camera-host
+FQDN:     camera-host.example.test
+
+Interfaces (24)
+  Interface        State  IPv4                IPv6
+  eth0             up     192.0.2.10/24       fe80::1
+  br-0123456789ab  down   172.18.0.1/16
+  br-abcdef012345  up     172.19.0.1/16       fe80::2
+  docker0          down   172.17.0.1/16       fe80::3
+  lo               up     127.0.0.1/8
+  veth0123456      up                         fe80::4
+  ...
+
+Speed 4/8 | Ready
+MOVE                                     PRESET                   CAMERA                 VIEW
+[Arrows/WASD] Pan/Tilt                   [1-9]        Recall      [f] Autofocus          [c]         Camera
+[+/-]         Zoom      [h]   Home       [P then 1-9] Save        [b] White balance      [n]         Network  [?] Help
+[Space]       Stop      [ / ] Speed      [C then 1-9] Clear       [o] Power              [PgUp/PgDn] Scroll   [q] Quit
+```
+
+### Keyboard Shortcuts
+The bottom command bar uses four compact columns for movement, presets, camera
+settings and view navigation, separated by six spaces. Key labels are highlighted
+and enclosed in brackets:
+- **`n`** - Network Information View (IP addresses, interfaces, hostname)
+- **`c`** - Camera Control View (PTZ controls, presets, commands)
+- **`q`** - Quit the simulator (or use Ctrl+C)
+- **`?`** - Open/close the full keyboard help; `Esc` also closes it
+- **`PgUp` / `PgDn`** - Scroll long camera, network or help content; the status
+  line shows the visible line range when content overflows
+
+The interactive TUI requires at least **120 columns and 8 rows**. If the
+terminal is smaller, a resize notice replaces the dashboard; `Space` (stop)
+and `q` (quit) remain available. Resizing back restores the current view and
+any pending preset action. On terminals 8 to 14 rows high, the bottom bar keeps
+Stop, Help and Quit visible. Open `?` for the complete command list.
+Camera controls remain available in Network view. In Help, camera commands are
+paused except for `Space` (stop); `c` or `n` returns directly to that view.
+
+### Startup Information
+When the simulator starts, it displays comprehensive network information in the startup logs:
+- **Hostname and FQDN** (e.g., `camera-host` and `camera-host.example.test`)
+- **All Network Interfaces** with their IP addresses:
+  - IPv4 addresses with netmasks (e.g., `eth0: 192.0.2.10/255.255.255.0`)
+  - IPv6 addresses (e.g., `eth0: fe80::1`)
+- **Summary of available addresses** in log output (`Available on: …`, main interface
+  first, without loopback and link-local addresses)
+
+The network addresses are detected automatically from the system's network
+interfaces with `getifaddrs(3)` (Linux, macOS, BSD; no extra packages). Where
+`getifaddrs` is not available (Windows), the simulator falls back to the addresses
+of the hostname.
+
 ## Keyboard control (TUI)
 
 In a terminal, `serve` shows the live dashboard and lets you drive the camera
@@ -80,6 +173,7 @@ current position using `GetStatus`.
 
 | Key | Action |
 |-----|--------|
+| `n` / `c` | show network information / return to the camera view (no Enter needed) |
 | arrows or `W` `A` `S` `D` | pan/tilt while the key is held (stops ~0.35 s after the last key repeat) |
 | `+` / `-` | zoom tele / wide while the key is held |
 | space | stop all movement |
@@ -92,14 +186,21 @@ current position using `GetStatus`.
 | `b` | one-push white balance (sets gains to neutral, locks manual) |
 | `o` | power on / standby |
 | `q` | quit |
+| `?` / `Esc` | toggle help / close help or cancel a pending preset action |
+| `PgUp` / `PgDn` | scroll the current view or help |
 
-Next to the dashboard (or above it in narrow terminals) the TUI shows the
+View switching uses lowercase `n` and `c`; uppercase `C` still clears a preset.
+The network view uses the full width without the camera picture. Returning with
+`c` restores the camera layout without resetting the camera or its presets.
+
+Next to the dashboard, when there is enough vertical space, the TUI shows the
 **camera picture** at the current position: the same virtual scene as the NDI test
 picture, drawn with text characters. The horizon is at 0° tilt, the ground has a
 5° checker pattern, a post with its angle stands every 45° of pan, and a 1° grid
 appears when zoomed in. The field of view is 60° at 1× and narrows with the zoom
 (3° at 20×); the caption shows pan, tilt and zoom. Moves from any client show up
 in the picture as they happen.
+The picture is omitted on short terminals so status and commands stay visible.
 
 The keyboard UI uses `curses` and needs a terminal, so it is not available on
 native Windows Python (use WSL) or when stdin/stdout are redirected; `serve` then

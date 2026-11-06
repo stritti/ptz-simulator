@@ -62,13 +62,26 @@ def test_framed_view_caption_and_size():
     assert "+30.0°" in lines[0] and "1.0x" in lines[0]
 
 
-def test_layout_side_by_side_and_stacked():
+def test_layout_side_by_side_and_minimum_width():
     tui = TuiController(ViscaCamera())
-    lines, box = tui.layout("t", 160, 50)
-    row, col, rows, cols = box
-    assert col == DASHBOARD_WIDTH + 2 and lines[0][col] == "┌"
-    lines, box = tui.layout("t", 80, 50)
-    assert box[:2] == (0, 0) and lines[0].startswith("┌")
-    assert any(line.startswith("PTZ camera simulator") for line in lines)
-    lines, box = tui.layout("t", 20, 10)
+    for width in (120, 160):
+        lines, box = tui.layout("t", width, 50)
+        row, col, rows, cols = box
+        assert row == 2 and col == DASHBOARD_WIDTH + 2 and lines[row][col] == "┌"
+        assert "CAMERA" in lines[0]
+    lines, box = tui.layout("t", 119, 50)
     assert box is None
+    assert any("120 columns" in line for line in lines)
+
+
+def test_network_view_uses_full_dashboard_without_camera_picture():
+    tui = TuiController(ViscaCamera())
+    for width, height in ((160, 50), (120, 50)):
+        tui.handle_key("n")
+        lines, box = tui.layout("t", width, height)
+        assert lines[0].startswith("NETWORK")
+        assert box is None
+        tui.handle_key("c")
+        lines, box = tui.layout("t", width, height)
+        assert lines[0].startswith("CAMERA")
+        assert box is not None
