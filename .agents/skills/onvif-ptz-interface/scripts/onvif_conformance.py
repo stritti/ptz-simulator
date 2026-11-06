@@ -41,6 +41,7 @@ import sys
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from urllib.parse import urlsplit
 from xml.sax.saxutils import escape
 
 SOAP = "http://www.w3.org/2003/05/soap-envelope"
@@ -104,7 +105,8 @@ class OnvifClient:
 
     def remember_service(self, capability: str, xaddr: str) -> None:
         """Route later calls for this service to the advertised XAddr (scheme/host/port/path)."""
-        if re.match(r"^https?://[^/]+/", xaddr.strip()):
+        parts = urlsplit(xaddr.strip())
+        if parts.scheme in ("http", "https") and parts.hostname and parts.path:
             self.service_urls[capability.lower()] = xaddr.strip()
 
     def post(self, path: str, body: str, host: str = None, port: int = None, scheme: str = "http"):
@@ -131,10 +133,11 @@ class OnvifClient:
     def call(self, service: str, body: str):
         url = self.service_urls.get(service)
         if url:
-            m = re.match(r"^(https?)://([^/:]+)(?::(\d+))?(/.*)$", url)
-            scheme, host, port, path = m.group(1), m.group(2), m.group(3), m.group(4)
-            port = int(port) if port else (443 if scheme == "https" else 80)
-            status, text = self.post(path, body, host=host, port=port, scheme=scheme)
+            parts = urlsplit(url)  # IPv6-aware (bracketed hosts)
+            scheme = parts.scheme
+            host = parts.hostname
+            port = parts.port or (443 if scheme == "https" else 80)
+            status, text = self.post(parts.path or "/", body, host=host, port=port, scheme=scheme)
         else:
             status, text = self.post("%s/%s_service" % (self.base, service), body)
         try:
@@ -157,9 +160,10 @@ class OnvifClient:
         if addr[0].lower() in hosts:
             return True
         for xaddr in xaddrs:
-            m = re.match(r"^https?://([^/:]+)(?::(\d+))?", (xaddr or "").strip())
-            if m and m.group(1).lower() in hosts \
-                    and (m.group(2) is None or int(m.group(2)) == self.port):
+            parts = urlsplit((xaddr or "").strip())
+            if parts.scheme in ("http", "https") and parts.hostname \
+                    and parts.hostname.lower() in hosts \
+                    and (parts.port is None or parts.port == self.port):
                 return True
         return False
 
@@ -201,48 +205,78 @@ class OnvifClient:
             sock.close()
 
 
-def ns_prefixes(text: str) -> dict:
-    """prefix -> namespace URI map of an XML document."""
-    prefixes = {}
-    for _event, (prefix, uri) in ET.iterparse(io.StringIO(text), events=["start-ns"]):
-        prefixes[prefix] = uri
-    return prefixes
+def parse_xml(text: str):
+    """Parse XML once, returning (root, scopes) with per-element in-scope
+    prefix -> namespace URI maps keyed by id(element).
+
+    Namespace declarations are scoped to the element that carries them, so a
+    document-level map would misresolve e.g. a default namespace redeclared on a
+    nested element.
+    """
+    scopes = {}
+    stack = [{}]
+    pending = []
+    root = None
+    try:
+        for event, obj in ET.iterparse(io.StringIO(text), events=("start", "start-ns", "end")):
+            if event == "start-ns":
+                pending.append(obj)
+            elif event == "start":
+                ns = dict(stack[-1])
+                for prefix, uri in pending:
+                    ns[prefix] = uri
+                pending = []
+                stack.append(ns)
+                scopes[id(obj)] = ns
+                if root is None:
+                    root = obj
+            else:
+                stack.pop()
+    except ET.ParseError:
+        return None, {}
+    return root, scopes
 
 
 def resolve_qname(value: str, prefixes: dict):
-    """Resolve a QName string like 'ter:InvalidArgVal' to (namespace URI, local name)."""
+    """Resolve a QName string like 'ter:InvalidArgVal' to (namespace URI, local name).
+
+    An unprefixed name is bound to the default namespace (prefix "" in the map),
+    which may be empty.
+    """
     prefix, _, local = value.rpartition(":")
-    uri = prefixes.get(prefix, "") if prefix else ""
-    return uri, (local or value)
+    return prefixes.get(prefix, ""), (local or value)
 
 
-def fault_subcodes(root, text: str) -> list:
+def fault_subcodes(text: str) -> list:
     """Local names of ONVIF fault subcode values, whatever prefix the endpoint uses.
 
-    The subcode is a QName in the text of a SOAP `Value` element (e.g.
-    `ter:InvalidArgVal`); the prefix is arbitrary, but the resolved namespace
-    must be exactly the ONVIF error namespace http://www.onvif.org/ver10/error.
+    Only `Value` elements inside `Subcode` are considered (SOAP 1.2 structure); each
+    QName (e.g. `ter:InvalidArgVal` or a default-namespaced `InvalidArgVal`) is
+    resolved against the namespace declarations in scope at that element, and the
+    namespace must be exactly http://www.onvif.org/ver10/error.
     """
+    root, scopes = parse_xml(text)
     if root is None:
         return []
-    prefixes = ns_prefixes(text)
     out = []
-    for el in find_all(root, "Value"):
-        uri, local = resolve_qname((el.text or "").strip(), prefixes)
-        if uri == ONVIF_ERROR_NS:
-            out.append(local)
+    for sub in find_all(root, "Subcode"):
+        for child in list(sub):  # direct children only: nested Subcodes have their own Value
+            if localname(child.tag) == "Value":
+                uri, local = resolve_qname((child.text or "").strip(), scopes.get(id(child), {}))
+                if uri == ONVIF_ERROR_NS:
+                    out.append(local)
     return out
 
 
-def fault_code(root, text: str):
+def fault_code(text: str):
     """Primary SOAP fault code as (namespace URI, local name), e.g. (SOAP, 'Sender')."""
+    root, scopes = parse_xml(text)
     if root is None:
         return None
-    prefixes = ns_prefixes(text)
     for code in find_all(root, "Code"):
-        values = find_all(code, "Value")
-        if values:
-            return resolve_qname((values[0].text or "").strip(), prefixes)
+        for child in list(code):
+            if localname(child.tag) == "Value":
+                return resolve_qname((child.text or "").strip(), scopes.get(id(child), {}))
     return None
 
 
@@ -401,8 +435,8 @@ def main() -> int:
         % (profile_body, PT_POSITION_SPACE, ZOOM_POSITION_SPACE)
     )
     status, text, root = client.call("ptz", bad_move)
-    subcodes = fault_subcodes(root, text)
-    code = fault_code(root, text)
+    subcodes = fault_subcodes(text)
+    code = fault_code(text)
     check("out-of-range AbsoluteMove faults env:Sender/ter:InvalidArgVal",
           root is not None and len(find_all(root, "Fault")) > 0
           and code == (SOAP, "Sender") and "InvalidArgVal" in subcodes,
