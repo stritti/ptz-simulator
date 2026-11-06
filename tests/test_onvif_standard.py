@@ -337,3 +337,86 @@ def test_empty_post_gets_digest_challenge_and_other_methods_405():
         assert raw_http(port, "PUT")[0] == 405
     finally:
         stop()
+
+
+# ------------------------------------------------ Profile S basics (Core 8.2/8.3, Media 5.2-5.5)
+M = "<trt:ProfileToken>Profile_1</trt:ProfileToken>"
+
+
+def test_profile_has_video_source_encoder_and_ptz(onvif):
+    status, root = call(onvif, "<trt:GetProfiles/>")
+    profile = find(root, "Profiles")
+    names = [e.tag.rsplit("}", 1)[1] for e in profile]
+    assert status == 200 and names == ["Name", "VideoSourceConfiguration", "VideoEncoderConfiguration",
+                                       "PTZConfiguration"]
+
+
+def test_remove_and_add_configurations(onvif):
+    assert call(onvif, f"<trt:RemoveVideoEncoderConfiguration>{M}</trt:RemoveVideoEncoderConfiguration>")[0] == 200
+    status, root = call(onvif, "<trt:GetProfiles/>")
+    assert find(root, "VideoEncoderConfiguration") is None
+    status, root = call(onvif, f"<trt:GetStreamUri>{M}</trt:GetStreamUri>")
+    assert status == 500 and subcodes(root) == ["ter:Action", "ter:IncompleteConfiguration"]
+    body = (f"<trt:AddVideoEncoderConfiguration>{M}<trt:ConfigurationToken>VideoEncoderConfig_1"
+            "</trt:ConfigurationToken></trt:AddVideoEncoderConfiguration>")
+    assert call(onvif, body)[0] == 200
+    assert call(onvif, f"<trt:GetStreamUri>{M}</trt:GetStreamUri>")[0] == 200
+    status, root = call(onvif, body.replace("VideoEncoderConfig_1", "x"))
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:NoConfig"]
+
+
+@pytest.mark.parametrize("config, ok", [
+    ("<tt:Resolution><tt:Width>320</tt:Width><tt:Height>180</tt:Height></tt:Resolution>", True),
+    ("<tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>", False),
+    ("<tt:Quality>11</tt:Quality>", False),
+    ("<tt:Encoding>JPEG</tt:Encoding>", False),
+])
+def test_set_video_encoder_configuration(onvif, config, ok):
+    body = (f'<trt:SetVideoEncoderConfiguration><trt:Configuration token="VideoEncoderConfig_1">{config}'
+            "</trt:Configuration><trt:ForcePersistence>true</trt:ForcePersistence></trt:SetVideoEncoderConfiguration>")
+    status, root = call(onvif, body)
+    if ok:
+        assert status == 200 and onvif.encoder["width"] == 320
+    else:
+        assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:ConfigModify"]
+
+
+def test_scopes_follow_set_add_remove_and_discovery(onvif):
+    status, root = call(onvif, "<tds:GetScopes/>")
+    kinds = {text_of(s, "ScopeItem"): text_of(s, "ScopeDef") for s in find(root, "Body")[0]}
+    assert kinds["onvif://www.onvif.org/type/ptz"] == "Fixed"
+    assert kinds["onvif://www.onvif.org/location/simulator"] == "Configurable"
+    call(onvif, "<tds:SetScopes><tds:Scopes>onvif://www.onvif.org/name/Lab</tds:Scopes></tds:SetScopes>")
+    call(onvif, "<tds:AddScopes><tds:ScopeItem>onvif://www.onvif.org/location/hall</tds:ScopeItem></tds:AddScopes>")
+    assert onvif.configurable_scopes == ["onvif://www.onvif.org/name/Lab", "onvif://www.onvif.org/location/hall"]
+    protocol = DiscoveryProtocol(onvif, 8080, advertise_host="10.0.0.9")
+    assert "onvif://www.onvif.org/location/hall" in protocol.scopes
+    status, root = call(onvif, "<tds:RemoveScopes><tds:ScopeItem>onvif://www.onvif.org/type/ptz</tds:ScopeItem>"
+                               "</tds:RemoveScopes>")
+    assert status == 400 and subcodes(root) == ["ter:OperationProhibited", "ter:FixedScope"]
+    status, root = call(onvif, "<tds:RemoveScopes><tds:ScopeItem>onvif://x/y</tds:ScopeItem></tds:RemoveScopes>")
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:NoScope"]
+
+
+def test_non_discoverable_ignores_probes():
+    protocol = discovery()
+    call(protocol.onvif, "<tds:SetDiscoveryMode><tds:DiscoveryMode>NonDiscoverable</tds:DiscoveryMode>"
+                         "</tds:SetDiscoveryMode>")
+    protocol.datagram_received(probe(), ("10.0.0.1", 5000))
+    assert protocol.transport.sent == []
+    status, root = call(protocol.onvif, "<tds:GetDiscoveryMode/>")
+    assert text_of(root, "DiscoveryMode") == "NonDiscoverable"
+
+
+def test_device_network_and_users():
+    onvif = OnvifCamera(ViscaCamera(), username="admin", password="secret")
+    status, root = onvif.handle(SOAP.format(header="", body="<tds:GetHostname/>").encode(), "192.168.1.20:8080")
+    assert status == 200  # PRE_AUTH
+    _, xml = onvif.handle(SOAP.format(header=username_token("admin", "secret"),
+                                      body="<tds:GetNetworkInterfaces/>").encode(), "192.168.1.20:8080")
+    assert text_of(ET.fromstring(xml), "Manual", "Address") == "192.168.1.20"
+    status, root = call(onvif, "<tds:GetUsers/>", username_token("admin", "secret"))
+    assert text_of(root, "User", "Username") == "admin" and text_of(root, "UserLevel") == "Administrator"
+    status, root = call(onvif, "<tds:SetHostname><tds:Name>bad name</tds:Name></tds:SetHostname>",
+                        username_token("admin", "secret"))
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:InvalidHostname"]
