@@ -246,7 +246,7 @@ def main() -> int:
           "HTTP %s" % status)
 
     status, text, root = client.call(
-        "device_service", "<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>")
+        "device", "<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>")
     # services are identified by the capability elements (Device/Media/PTZ), each
     # with an XAddr; the URL path spelling is not mandated by the spec
     services = {}
@@ -285,7 +285,7 @@ def main() -> int:
 
     # --- PTZ service --------------------------------------------------------
     status, text, root = client.call(
-        "ptz_service", "<tptz:GetStatus><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetStatus>" % profile_body)
+        "ptz", "<tptz:GetStatus><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetStatus>" % profile_body)
     pantilt = find_all(root, "PanTilt") if root is not None else []
     zoom = find_all(root, "Zoom") if root is not None else []
     check("GetStatus reports Position PanTilt/Zoom", status == 200 and root is not None
@@ -308,17 +308,25 @@ def main() -> int:
           and response_name(root) == "StopResponse", "HTTP %s" % status)
 
     # pick a free preset slot so existing presets on the camera are preserved;
-    # only the newly created preset is removed again
+    # only the newly created preset is removed again. The inventory request must
+    # succeed first — on error/fault/malformed XML no slot is picked and all
+    # preset mutations are skipped, so nothing existing can be overwritten.
     status, text, root = client.call(
-        "ptz_service", "<tptz:GetPresets><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetPresets>" % profile_body)
-    used = {el.get("token") or "" for el in find_all(root, "Preset")} if root is not None else set()
-    preset_token = next((str(n) for n in range(PRESET_COUNT) if str(n) not in used), None)
-    check("picked a free preset slot (existing presets kept)", preset_token is not None,
-          "preset %s, existing %s" % (preset_token, sorted(used)))
+        "ptz", "<tptz:GetPresets><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetPresets>" % profile_body)
+    inventory_ok = (status == 200 and root is not None
+                    and response_name(root) == "GetPresetsResponse"
+                    and not find_all(root, "Fault"))
+    used = {el.get("token") or "" for el in find_all(root, "Preset")} if inventory_ok else set()
+    preset_token = None
+    if inventory_ok:
+        preset_token = next((str(n) for n in range(PRESET_COUNT) if str(n) not in used), None)
+    check("GetPresets inventory ok, picked a free preset slot (existing presets kept)",
+          inventory_ok and preset_token is not None,
+          "HTTP %s, preset %s, existing %s" % (status, preset_token, sorted(used)))
 
     if preset_token is not None:
         status, text, root = client.call(
-            "ptz_service",
+            "ptz",
             "<tptz:SetPreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
             "<tptz:PresetName>conformance</tptz:PresetName>"
             "<tptz:PresetToken>%s</tptz:PresetToken></tptz:SetPreset>" % (profile_body, preset_token))
@@ -326,21 +334,21 @@ def main() -> int:
               and response_name(root) == "SetPresetResponse", "HTTP %s" % status)
 
         status, text, root = client.call(
-            "ptz_service", "<tptz:GetPresets><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetPresets>" % profile_body)
+            "ptz", "<tptz:GetPresets><tptz:ProfileToken>%s</tptz:ProfileToken></tptz:GetPresets>" % profile_body)
         preset_tokens = [el.get("token") or "" for el in find_all(root, "Preset")] if root is not None else []
         check("GetPresets lists the new preset %s" % preset_token,
               status == 200 and preset_token in preset_tokens,
               "HTTP %s, tokens %s" % (status, preset_tokens))
 
         status, text, root = client.call(
-            "ptz_service",
+            "ptz",
             "<tptz:GotoPreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
             "<tptz:PresetToken>%s</tptz:PresetToken></tptz:GotoPreset>" % (profile_body, preset_token))
         check("GotoPreset %s accepted" % preset_token, status == 200 and root is not None
               and response_name(root) == "GotoPresetResponse", "HTTP %s" % status)
 
         status, text, root = client.call(
-            "ptz_service",
+            "ptz",
             "<tptz:RemovePreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
             "<tptz:PresetToken>%s</tptz:PresetToken></tptz:RemovePreset>" % (profile_body, preset_token))
         check("RemovePreset %s accepted (only the new preset)" % preset_token,
