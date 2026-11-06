@@ -82,7 +82,19 @@ becomes the commit message; with a merge commit the PR's own commits are read. S
   rename the PR before it is merged if needed.
 - Do not edit `CHANGELOG.md` or the Release Please PR (`chore(main): release …`) by hand.
 
+The workflow `.github/workflows/pr-title.yml` (check "Conventional Commits") enforces
+these rules on every PR with `scripts/check_conventional_commits.py`, which reads the
+allowed types from `release-please-config.json`. Check locally before pushing:
+
+```sh
+git log --no-merges --format=%s origin/main..HEAD | python3 scripts/check_conventional_commits.py -
+```
+
+If a commit fails, reword it (`git commit --amend` or an interactive rebase) before
+the PR is merged; a renamed PR title re-runs the check automatically.
+
 - `.github/workflows/ci.yml` — tests on Python 3.8 and 3.13, builds the release artifacts.
+- `.github/workflows/pr-title.yml` — Conventional Commits gate for PR title and commits.
 - `.github/workflows/release-please.yml` — maintains the release PR (and its `uv.lock`);
   merging it tags the release and attaches wheel, sdist and `ptzsim.pyz` built by
   `scripts/build-release.sh`. PyPI upload runs only when the repository variable
