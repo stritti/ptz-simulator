@@ -102,27 +102,40 @@ appears when zoomed in. The field of view is 60° at 1× and narrows with the zo
 in the picture as they happen.
 
 The landscape has landmarks at fixed coordinates, so you can check by eye that a
-client's absolute moves and presets land where they should. Small details only
+client's absolute moves and presets land where they should. Small details (↳) only
 become readable when you zoom in:
 
-| Landmark | Pan | Tilt | Zoom to see details |
-|---|---|---|---|
-| Alps with snow caps | 52° … 108° | 0° … 14° | 1× |
-| Summit cross with a waving climber | 78.2° | 14° | 14×–20× |
-| Forest (with a fox hiding in it) | −28° … −8° | 0° … 7° | 1× (fox at −14.3°: 10×–20×) |
-| House with smoking chimney and a cat in the window | −95° | 0° … 10° | 1.5× |
-| Sun wearing sunglasses | −50° | 28° … 39° | 2× |
-| Flock of birds (a straggler calls “wait for me!” at 17.3°) | 22° | 20° … 28° | 1× (call: 10×–20×) |
-| Plane towing a “HELLO, PTZ CLIENT!” banner | 48° | 34° … 37° | 2×–3× |
-| UFO beaming up a cow | 140° | 0° … 20° | 1.5× (cow at 6°: 3×–6×) |
-| Hot-air balloon | −140° | 20° … 28° | 2× |
-| Lake with a rubber duck (−63°) and a lake monster (−55°) | −60° | −13° … −5° | 1× (duck, monster: 6×–10×) |
-| Billboard “VISCA HOME COMMAND 81 01 06 04 FF” | −165° | 0° … 5° | 4× |
-| Billboard “ONVIF says: `<tptz:GotoHomePosition/>`” | 165° | 0° … 5° | 4× |
-| Rocket | 10° | 60° … 67° | 1.5× |
-| Buried treasure with a “dig here!” note | 30° | −28° … −26° | 3× (note: 12×–20×) |
+![Panorama of the simulated scene from pan −200° to +200° with the landmarks labelled](website/public/images/scene/panorama.svg)
 
-The billboards stand behind the camera, near the pan limits (±170°).
+<!-- scene-tour:start -->
+| Landmark | Pan | Tilt | Zoom |
+|---|---|---|---|
+| Alps | 80° | 6° | 1× |
+| ↳ Summit cross | 78.2° | 14.1° | 20× |
+| Forest | −18° | 4° | 1.5× |
+| ↳ Fox | −14.3° | 0.4° | 10× |
+| House | −95° | 5° | 1.5× |
+| Sun | −50° | 32° | 2× |
+| Flock of birds | 22° | 24° | 2× |
+| ↳ Straggler | 17.8° | 24.7° | 15× |
+| Plane with banner | 48° | 35.5° | 2.5× |
+| UFO | 140° | 10° | 1.5× |
+| ↳ Abducted cow | 140° | 6° | 5× |
+| Hot-air balloon | −140° | 24° | 2× |
+| Lake | −60° | −9° | 2× |
+| ↳ Rubber duck | −63° | −7.9° | 12× |
+| ↳ Lake monster | −55° | −10.2° | 8× |
+| VISCA billboard | −165° | 2.5° | 4× |
+| ONVIF billboard | 165° | 2.5° | 4× |
+| Rocket | 10° | 63° | 2× |
+| Buried treasure | 30° | −27.5° | 4× |
+<!-- scene-tour:end -->
+
+The billboards stand behind the camera, near the pan limits (±170°). The
+*Camera scene* page of the documentation website (`website/scene.md`) shows every
+landmark in the NDI picture and in the viewfinder, with the VISCA packets and ONVIF
+`AbsoluteMove` values to get there. `scripts/scene_docs.py` generates the tables
+and images from `ptzsim/scenery.py`.
 
 The keyboard UI uses `curses` and needs a terminal, so it is not available on
 native Windows Python (use WSL) or when stdin/stdout are redirected; `serve` then

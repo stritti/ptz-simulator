@@ -45,3 +45,23 @@
   font-size: 14px;
   line-height: 1.6;
 }
+
+.vp-doc .scene-shots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  align-items: start;
+  margin: 16px 0;
+}
+
+.vp-doc .scene-shots p {
+  margin: 0;
+}
+
+.vp-doc .scene-shots img,
+.vp-doc img[src*="panorama"] {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+}

@@ -134,7 +134,10 @@ the PR is merged; a renamed PR title re-runs the check automatically.
 - `ptzsim/scenery.py` — landmarks at fixed pan/tilt (text art, colours for terminal and
   NDI), drawn by both renderers. One art character is `px` degrees wide and twice as
   high; when zoomed in, solid characters fill, lines stretch and text is drawn once.
-  The landmark table in README.md lists their coordinates; keep it in sync.
+  `scripts/scene_docs.py` generates the landmark tables in README.md and
+  `website/scene.md` and the images in `website/public/images/scene/`; after changing
+  the scene run `uv run --with numpy python scripts/scene_docs.py --images`
+  (`tests/test_scene_docs.py` fails while the tables are out of date).
 - `ptzsim/cli.py` — `serve` and `send`; picks TUI, `--view-only` dashboard or `--no-tui`.
 
 ## ONVIF interoperability

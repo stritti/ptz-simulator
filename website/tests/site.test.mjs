@@ -61,6 +61,20 @@ for (const { name, input, base } of [
       'the ONVIF client guide target must be generated'
     )
 
+    const scenePath = join(output, 'scene.html')
+    assert.ok(existsSync(scenePath), 'the camera scene page must be generated')
+    const scene = readFileSync(scenePath, 'utf8')
+    for (const [page, html] of [['home', home], ['guide', guide], ['scene', scene]]) {
+      assert.ok(
+        html.includes(`src="${base}images/scene/panorama.svg"`),
+        `the ${page} page must show the scene panorama under the Pages base`
+      )
+    }
+    assert.match(scene, /id="ufo"/)
+    assert.ok(scene.includes(`src="${base}images/scene/ufo-ndi.png"`))
+    assert.ok(scene.includes(`src="${base}images/scene/ufo-tui.svg"`))
+    assert.ok(existsSync(join(output, 'images', 'scene', 'ufo-tui.svg')), 'scene images must be built')
+
     const assets = [...home.matchAll(/(?:href|src)="([^"]*\/assets\/[^"]+)"/g)].map(
       (match) => match[1]
     )
