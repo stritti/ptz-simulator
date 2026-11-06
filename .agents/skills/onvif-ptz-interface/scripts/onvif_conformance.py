@@ -10,7 +10,8 @@ faults a conformant PTZ service must produce:
 - GetDeviceInformation, GetCapabilities (XAddrs for Device/Media/PTZ), GetServices
   (PTZ namespace), GetProfiles (profile with PTZ configuration), PTZ GetStatus
   (Position PanTilt/Zoom), ContinuousMove + Stop, presets
-  (SetPreset/GetPresets/GotoPreset/RemovePreset on a free slot — existing
+  (SetPreset without PresetToken so the camera allocates one, then
+  GetPresets/GotoPreset/RemovePreset with the returned token — existing
   presets on the camera are preserved and only the new preset is removed),
 - an out-of-range AbsoluteMove that must fault env:Sender/ter:InvalidArgVal,
 - optionally (--discovery) a WS-Discovery Probe to 239.255.255.250:3702 expecting
@@ -413,12 +414,19 @@ def main() -> int:
           "HTTP %s, preset %s, existing %s" % (status, preset_token, sorted(used)))
 
     if preset_token is not None:
+        # PTZ spec 5.4.1: omit PresetToken when creating a preset so the camera
+        # allocates a free token itself; use the token from SetPresetResponse
+        # (fallback: the free slot picked from the inventory)
         status, text, root = client.call(
             "ptz",
             "<tptz:SetPreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
-            "<tptz:PresetName>conformance</tptz:PresetName>"
-            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:SetPreset>" % (profile_body, preset_token))
-        check("SetPreset %s accepted" % preset_token, status == 200 and root is not None
+            "<tptz:PresetName>conformance</tptz:PresetName></tptz:SetPreset>" % profile_body)
+        resp_tokens = [el.text.strip() for el in find_all(root, "PresetToken") if el.text] \
+            if root is not None else []
+        if resp_tokens:
+            preset_token = resp_tokens[0]
+        check("SetPreset accepted (camera-allocated token %s)" % preset_token,
+              status == 200 and root is not None
               and response_name(root) == "SetPresetResponse", "HTTP %s" % status)
 
         status, text, root = client.call(

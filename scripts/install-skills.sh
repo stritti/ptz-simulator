@@ -23,8 +23,10 @@
 
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-SKILLS_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)/.agents/skills
+# cd -P resolves symlinks, so a target that is a symlink to this checkout is
+# still recognized as the source directory (physical path comparison)
+SCRIPT_DIR=$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd)
+SKILLS_DIR=$(CDPATH= cd -P -- "$SCRIPT_DIR/.." && pwd)/.agents/skills
 
 ALL_TOOLS="copilot claude agents cursor vibe codex gemini windsurf opencode cline roo"
 
@@ -110,8 +112,8 @@ for tool in $TOOLS; do
     mkdir -p "$dest"
     for skill in $SKILLS; do
         if [ -f "$SKILLS_DIR/$skill/SKILL.md" ]; then
-            src=$(CDPATH= cd -- "$SKILLS_DIR/$skill" && pwd)
-            dst=$(CDPATH= cd -- "$dest" && pwd)/$skill
+            src=$(CDPATH= cd -P -- "$SKILLS_DIR/$skill" && pwd)
+            dst=$(CDPATH= cd -P -- "$dest" && pwd)/$skill
             if [ "$src" = "$dst" ]; then
                 printf 'skip %s: destination is the source directory %s\n' "$skill" "$dest"
                 continue
