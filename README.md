@@ -147,6 +147,7 @@ default) needs root privileges, so 8080 is the default.
   `Add`/`Remove` `VideoSource`/`VideoEncoder`/`PTZ` `Configuration`. `GetStreamUri` returns
   `--rtsp-uri` (default `rtsp://<host>:554/stream`); ptzsim does not stream video itself, and
   without a source and encoder in the profile it fails with `ter:IncompleteConfiguration`.
+  After `RemovePTZConfiguration`, PTZ moves, status and presets fail with `ter:NoPTZProfile`.
   `GetSnapshotUri` is not supported (`SnapshotUri="false"`).
 - **PTZ**: `ContinuousMove` (with `Timeout`, default 5 s; every new call extends it),
   `Stop`, `AbsoluteMove`, `RelativeMove`, `GetStatus`, `GotoHomePosition`, `SetHomePosition`,

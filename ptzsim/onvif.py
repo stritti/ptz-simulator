@@ -409,6 +409,12 @@ class OnvifCamera:
         if (token is not None or required) and token != PROFILE_TOKEN:
             raise invalid_arg("ter:NoProfile", f"unknown profile {token}")
 
+    def _check_ptz_profile(self, request: ET.Element) -> None:
+        """PTZ operations need a profile that holds the PTZ configuration (RemovePTZConfiguration)."""
+        self._check_profile(request)
+        if not self.profile_configs["ptz"]:
+            raise invalid_arg("ter:NoPTZProfile", "profile has no PTZ configuration")
+
     # ------------------------------------------------------------- device
     def get_system_date_and_time(self, request, host) -> str:
         now = datetime.now(timezone.utc)
@@ -896,7 +902,7 @@ class OnvifCamera:
                 f'<tt:Zoom x="{_f(zoom_to_onvif(zoom))}" space="{ZOOM_POSITION_SPACE}"/>')
 
     def get_status(self, request, host) -> str:
-        self._check_profile(request)
+        self._check_ptz_profile(request)
         s = self.state
         pt_moving = s.pan_target or s.tilt_target or s.pan_velocity or s.tilt_velocity
         zoom_moving = s.zoom_target or s.zoom_velocity
@@ -933,7 +939,7 @@ class OnvifCamera:
         return max(pan, 1.0), max(tilt, 1.0), st.clamp(sz if sz is not None else 1.0, 0.05, 1.0)
 
     def continuous_move(self, request, host) -> str:
-        self._check_profile(request)
+        self._check_ptz_profile(request)
         self._require_power()
         s = self.state
         vx, vy = self._xy(find(request, "Velocity", "PanTilt"))
@@ -974,7 +980,7 @@ class OnvifCamera:
         self.camera.record("ONVIF", "ContinuousMove timeout, stopped")
 
     def stop(self, request, host) -> str:
-        self._check_profile(request)
+        self._check_ptz_profile(request)
         stop_pt = (text_of(request, "PanTilt") or "true").lower() == "true"
         stop_zoom = (text_of(request, "Zoom") or "true").lower() == "true"
         s = self.state
@@ -1006,7 +1012,7 @@ class OnvifCamera:
         if not self.absolute:
             raise OnvifFault("ter:ActionNotSupported/ter:OptionalActionNotSupported",
                              "AbsoluteMove is not supported", sender=False)
-        self._check_profile(request)
+        self._check_ptz_profile(request)
         self._require_power()
         self._cancel_timer()
         x, y = self._xy(find(request, "Position", "PanTilt"))
@@ -1021,7 +1027,7 @@ class OnvifCamera:
         return "<tptz:AbsoluteMoveResponse/>"
 
     def relative_move(self, request, host) -> str:
-        self._check_profile(request)
+        self._check_ptz_profile(request)
         self._require_power()
         self._cancel_timer()
         s = self.state
@@ -1040,7 +1046,7 @@ class OnvifCamera:
         return "<tptz:RelativeMoveResponse/>"
 
     def goto_home(self, request, host) -> str:
-        self._check_profile(request)
+        self._check_ptz_profile(request)
         self._require_power()
         self._cancel_timer()
         self.state.home()
@@ -1050,14 +1056,14 @@ class OnvifCamera:
         return "<tptz:GotoHomePositionResponse/>"
 
     def set_home(self, request, host) -> str:
-        self._check_profile(request)
+        self._check_ptz_profile(request)
         self.state.set_home()
         self.camera.record("ONVIF", "SetHomePosition")
         return "<tptz:SetHomePositionResponse/>"
 
     # ------------------------------------------------------------ presets
     def get_presets(self, request, host) -> str:
-        self._check_profile(request)
+        self._check_ptz_profile(request)
         items = "".join(
             f'<tptz:Preset token="{n}"><tt:Name>{escape(p.name or f"Preset {n}")}</tt:Name>'
             f"<tt:PTZPosition>{self._vector_xml(p.pan, p.tilt, p.zoom)}</tt:PTZPosition></tptz:Preset>"
@@ -1074,7 +1080,7 @@ class OnvifCamera:
         return number
 
     def set_preset(self, request, host) -> str:
-        self._check_profile(request)
+        self._check_ptz_profile(request)
         if self.state.moving:  # PTZ spec 5.4.1: fails while the unit moves
             raise action_failed("ter:MovingPTZ", "preset cannot be set while the camera moves")
         token = text_of(request, "PresetToken")
@@ -1089,7 +1095,7 @@ class OnvifCamera:
         return f"<tptz:SetPresetResponse><tptz:PresetToken>{number}</tptz:PresetToken></tptz:SetPresetResponse>"
 
     def goto_preset(self, request, host) -> str:
-        self._check_profile(request)
+        self._check_ptz_profile(request)
         self._require_power()
         self._cancel_timer()
         number = self._preset_number(text_of(request, "PresetToken"))
@@ -1104,7 +1110,7 @@ class OnvifCamera:
         return "<tptz:GotoPresetResponse/>"
 
     def remove_preset(self, request, host) -> str:
-        self._check_profile(request)
+        self._check_ptz_profile(request)
         number = self._preset_number(text_of(request, "PresetToken"))
         if number not in self.state.presets:
             raise invalid_arg("ter:NoToken", f"preset {number} not set")
@@ -1347,7 +1353,7 @@ class DiscoveryProtocol(asyncio.DatagramProtocol):
         xaddrs = f"<d:XAddrs>http://{host}:{self.http_port}/onvif/device_service</d:XAddrs>" if with_xaddrs else ""
         return (f"<a:EndpointReference><a:Address>{self.address}</a:Address></a:EndpointReference>"
                 "<d:Types>dn:NetworkVideoTransmitter tds:Device</d:Types>"
-                f"<d:Scopes>{' '.join(self.scopes)}</d:Scopes>{xaddrs}"
+                f"<d:Scopes>{escape(' '.join(self.scopes))}</d:Scopes>{xaddrs}"
                 "<d:MetadataVersion>1</d:MetadataVersion>")
 
     def _send(self, addr, action: str, item: str, relates_to: str, host: str) -> None:

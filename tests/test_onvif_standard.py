@@ -420,3 +420,26 @@ def test_device_network_and_users():
     status, root = call(onvif, "<tds:SetHostname><tds:Name>bad name</tds:Name></tds:SetHostname>",
                         username_token("admin", "secret"))
     assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:InvalidHostname"]
+
+
+def test_ptz_operations_need_the_ptz_configuration(onvif):
+    assert call(onvif, f"<trt:RemovePTZConfiguration>{M}</trt:RemovePTZConfiguration>")[0] == 200
+    status, root = call(onvif, f'<tptz:RelativeMove>{P}<tptz:Translation><tt:PanTilt x="0.1" y="0"/>'
+                               "</tptz:Translation></tptz:RelativeMove>")
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:NoPTZProfile"]
+    assert onvif.state.pan_target is None and onvif.state.pan == 0
+    assert call(onvif, f"<trt:GetStreamUri>{M}</trt:GetStreamUri>")[0] == 200
+    body = (f"<trt:AddPTZConfiguration>{M}<trt:ConfigurationToken>PTZConfig_1</trt:ConfigurationToken>"
+            "</trt:AddPTZConfiguration>")
+    assert call(onvif, body)[0] == 200
+    assert call(onvif, f"<tptz:GetStatus>{P}</tptz:GetStatus>")[0] == 200
+
+
+def test_discovery_escapes_configured_scopes():
+    protocol = discovery()
+    call(protocol.onvif, "<tds:SetScopes><tds:Scopes>onvif://www.onvif.org/location/Lab?a=1&amp;b=2</tds:Scopes>"
+                         "</tds:SetScopes>")
+    root = ET.fromstring(protocol.probe_match("uuid:1", "10.0.0.9"))
+    assert "onvif://www.onvif.org/location/Lab?a=1&b=2" in text_of(root, "Scopes").split()
+    _, root = call(protocol.onvif, "<tds:GetScopes/>")
+    assert "onvif://www.onvif.org/location/Lab?a=1&b=2" in [text_of(s, "ScopeItem") for s in find(root, "Body")[0]]
