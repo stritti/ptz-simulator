@@ -5,16 +5,34 @@ SPDX-License-Identifier: MIT
 
 # ptzsim – command-line PTZ camera simulator
 
-Simulates a PTZ camera controlled via **ONVIF**, **VISCA** and **NDI**, so the PTZ
-control of the `streaming-server` (branch `feature/ptz-control`, which uses ONVIF)
-can be tested without a real camera. All protocols control the same camera. The
-simulator keeps the camera state (pan, tilt, zoom, focus, presets, power) and
-shows it live in the terminal.
+Simulates a PTZ camera controlled via **ONVIF**, **VISCA** and **NDI**, so PTZ
+clients can be tested without a real camera. All protocols control the same
+camera. The simulator keeps the camera state (pan, tilt, zoom, focus, presets,
+power) and shows it live in the terminal.
 
 ONVIF and VISCA need nothing but Python ≥ 3.8 (standard library only). NDI
 additionally needs the `ndi` extra (see [NDI](#ndi)). The project is managed
 with [uv](https://docs.astral.sh/uv/): `uv sync` creates `.venv` with the dev
 dependencies.
+
+## Installation
+
+ptzsim needs only Python ≥ 3.8. Pick one:
+
+```bash
+# Single file, nothing to install: download and run with any Python 3
+curl -LO https://github.com/stritti/ptz-simulator/releases/latest/download/ptzsim.pyz
+python3 ptzsim.pyz serve --onvif          # Windows: py ptzsim.pyz serve --onvif
+
+# As a command on the PATH (with uv or pipx)
+uv tool install git+https://github.com/stritti/ptz-simulator
+pipx install git+https://github.com/stritti/ptz-simulator
+ptzsim serve --onvif
+```
+
+Wheel, sdist and `ptzsim.pyz` of every version are attached to the
+[GitHub releases](https://github.com/stritti/ptz-simulator/releases). For NDI,
+install the extra: `uv tool install "ptzsim[ndi] @ git+https://github.com/stritti/ptz-simulator"`.
 
 ## Supported transports
 
@@ -34,7 +52,7 @@ Transports can be combined; they all control the same camera. Without any option
 
 ```bash
 cd ptz-simulator
-uv run ptzsim serve --onvif --onvif-user admin --onvif-password secret   # ONVIF as used by the streaming-server
+uv run ptzsim serve --onvif --onvif-user admin --onvif-password secret   # ONVIF with authentication
 uv run ptzsim serve --onvif --sony       # ONVIF and VISCA at the same time
 uv run ptzsim serve                      # Sony VISCA/IP on UDP 52381
 uv run ptzsim serve --tcp --sony         # TCP 5678 and UDP 52381
@@ -57,7 +75,8 @@ dashboard mode, log messages go to `ptzsim.log`.
 In a terminal, `serve` shows the live dashboard and lets you drive the camera
 from the keyboard. Your actions show up in the command log as `TUI`, next to the
 commands from ONVIF, VISCA or NDI clients, and they change the same camera, so the
-streaming-server sees the new position on its next `GetStatus`.
+camera state is shared with every connected client. ONVIF clients can read the
+current position using `GetStatus`.
 
 | Key | Action |
 |-----|--------|
@@ -79,30 +98,31 @@ Next to the dashboard (or above it in narrow terminals) the TUI shows the
 picture, drawn with text characters. The horizon is at 0° tilt, the ground has a
 5° checker pattern, a post with its angle stands every 45° of pan, and a 1° grid
 appears when zoomed in. The field of view is 60° at 1× and narrows with the zoom
-(3° at 20×); the caption shows pan, tilt and zoom. Moves from the streaming-server
-or any other client show up in the picture as they happen.
+(3° at 20×); the caption shows pan, tilt and zoom. Moves from any client show up
+in the picture as they happen.
 
 The keyboard UI uses `curses` and needs a terminal, so it is not available on
 native Windows Python (use WSL) or when stdin/stdout are redirected; `serve` then
 falls back to the read-only dashboard.
 
-## Testing the streaming-server (ONVIF)
+## Testing ONVIF clients
 
-1. Start the simulator in the same network as the streaming-server:
+1. Start the simulator in the same network as the client:
    `uv run ptzsim serve --onvif --onvif-user admin --onvif-password secret --name "Camera 1"`.
    For several cameras, start several instances with their own port and name
    (`--onvif 8081 --name "Camera 2"`); all of them answer WS-Discovery.
-2. Start the camera search in the streaming-server. The simulator answers the
+2. Search for cameras with an ONVIF client. The simulator answers the
    WS-Discovery probe (`dn:NetworkVideoTransmitter`) with the XAddr
    `http://<ip>:8080/onvif/device_service` and the name in the scope
-   `onvif://www.onvif.org/name/<name>`. Alternatively enter IP and port directly.
-   Use the user and password from above.
-3. Pan, zoom, save and recall presets in the web UI. The dashboard shows
+   `onvif://www.onvif.org/name/<name>`. Alternatively enter the simulator's IP
+   and port directly. Use the user and password from above.
+3. Use the client to pan, tilt, zoom, save and recall presets. The dashboard shows
    position, motion, presets and the latest commands.
 
-If the server runs in Docker/WSL and does not find the camera, multicast is
-usually the reason; set `--advertise-host <IP>` or enter the camera directly.
-Port 80 (the ONVIF default) needs root privileges, so 8080 is the default.
+If a client runs in Docker/WSL and multicast discovery fails, enter the
+simulator's address directly. Set `--advertise-host <IP>` if the address
+advertised by discovery is not reachable by the client. Port 80 (the ONVIF
+default) needs root privileges, so 8080 is the default.
 
 ## ONVIF scope
 
