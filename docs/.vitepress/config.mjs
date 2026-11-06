@@ -50,6 +50,10 @@ export default defineConfig({
     ],
     search: { provider: 'local' },
     socialLinks: [{ icon: 'github', link: 'https://github.com/stritti/ptz-simulator' }],
-    footer: { message: 'A PTZ camera simulator for testing camera integrations.' }
+    footer: {
+      message:
+        'A PTZ camera simulator for testing camera integrations. Released under the <a href="https://github.com/stritti/ptz-simulator/blob/main/LICENSE">MIT License</a>.',
+      copyright: 'Copyright © 2026 Stephan Strittmatter'
+    }
   }
 })
