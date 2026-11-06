@@ -96,6 +96,14 @@ class OnvifClient:
         self.host, self.port, self.base = host, port, base
         self.user, self.password = user, password
         self.timeout = timeout
+        # service name -> path, filled from the XAddrs advertised in GetCapabilities
+        self.service_paths = {}
+
+    def remember_service(self, capability: str, xaddr: str) -> None:
+        """Route later calls for this service to the advertised XAddr path."""
+        m = re.match(r"^https?://[^/]+(/.*)$", xaddr.strip())
+        if m:
+            self.service_paths[capability.lower()] = m.group(1)
 
     def post(self, path: str, body: str):
         # fresh UsernameToken (nonce/created/digest) for every request: cameras may
@@ -114,7 +122,8 @@ class OnvifClient:
             conn.close()
 
     def call(self, service: str, body: str):
-        status, text = self.post("%s/%s" % (self.base, service), body)
+        path = self.service_paths.get(service) or "%s/%s_service" % (self.base, service)
+        status, text = self.post(path, body)
         try:
             root = ET.fromstring(text)
         except ET.ParseError:
@@ -222,7 +231,7 @@ def main() -> int:
         return ""
 
     # --- Device service -----------------------------------------------------
-    status, text, root = client.call("device_service", "<tds:GetDeviceInformation/>")
+    status, text, root = client.call("device", "<tds:GetDeviceInformation/>")
     check("GetDeviceInformation", status == 200 and root is not None
           and response_name(root) == "GetDeviceInformationResponse",
           "HTTP %s" % status)
@@ -240,14 +249,25 @@ def main() -> int:
     check("GetCapabilities advertises Device/Media/PTZ capabilities with XAddrs",
           status == 200 and all(s in services for s in ("Device", "Media", "PTZ")),
           "HTTP %s, capabilities %s" % (status, services))
+    # subsequent service calls go to the advertised XAddr paths, not hard-coded ones
+    for capability, xaddr in services.items():
+        client.remember_service(capability, xaddr)
 
     status, text, root = client.call(
-        "device_service", "<tds:GetServices><tds:IncludeCapability>true</tds:IncludeCapability></tds:GetServices>")
-    check("GetServices lists the PTZ service", status == 200 and root is not None
-          and TPTZ in text, "HTTP %s" % status)
+        "device", "<tds:GetServices><tds:IncludeCapability>true</tds:IncludeCapability></tds:GetServices>")
+    ptz_xaddr = None
+    for svc in find_all(root, "Service") if root is not None else []:
+        ns = find_all(svc, "Namespace")
+        xa = find_all(svc, "XAddr")
+        if ns and xa and (ns[0].text or "").strip() == TPTZ \
+                and (xa[0].text or "").strip().startswith("http"):
+            ptz_xaddr = xa[0].text.strip()
+    check("GetServices lists the PTZ service (Namespace + XAddr)",
+          status == 200 and ptz_xaddr is not None,
+          "HTTP %s, PTZ XAddr %s" % (status, ptz_xaddr))
 
     # --- Media service ------------------------------------------------------
-    status, text, root = client.call("media_service", "<trt:GetProfiles/>")
+    status, text, root = client.call("media", "<trt:GetProfiles/>")
     tokens = [el.get("token") or "" for el in find_all(root, "Profiles")] if root is not None else []
     check("GetProfiles returns the profile with a PTZ configuration",
           status == 200 and profile in tokens and root is not None
@@ -268,13 +288,13 @@ def main() -> int:
         '<tt:PanTilt x="0.1" y="0.0" space="%s"/><tt:Zoom x="0.0"/></tptz:Velocity>'
         "<tptz:Timeout>PT1S</tptz:Timeout></tptz:ContinuousMove>" % (profile, PT_VELOCITY_SPACE)
     )
-    status, text, root = client.call("ptz_service", move)
+    status, text, root = client.call("ptz", move)
     check("ContinuousMove accepted", status == 200 and root is not None
           and response_name(root) == "ContinuousMoveResponse", "HTTP %s" % status)
 
     stop = ("<tptz:Stop><tptz:ProfileToken>%s</tptz:ProfileToken>"
             "<tptz:PanTilt>true</tptz:PanTilt><tptz:Zoom>true</tptz:Zoom></tptz:Stop>" % profile)
-    status, text, root = client.call("ptz_service", stop)
+    status, text, root = client.call("ptz", stop)
     check("Stop accepted", status == 200 and root is not None
           and response_name(root) == "StopResponse", "HTTP %s" % status)
 
@@ -324,7 +344,7 @@ def main() -> int:
         '<tt:Zoom x="0.0" space="%s"/></tptz:Position></tptz:AbsoluteMove>'
         % (profile, PT_POSITION_SPACE, ZOOM_POSITION_SPACE)
     )
-    status, text, root = client.call("ptz_service", bad_move)
+    status, text, root = client.call("ptz", bad_move)
     subcodes = fault_subcodes(root, text)
     check("out-of-range AbsoluteMove faults env:Sender/ter:InvalidArgVal",
           root is not None and len(find_all(root, "Fault")) > 0

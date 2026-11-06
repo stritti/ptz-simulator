@@ -51,7 +51,7 @@ Pan/tilt drive directions: pan `01` = left, `02` = right, `03` = stop; tilt `01`
 | White balance mode | `09 04 35` | `0p` |
 | Preset speed select | `09 7E 04 1B` | `0p` |
 | Common preset speed | `09 7E 04 1C` | `0p 0p` |
-| Separate preset speed | `09 7E 01 0B` | `pp qq` |
+| Separate preset speed | `09 7E 01 0B pp` (pp = preset number) | `qq` (speed of preset pp) |
 | Pan/tilt position | `09 06 12` | `0Y0Y0Y0Y 0Z0Z0Z0Z` (pan, tilt) |
 | Max pan/tilt speed | `09 06 11` | `0V 0W` |
 | Pan/tilt status | `09 06 10` | two status bytes (see transports reference) |
