@@ -40,6 +40,15 @@ for (const { name, input, base } of [
     const home = readFileSync(homePath, 'utf8')
     const guide = readFileSync(guidePath, 'utf8')
     assert.ok(home.includes(`href="${base}guide.html`), 'the guide link must use the Pages base')
+    const screenshot = home.match(/<img\b[^>]*tui-dashboard\.png[^>]*>/)
+    assert.ok(screenshot, 'the homepage must include the TUI screenshot')
+    assert.ok(screenshot[0].includes(`src="${base}images/tui-dashboard.png"`))
+    assert.match(screenshot[0], /alt="[^"]+"/)
+    assert.ok(
+      home.includes(`href="${base}images/tui-dashboard.png"`),
+      'the screenshot must link to the full-size image'
+    )
+    assert.ok(existsSync(join(output, 'images', 'tui-dashboard.png')), 'the screenshot must be built')
     assert.match(guide, /id="running"/)
     assert.match(guide, /id="onvif-scope"/)
     assert.match(guide, /id="supported-visca-commands"/)
