@@ -136,6 +136,32 @@ def test_cancel_drops_waiting_completion():
     assert out[-1] == parse_hex("90 61 05 FF")
 
 
+def test_completions_carry_their_socket_and_axes():
+    sim = Simulator(ViscaCamera(), tick_interval=0.01)
+    out = []
+    sim.process(parse_hex("81 01 06 02 01 01 00 01 00 00 00 00 00 00 FF"), out.append)  # slow pan
+    sim.process(parse_hex("81 01 04 47 00 08 00 00 FF"), out.append)  # short zoom
+    assert out == [parse_hex("90 41 FF"), parse_hex("90 42 FF")]
+    sim.step(0.5)  # zoom has arrived, pan has not
+    assert out[-1] == parse_hex("90 52 FF") and len(out) == 3
+    sim.process(parse_hex("81 22 FF"), out.append)  # socket 2 is free again
+    assert out[-1] == parse_hex("90 62 05 FF")
+    sim.process(parse_hex("81 21 FF"), out.append)
+    assert out[-1] == parse_hex("90 61 04 FF")
+    sim.step(100)
+    assert out[-1] == parse_hex("90 61 04 FF")  # no completion after the cancel
+
+
+def test_if_clear_drops_waiting_completion():
+    sim = Simulator(ViscaCamera(), tick_interval=0.01)
+    out = []
+    sim.process(parse_hex("81 01 06 02 01 01 00 01 00 00 00 00 00 00 FF"), out.append)
+    sim.process(parse_hex("88 01 00 01 FF"), out.append)
+    sim.step(100)
+    assert out == [parse_hex("90 41 FF"), parse_hex("88 01 00 01 FF")]
+    assert not sim.camera.sockets
+
+
 class FakeTransport:
     def __init__(self):
         self.sent = []
@@ -179,3 +205,15 @@ def test_sony_ip_any_address_counts_as_camera_1():
     protocol = sony_protocol()
     protocol.datagram_received(sony(SONY_VISCA_COMMAND, 1, "83 01 06 04 FF"), ("10.0.0.1", 1))
     assert [d[8:] for d in protocol.transport.sent] == [parse_hex("90 41 FF"), parse_hex("90 51 FF")]
+
+
+def test_sony_ip_retransmission_after_error_is_executed_again():
+    protocol = sony_protocol()
+    camera = protocol.sim.camera
+    camera.state.power = False
+    home = sony(SONY_VISCA_COMMAND, 9, "81 01 06 04 FF")
+    protocol.datagram_received(home, ("10.0.0.1", 1))
+    assert protocol.transport.sent[-1][8:] == parse_hex("90 61 41 FF")
+    camera.state.power = True  # error cause removed
+    protocol.datagram_received(home, ("10.0.0.1", 1))
+    assert [d[8:] for d in protocol.transport.sent[-2:]] == [parse_hex("90 41 FF"), parse_hex("90 51 FF")]

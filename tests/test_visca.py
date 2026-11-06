@@ -154,8 +154,9 @@ def test_white_balance_modes_and_one_push(cam):
 
 
 def test_preset_numbers_follow_sony_range(cam):
-    assert send(cam, "81 01 04 3F 01 3F FF") == [ACK, DONE]
-    assert send(cam, "81 01 04 3F 01 40 FF") == [SYNTAX_ERROR]
+    # "00 to 63" in the Sony list is hex: 100 presets, 0x00..0x63
+    assert send(cam, "81 01 04 3F 01 63 FF") == [ACK, DONE]
+    assert send(cam, "81 01 04 3F 01 64 FF") == [SYNTAX_ERROR]
 
 
 def test_preset_speed_commands_and_inquiries(cam):
@@ -245,3 +246,40 @@ def test_completion_waits_for_motion():
     for _ in range(100):
         cam.state.tick(0.1)
     assert not cam.state.busy and cam.state.position()[0] == 256
+
+
+def test_manual_focus_is_not_executable_in_auto_focus(cam):
+    # Sony VISCA Command List, "Command Not Executable": manual focus during AF
+    assert send(cam, "81 01 04 08 02 FF") == [NOT_EXECUTABLE]
+    assert send(cam, "81 01 04 48 01 00 00 00 FF") == [NOT_EXECUTABLE]
+    assert send(cam, "81 01 04 08 00 FF") == [ACK, DONE]  # stop is harmless
+    send(cam, "81 01 04 38 03 FF")
+    assert send(cam, "81 01 04 48 01 00 00 00 FF") == [ACK, DONE]
+    assert cam.state.position()[3] == 0x1000
+
+
+def test_address_set_takes_the_address_and_passes_the_next_on():
+    cam = ViscaCamera(address=3)
+    assert send(cam, "88 30 01 FF") == [parse_hex("88 30 02 FF")]
+    assert cam.address == 1
+    assert send(cam, "81 01 06 04 FF") == [parse_hex("90 41 FF"), parse_hex("90 51 FF")]
+    assert send(cam, "83 01 06 04 FF") == []
+
+
+def test_two_sockets_then_buffer_full():
+    cam = ViscaCamera()
+    pan = cam.handle(parse_hex("81 01 06 02 01 01 00 01 00 00 00 00 00 00 FF"))
+    zoom = cam.handle(parse_hex("81 01 04 47 04 00 00 00 FF"))
+    assert [r.data for r in pan] == [parse_hex("90 41 FF"), parse_hex("90 51 FF")]
+    assert [r.data for r in zoom] == [parse_hex("90 42 FF"), parse_hex("90 52 FF")]
+    assert zoom[1].axes == frozenset({"zoom"})
+    # both sockets busy: "Command Buffer Full" with socket 0
+    assert send(cam, "81 01 04 38 03 FF") == [parse_hex("90 60 03 FF")]
+    # inquiries and IF_Clear do not use a socket
+    assert send(cam, "81 09 04 00 FF") == [parse_hex("90 50 02 FF")]
+    assert send(cam, "81 01 00 01 FF") == [parse_hex("90 50 FF")]
+    assert send(cam, "81 01 04 38 03 FF") == [ACK, DONE]
+
+
+def test_cancel_with_invalid_socket(cam):
+    assert send(cam, "81 23 FF") == [parse_hex("90 63 05 FF")]

@@ -10,9 +10,9 @@ import logging
 import os
 import struct
 import time
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, FrozenSet, List, Optional, Tuple
 
-from .visca import SOCKET, ViscaCamera, hexdump, split_packets
+from .visca import ViscaCamera, hexdump, split_packets
 
 log = logging.getLogger("ptzsim")
 
@@ -37,16 +37,20 @@ class Simulator:
     def __init__(self, camera: ViscaCamera, tick_interval: float = 0.02):
         self.camera = camera
         self.tick_interval = tick_interval
-        self._pending: List[Tuple[Send, bytes]] = []
+        # Completions waiting for motion: (sender, reply, socket, axes).
+        self._pending: List[Tuple[Send, bytes, Optional[int], FrozenSet[str]]] = []
         self.clients = 0
 
     def process(self, packet: bytes, send: Send) -> None:
         log.debug("rx %s", hexdump(packet))
+        self._flush()  # completions that are due go out before the next reply
         for reply in self.camera.handle(packet):
-            if reply.cancel_socket is not None and self._cancel(reply.cancel_socket):
-                self._send(send, self.camera.canceled_reply(reply.cancel_socket))
-            elif reply.after_motion and self.camera.state.busy:
-                self._pending.append((send, reply.data))
+            if reply.clear_buffers:
+                self._pending = []
+            if reply.cancel_socket is not None:
+                self._pending = [p for p in self._pending if p[2] != reply.cancel_socket]
+            if reply.after_motion:
+                self._pending.append((send, reply.data, reply.socket, reply.axes))
             else:
                 self._send(send, reply.data)
 
@@ -57,20 +61,18 @@ class Simulator:
         except (OSError, RuntimeError) as err:  # client went away
             log.debug("send failed: %s", err)
 
-    def _cancel(self, socket: int) -> bool:
-        """Drop the completion waiting on ``socket``; False if nothing is running there."""
-        if socket != SOCKET or not self._pending:
-            return False
-        self._pending = []
-        self.camera.state.stop_absolute()
-        return True
+    def _flush(self) -> None:
+        """Send every completion whose axes have stopped moving."""
+        state = self.camera.state
+        due = [p for p in self._pending if not state.axes_busy(p[3])]
+        if due:
+            self._pending = [p for p in self._pending if state.axes_busy(p[3])]
+            for send, data, _, _ in due:
+                self._send(send, data)
 
     def step(self, dt: float) -> None:
         self.camera.state.tick(dt)
-        if self._pending and not self.camera.state.busy:
-            pending, self._pending = self._pending, []
-            for send, data in pending:
-                self._send(send, data)
+        self._flush()
 
     async def run(self) -> None:
         last = time.monotonic()
@@ -165,17 +167,24 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
             return
         self._last_sequence[addr] = sequence
 
+        errors = []
+
+        def send(reply: bytes, a=addr, seq=sequence) -> None:
+            if reply[1] & 0xF0 == 0x60:
+                errors.append(reply)
+            self._reply(a, SONY_VISCA_REPLY, seq, bytes([0x90]) + reply[1:])
+
         buffer = bytearray(payload)
         for packet in split_packets(buffer):
             # Over IP the camera address is fixed to 1 and the controller to 0:
             # any address is accepted and every reply comes from 90.
             if packet[0] & 0xF0 == 0x80 and packet[0] != 0x88:
                 packet = bytes([0x80 | self.sim.camera.address]) + packet[1:]
-            self.sim.process(
-                packet,
-                lambda reply, a=addr, seq=sequence: self._reply(
-                    a, SONY_VISCA_REPLY, seq, bytes([0x90]) + reply[1:]),
-            )
+            self.sim.process(packet, send)
+        # Sony "Delivery confirmation": a message that was answered with an error was
+        # not performed, so a retransmission with the same number is executed again.
+        if errors:
+            self._last_sequence.pop(addr, None)
 
 
 async def serve_udp(sim: Simulator, host: str, port: int, sony: bool):

@@ -11,13 +11,17 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, List, Optional
+from typing import Deque, Dict, FrozenSet, List, Optional
 
 from . import state as st
 from .state import CameraState
 
 TERMINATOR = 0xFF
-SOCKET = 1
+# Sony cameras have two command buffers ("sockets", Sony VISCA Command List, "Socket").
+SOCKETS = (1, 2)
+SOCKET = SOCKETS[0]
+PAN_TILT = frozenset(("pan", "tilt"))
+ALL_AXES = frozenset(("pan", "tilt", "zoom", "focus"))
 
 VENDOR_ID = 0x0001  # Sony
 MODEL_ID = 0x0519
@@ -34,6 +38,7 @@ PRESET_SPEED_CODES = {mode: code for code, mode in PRESET_SPEED_MODES.items()}
 class ViscaError(Exception):
     """Raised by a command handler; carries the VISCA error code."""
 
+    MESSAGE_LENGTH = 0x01
     SYNTAX = 0x02
     BUFFER_FULL = 0x03
     CANCELLED = 0x04
@@ -48,10 +53,15 @@ class ViscaError(Exception):
 @dataclass
 class Reply:
     data: bytes
-    # When True the reply must only be sent once the camera has finished moving.
+    # When True the reply must only be sent once ``axes`` have finished moving.
     after_motion: bool = False
-    # Set for a cancel packet; the transport decides which reply to send.
+    # Socket the waiting completion belongs to, and the axes it waits for.
+    socket: Optional[int] = None
+    axes: FrozenSet[str] = ALL_AXES
+    # Set for a successful cancel: the waiting completion of this socket is dropped.
     cancel_socket: Optional[int] = None
+    # Set for IF_Clear: every waiting completion is dropped.
+    clear_buffers: bool = False
 
 
 @dataclass
@@ -114,32 +124,42 @@ class ViscaCamera:
         self.log: Deque[LogEntry] = deque(maxlen=200)
         self.command_count = 0
         self._pan_tilt_instructed = False  # for the "operation complete" status bits
+        # Busy command sockets and the axes their completion waits for.
+        self.sockets: Dict[int, FrozenSet[str]] = {}
+        self._socket = SOCKET  # socket of the command being handled
 
     # ---------------------------------------------------------------- replies
     @property
     def _reply_header(self) -> int:
         return (self.address + 8) << 4  # camera 1 answers with 0x90
 
-    def _ack(self) -> bytes:
-        return bytes([self._reply_header, 0x40 | SOCKET, TERMINATOR])
+    def _ack(self, socket: int) -> bytes:
+        return bytes([self._reply_header, 0x40 | socket, TERMINATOR])
 
-    def _completion(self, payload: bytes = b"") -> bytes:
-        return bytes([self._reply_header, 0x50 | SOCKET]) + payload + bytes([TERMINATOR])
+    def _completion(self, socket: int) -> bytes:
+        return bytes([self._reply_header, 0x50 | socket, TERMINATOR])
 
     def _inquiry_reply(self, payload: bytes) -> bytes:
         return bytes([self._reply_header, 0x50]) + payload + bytes([TERMINATOR])
 
     def _error(self, code: int, socket: int = SOCKET) -> bytes:
-        sock = 0 if code == ViscaError.SYNTAX else socket
-        return bytes([self._reply_header, 0x60 | sock, code, TERMINATOR])
+        # Message length, syntax error and buffer full always carry socket 0.
+        if code in (ViscaError.MESSAGE_LENGTH, ViscaError.SYNTAX, ViscaError.BUFFER_FULL):
+            socket = 0
+        return bytes([self._reply_header, 0x60 | socket, code, TERMINATOR])
 
-    def canceled_reply(self, socket: int = SOCKET) -> bytes:
-        return self._error(ViscaError.CANCELLED, socket)
+    def _free_socket(self) -> Optional[int]:
+        """Lowest free command socket; sockets whose motion has finished are freed first."""
+        for socket, axes in list(self.sockets.items()):
+            if not self.state.axes_busy(axes):
+                del self.sockets[socket]
+        return next((n for n in SOCKETS if n not in self.sockets), None)
 
     # ----------------------------------------------------------------- entry
     def handle(self, packet: bytes) -> List[Reply]:
         """Process one VISCA packet and return the replies to send."""
         self.command_count += 1
+        self._socket = SOCKET
         if len(packet) < 3 or packet[-1] != TERMINATOR or not packet[0] & 0x80:
             self._log(packet, "invalid packet", ok=False)
             return [Reply(self._error(ViscaError.SYNTAX))]
@@ -158,14 +178,12 @@ class ViscaCamera:
                 return self._command(packet, body[1:])
             if body[0] == 0x09:
                 return self._inquiry(packet, body[1:])
-            if body[0] & 0xF0 == 0x20:
-                socket = body[0] & 0x0F
-                self._log(packet, f"command cancel (socket {socket})", ok=True)
-                return [Reply(self._error(ViscaError.NO_SOCKET, socket), cancel_socket=socket)]
+            if body[0] & 0xF0 == 0x20 and len(body) == 1:
+                return self._cancel(packet, body[0] & 0x0F)
             raise ViscaError(ViscaError.SYNTAX, "unknown message type")
         except ViscaError as err:
             self._log(packet, f"error: {err}", ok=False)
-            return [Reply(self._error(err.code))]
+            return [Reply(self._error(err.code, self._socket))]
         except IndexError:
             self._log(packet, "error: truncated packet", ok=False)
             return [Reply(self._error(ViscaError.SYNTAX))]
@@ -178,15 +196,32 @@ class ViscaCamera:
     def _log(self, raw: bytes, description: str, ok: bool = True) -> None:
         self.log.append(LogEntry(raw, description, ok))
 
+    def _cancel(self, packet: bytes, socket: int) -> List[Reply]:
+        """Command cancel ``8x 2z FF``: stop the command waiting in socket z."""
+        self._free_socket()
+        axes = self.sockets.pop(socket, None)
+        if axes is None:
+            self._log(packet, f"command cancel: no command in socket {socket}", ok=False)
+            return [Reply(self._error(ViscaError.NO_SOCKET, socket))]
+        self.state.stop_axes(axes)
+        self._log(packet, f"command cancel (socket {socket})")
+        return [Reply(self._error(ViscaError.CANCELLED, socket), cancel_socket=socket)]
+
+    def _clear_buffers(self) -> None:
+        self.state.stop_all()
+        self.sockets.clear()
+
     # -------------------------------------------------------------- broadcast
     def _broadcast(self, packet: bytes) -> List[Reply]:
-        if packet[1:4] == b"\x30\x01\xff":
-            self._log(packet, "address set (broadcast)")
+        if len(packet) == 4 and packet[1] == 0x30 and 1 <= packet[2] <= 7:
+            # Address set: take the address and pass the next one down the chain.
+            self.address = packet[2]
+            self._log(packet, f"address set (broadcast): camera {self.address}")
             return [Reply(bytes([0x88, 0x30, self.address + 1, TERMINATOR]))]
         if packet[1:4] == b"\x01\x00\x01":
-            self.state.stop_all()
+            self._clear_buffers()
             self._log(packet, "IF_Clear (broadcast)")
-            return [Reply(bytes([0x88, 0x01, 0x00, 0x01, TERMINATOR]))]
+            return [Reply(bytes([0x88, 0x01, 0x00, 0x01, TERMINATOR]), clear_buffers=True)]
         self._log(packet, "unknown broadcast", ok=False)
         return [Reply(self._error(ViscaError.SYNTAX))]
 
@@ -196,10 +231,15 @@ class ViscaCamera:
         s = self.state
 
         if category == 0x00 and cmd == 0x01 and not args:
-            s.stop_all()
+            self._clear_buffers()
             self._log(packet, "IF_Clear")
             # Sony VISCA Command List: no ACK, completion with socket 0
-            return [Reply(bytes([self._reply_header, 0x50, TERMINATOR]))]
+            return [Reply(bytes([self._reply_header, 0x50, TERMINATOR]), clear_buffers=True)]
+
+        socket = self._free_socket()
+        if socket is None:
+            raise ViscaError(ViscaError.BUFFER_FULL, "both command sockets are busy")
+        self._socket = socket
 
         if category == 0x04 and cmd == 0x00:
             on = self._choice(args, {0x02: True, 0x03: False})
@@ -244,11 +284,13 @@ class ViscaCamera:
             value = decode_nibbles(args)
             s.zoom_to(value)
             self._log(packet, f"zoom direct {value:#06x}")
-            return self._done(after_motion=True)
+            return self._done(after_motion=True, axes=frozenset(("zoom",)))
 
         if cmd == 0x08:  # Focus
             self._expect_len(args, 1)
             arg = args[0]
+            if arg != 0x00:
+                self._manual_focus_only()
             if arg == 0x00:
                 s.drive_focus(0, 0)
                 self._log(packet, "focus stop")
@@ -265,10 +307,11 @@ class ViscaCamera:
 
         if cmd == 0x48:  # Focus direct
             self._expect_len(args, 4)
+            self._manual_focus_only()
             value = decode_nibbles(args)
             s.focus_to(value)
             self._log(packet, f"focus direct {value:#06x}")
-            return self._done(after_motion=True)
+            return self._done(after_motion=True, axes=frozenset(("focus",)))
 
         if cmd == 0x38:  # Focus mode
             arg = self._choice(args, {0x02: "auto", 0x03: "manual", 0x10: "toggle"})
@@ -401,12 +444,12 @@ class ViscaCamera:
                 base_tilt = s.tilt_target[0] if s.tilt_target else s.tilt
                 s.move_pan_tilt_to(base_pan + pan, base_tilt + tilt, pan_speed, tilt_speed)
                 self._log(packet, f"relative pan {pan:+d} tilt {tilt:+d}")
-            return self._done(after_motion=True)
+            return self._done(after_motion=True, axes=PAN_TILT)
 
         if cmd == 0x04 and not args:
             s.home()
             self._log(packet, "home")
-            return self._done(after_motion=True)
+            return self._done(after_motion=True, axes=PAN_TILT)
 
         if cmd == 0x05 and not args:
             s.stop_pan_tilt()
@@ -475,11 +518,21 @@ class ViscaCamera:
         return status.to_bytes(2, "big")
 
     # ---------------------------------------------------------------- helpers
-    def _done(self, after_motion: bool = False) -> List[Reply]:
+    def _done(self, after_motion: bool = False, axes: FrozenSet[str] = ALL_AXES) -> List[Reply]:
+        """ACK and completion for the current socket; absolute moves complete later."""
+        socket = self._socket
         if after_motion and self.instant:
             self.state.finish_moves()
-        wait = after_motion and not self.instant
-        return [Reply(self._ack()), Reply(self._completion(), after_motion=wait)]
+        wait = after_motion and not self.instant and self.state.axes_busy(axes)
+        if wait:
+            self.sockets[socket] = axes
+        return [Reply(self._ack(socket)),
+                Reply(self._completion(socket), after_motion=wait, socket=socket, axes=axes)]
+
+    def _manual_focus_only(self) -> None:
+        # Sony VISCA Command List: manual focus during auto focus is "not executable".
+        if self.state.autofocus:
+            raise ViscaError(ViscaError.NOT_EXECUTABLE, "manual focus while auto focus is on")
 
     @staticmethod
     def _expect_len(args: bytes, length: int) -> None:
