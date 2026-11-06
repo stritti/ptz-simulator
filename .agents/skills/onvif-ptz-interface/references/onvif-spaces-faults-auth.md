@@ -27,7 +27,9 @@ Convert the camera's native units at the edge (e.g. VISCA pan ±2448 ≈ ±170°
 ## SOAP 1.2 faults
 
 Envelope namespace `s` = `http://www.w3.org/2003/05/soap-envelope`; ONVIF fault subcodes
-live in `ter` = `http://www.onvif.org/ver10/tptz/wsdl` (and sibling namespaces). Structure:
+are QNames in the ONVIF **error namespace** `http://www.onvif.org/ver10/error` (the
+reference binds it to the prefix `ter`; the prefix itself is arbitrary — resolve QNames
+by namespace URI, not prefix). Structure:
 
 ```xml
 <s:Fault>

@@ -37,7 +37,9 @@ Reference documents:
 1. **Parse strictly, separate from I/O.** One function turns a raw packet into actions
    plus reply bytes; sockets/serial stay outside so handlers are unit-testable.
 2. **Framing**: header `0x80 | address`, payload, terminator `0xFF`. Replies come from
-   `0x90 | address` (`90 ... FF`). Never answer a broadcast (`0x88 ...`) with an ACK.
+   `(address + 8) << 4` — camera 1 answers `0x90`, camera 2 `0xA0` (over IP the address is
+   fixed to 1, so replies are always `0x90`). Never answer a broadcast (`0x88 ...`) with
+   an ACK.
 3. **Replies**: commands → ACK `90 4z FF` then completion `90 5z FF` (z = socket 1/2);
    inquiries → `90 50 ... FF` immediately; errors → `90 60 02 FF` (syntax),
    `90 6z 41 FF` (not executable), `90 60 03 FF` (both sockets busy).

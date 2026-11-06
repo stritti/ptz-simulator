@@ -13,7 +13,8 @@ faults a conformant PTZ service must produce:
   (SetPreset/GetPresets/GotoPreset/RemovePreset),
 - an out-of-range AbsoluteMove that must fault env:Sender/ter:InvalidArgVal,
 - optionally (--discovery) a WS-Discovery Probe to 239.255.255.250:3702 expecting
-  a ProbeMatches with XAddrs.
+  a ProbeMatches that identifies the target (sender address or XAddrs must match
+  --host/--port; answers from other cameras on the LAN are ignored).
 
 With --user/--password every request carries a WS-Security UsernameToken
 (PasswordDigest); PRE_AUTH operations are also checked without credentials.
@@ -33,6 +34,7 @@ import hashlib
 import http.client
 import io
 import os
+import re
 import socket
 import sys
 import time
@@ -113,6 +115,26 @@ class OnvifClient:
             root = None
         return status, text, root
 
+    def _target_hosts(self) -> set:
+        hosts = {self.host.lower()}
+        try:
+            hosts.add(socket.gethostbyname(self.host).lower())
+        except OSError:
+            pass
+        return hosts
+
+    def _identifies_target(self, addr, xaddrs) -> bool:
+        """A ProbeMatches counts only if it comes from or advertises the target."""
+        hosts = self._target_hosts()
+        if addr[0].lower() in hosts:
+            return True
+        for xaddr in xaddrs:
+            m = re.match(r"^https?://([^/:]+)(?::(\d+))?", (xaddr or "").strip())
+            if m and m.group(1).lower() in hosts \
+                    and (m.group(2) is None or int(m.group(2)) == self.port):
+                return True
+        return False
+
     def discovery_probe(self, timeout: float):
         probe = (
             '<s:Envelope xmlns:s="%s" xmlns:d="%s" xmlns:dn="%s"><s:Body><d:Probe>'
@@ -126,16 +148,19 @@ class OnvifClient:
             end = time.monotonic() + timeout
             while time.monotonic() < end:
                 try:
-                    data, _addr = sock.recvfrom(65535)
+                    data, addr = sock.recvfrom(65535)
                 except socket.timeout:
                     break
                 try:
                     root = ET.fromstring(data.decode("utf-8", "replace"))
                 except ET.ParseError:
                     continue
-                if find_all(root, "ProbeMatches"):
-                    xaddrs = [el.text or "" for el in find_all(root, "XAddrs")]
+                if not find_all(root, "ProbeMatches"):
+                    continue
+                xaddrs = [el.text or "" for el in find_all(root, "XAddrs")]
+                if self._identifies_target(addr, xaddrs):
                     return True, xaddrs
+                # an unrelated camera answered; keep waiting for the target
             return False, []
         finally:
             sock.close()
@@ -284,8 +309,8 @@ def main() -> int:
 
     if args.discovery:
         ok, xaddrs = client.discovery_probe(args.timeout)
-        check("WS-Discovery Probe answered with ProbeMatches + XAddrs", ok and len(xaddrs) > 0,
-              "XAddrs %s" % xaddrs)
+        check("WS-Discovery Probe answered by the target with ProbeMatches + XAddrs",
+              ok and len(xaddrs) > 0, "XAddrs %s" % xaddrs)
 
     failed = [r for r in results if not r[0]]
     print("\n%d/%d checks passed" % (len(results) - len(failed), len(results)))

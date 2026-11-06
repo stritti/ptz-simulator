@@ -12,6 +12,8 @@ SPDX-License-Identifier: MIT
   (`88 30 0w FF` → reply `88 30 0(w+1) FF`).
 - Packet: header byte `0x80 | target address` (camera 1 = `0x81`), payload bytes, always
   terminated by `0xFF`.
+- Replies come from `(address + 8) << 4`: camera 1 answers with `0x90`, camera 2 with
+  `0xA0` (Sony VISCA over IP fixes the address to 1, so replies are always `0x90`).
 - Broadcast packets start with `0x88` (e.g. IF_Clear `88 01 00 01 FF`) and get **no ACK**.
 
 ## VISCA over IP (Sony, UDP 52381)

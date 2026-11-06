@@ -57,8 +57,9 @@ Reference documents:
    `RemovePTZConfiguration` PTZ operations fail with `ter:NoPTZProfile`.
 6. **Motion semantics**: `ContinuousMove` velocity 0 on an axis stops that axis; an
    omitted axis keeps moving; `Timeout` (default 5 s, PT0.1S…PT60S) ends the move and
-   every new call extends it. `Stop` halts pan/tilt and zoom. `AbsoluteMove` /
-   `RelativeMove` take a `Translation` with the same spaces; out-of-range values fault.
+   every new call extends it. `Stop` halts pan/tilt and zoom. `AbsoluteMove` takes
+   `Position` (position-space URIs), `RelativeMove` takes `Translation`
+   (translation-space URIs); both accept an optional `Speed`; out-of-range values fault.
 7. **Media profile**: one profile (e.g. `Profile_1`) with a video source configuration
    (e.g. 640×360), an encoder configuration and a PTZ configuration token. `GetProfiles`
    must return it with the PTZ configuration; `GetStreamUri` returns the RTSP URI.
