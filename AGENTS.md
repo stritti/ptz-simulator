@@ -114,6 +114,14 @@ the PR is merged; a renamed PR title re-runs the check automatically.
 
 - `ptzsim/state.py` — `CameraState`: the shared camera model (position, motion at motor
   speed, presets) in VISCA units, with the position limits as module constants.
+- `ptzsim/protocol.py` — plugin interface for control protocols: `ProtocolPlugin` /
+  `PortPlugin`, `ServeContext`, `Endpoint`, the registry (`register`, `plugins`,
+  `selected`) and loading of in-tree (`EXTRA_MODULES`) and entry-point plugins
+  (group `ptzsim.protocols`). `cli.py` builds the `serve` options and start-up from it.
+- `ptzsim/builtin_protocols.py` — the plugins for VISCA (Sony IP, TCP, UDP, pty), ONVIF
+  and NDI; registration order is the order in `--help` and the dashboard title.
+- `ptzsim/testing.py` — `serve(*argv)` starts plugins like `ptzsim serve` for
+  end-to-end tests; `free_port()`.
 - `ptzsim/visca.py` — `ViscaCamera`: VISCA command parser on top of `CameraState`; the
   other protocols drive the same `ViscaCamera` instance.
 - `ptzsim/onvif.py` — `OnvifCamera`: SOAP over HTTP (Device, Media, PTZ services,
@@ -135,7 +143,7 @@ the PR is merged; a renamed PR title re-runs the check automatically.
   NDI), drawn by both renderers. One art character is `px` degrees wide and twice as
   high; when zoomed in, solid characters fill, lines stretch and text is drawn once.
   `scripts/scene_docs.py` generates the landmark tables in README.md and
-  `website/scene.md` and the images in `website/public/images/scene/`; after changing
+  `docs/scene.md` and the images in `docs/public/images/scene/`; after changing
   the scene run `uv run --with numpy python scripts/scene_docs.py --images`
   (`tests/test_scene_docs.py` fails while the tables are out of date).
 - `ptzsim/cli.py` — `serve` and `send`; picks TUI, `--view-only` dashboard or `--no-tui`.
@@ -145,3 +153,10 @@ the PR is merged; a renamed PR title re-runs the check automatically.
 Keep ONVIF discovery, PTZ motion, status and preset operations compatible with
 clients when changing `ptzsim/onvif.py`. Supported operations and limitations are
 listed in [README.md](README.md#onvif-scope).
+
+## Adding a protocol
+
+New protocols are plugins; follow [docs/adding-a-protocol.md](docs/adding-a-protocol.md)
+(step by step, with a tested example). Do not add protocol options or start-up code to
+`cli.py` directly. `tests/test_protocol.py` runs the guide's example code, so keep the
+example working when the interface changes, and update the guide with it.

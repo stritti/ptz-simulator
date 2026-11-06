@@ -9,8 +9,8 @@ import { dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-const website = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const vitepress = join(website, 'node_modules', 'vitepress', 'bin', 'vitepress.js')
+const docs = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const vitepress = join(docs, 'node_modules', 'vitepress', 'bin', 'vitepress.js')
 
 function buildSite(t, base) {
   const output = mkdtempSync(join(tmpdir(), 'ptzsim-site-'))
@@ -18,8 +18,8 @@ function buildSite(t, base) {
 
   const result = spawnSync(
     process.execPath,
-    [vitepress, 'build', website, '--outDir', output],
-    { cwd: website, env: { ...process.env, BASE_PATH: base }, encoding: 'utf8' }
+    [vitepress, 'build', docs, '--outDir', output],
+    { cwd: docs, env: { ...process.env, BASE_PATH: base }, encoding: 'utf8' }
   )
   return { output, result }
 }
@@ -34,12 +34,22 @@ for (const { name, input, base } of [
 
     const homePath = join(output, 'index.html')
     const guidePath = join(output, 'guide.html')
+    const referencePath = join(output, 'ptz_control_protocols_reference_guide.html')
     assert.ok(existsSync(homePath), 'the homepage must be generated')
     assert.ok(existsSync(guidePath), 'the guide must be generated')
+    assert.ok(existsSync(referencePath), 'the protocol reference must be generated')
 
     const home = readFileSync(homePath, 'utf8')
     const guide = readFileSync(guidePath, 'utf8')
+    const reference = readFileSync(referencePath, 'utf8')
     assert.ok(home.includes(`href="${base}guide.html`), 'the guide link must use the Pages base')
+    assert.ok(
+      home.includes(`href="${base}ptz_control_protocols_reference_guide.html`),
+      'the protocol reference link must use the Pages base'
+    )
+    assert.ok(reference.includes('PTZ Camera Control Protocols'), 'the reference must contain its guide')
+    assert.ok(reference.includes('<code>0x01</code>'), 'reference values must be rendered as readable code')
+    assert.doesNotMatch(reference, /\$\$|\\text\{|\\sum_/, 'formulas must not appear as raw LaTeX')
     const screenshot = home.match(/<img\b[^>]*tui-dashboard\.png[^>]*>/)
     assert.ok(screenshot, 'the homepage must include the TUI screenshot')
     assert.ok(screenshot[0].includes(`src="${base}images/tui-dashboard.png"`))
@@ -70,6 +80,10 @@ for (const { name, input, base } of [
         `the ${page} page must show the scene panorama under the Pages base`
       )
     }
+    assert.ok(
+      guide.includes(`href="${base}adding-a-protocol.html"`),
+      'README links to docs/*.md must point to the site pages'
+    )
     assert.match(scene, /id="ufo"/)
     assert.ok(scene.includes(`src="${base}images/scene/ufo-ndi.png"`))
     assert.ok(scene.includes(`src="${base}images/scene/ufo-tui.svg"`))

@@ -65,3 +65,15 @@
   border: 1px solid var(--vp-c-divider);
   border-radius: 8px;
 }
+
+.badges p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 24px;
+}
+
+.badges img {
+  display: block;
+  height: 20px;
+}

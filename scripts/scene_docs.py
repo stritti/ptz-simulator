@@ -8,9 +8,9 @@
     python3 scripts/scene_docs.py --check    # fail if they are out of date (used by tests)
     uv run --with numpy python scripts/scene_docs.py --images   # also render the images
 
-The tables in README.md and website/scene.md sit between ``<!-- scene-tour:start -->``
+The tables in README.md and docs/scene.md sit between ``<!-- scene-tour:start -->``
 and ``<!-- scene-tour:end -->`` (README) or ``<!-- scene-stops:... -->`` (scene page).
-Images go to website/public/images/scene/: the NDI picture (PNG), the TUI viewfinder
+Images go to docs/public/images/scene/: the NDI picture (PNG), the TUI viewfinder
 (SVG) and a labelled panorama (SVG). The tables need only the standard library.
 """
 
@@ -33,8 +33,8 @@ from ptzsim import state as st  # noqa: E402
 from ptzsim.onvif import pan_to_onvif, tilt_to_onvif, zoom_to_onvif  # noqa: E402
 
 README = ROOT / "README.md"
-SCENE_PAGE = ROOT / "website" / "scene.md"
-IMAGES = ROOT / "website" / "public" / "images" / "scene"
+SCENE_PAGE = ROOT / "docs" / "scene.md"
+IMAGES = ROOT / "docs" / "public" / "images" / "scene"
 PAN_SPEED, TILT_SPEED = 0x18, 0x14
 
 

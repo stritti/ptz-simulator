@@ -5,6 +5,14 @@ SPDX-License-Identifier: MIT
 
 # ptzsim – command-line PTZ camera simulator
 
+[![CI](https://img.shields.io/github/actions/workflow/status/stritti/ptz-simulator/ci.yml?branch=main&label=CI)](https://github.com/stritti/ptz-simulator/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/github/actions/workflow/status/stritti/ptz-simulator/pages.yml?branch=main&label=docs)](https://stritti.github.io/ptz-simulator/)
+[![Latest release](https://img.shields.io/github/v/release/stritti/ptz-simulator)](https://github.com/stritti/ptz-simulator/releases/latest)
+[![PyPI](https://img.shields.io/pypi/v/ptzsim)](https://pypi.org/project/ptzsim/)
+[![Python versions](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fstritti%2Fptz-simulator%2Fmain%2Fpyproject.toml)](https://github.com/stritti/ptz-simulator/blob/main/pyproject.toml)
+[![License: MIT](https://img.shields.io/github/license/stritti/ptz-simulator)](https://github.com/stritti/ptz-simulator/blob/main/LICENSE)
+[![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-fe5196?logo=conventionalcommits&logoColor=white)](https://www.conventionalcommits.org/en/v1.0.0/)
+
 Simulates a PTZ camera controlled via **ONVIF**, **VISCA** and **NDI**, so PTZ
 clients can be tested without a real camera. All protocols control the same
 camera. The simulator keeps the camera state (pan, tilt, zoom, focus, presets,
@@ -265,7 +273,7 @@ The landscape has landmarks at fixed coordinates, so you can check by eye that a
 client's absolute moves and presets land where they should. Small details (↳) only
 become readable when you zoom in:
 
-![Panorama of the simulated scene from pan −200° to +200° with the landmarks labelled](website/public/images/scene/panorama.svg)
+![Panorama of the simulated scene from pan −200° to +200° with the landmarks labelled](docs/public/images/scene/panorama.svg)
 
 <!-- scene-tour:start -->
 | Landmark | Pan | Tilt | Zoom |
@@ -292,7 +300,7 @@ become readable when you zoom in:
 <!-- scene-tour:end -->
 
 The billboards stand behind the camera, near the pan limits (±170°). The
-*Camera scene* page of the documentation website (`website/scene.md`) shows every
+*Camera scene* page of the documentation website (`docs/scene.md`) shows every
 landmark in the NDI picture and in the viewfinder, with the VISCA packets and ONVIF
 `AbsoluteMove` values to get there. `scripts/scene_docs.py` generates the tables
 and images from `ptzsim/scenery.py`.
@@ -419,7 +427,9 @@ uv run ptzsim send "81 09 06 12 FF"                    # query position
 
 ## Supported VISCA commands
 
-VISCA commands follow `docs/visca-interface-api-description-en-US-266656.pdf` (AXIS example). The Sony list in `docs/VISCA-Command-List-Version-2.00.pdf` uses other white balance codes (`04` = ATW).
+VISCA commands follow the [Axis VISCA interface description](https://www.axis.com/dam/public/70/3d/31/visca-interface-api-description-en-US-266656.pdf).
+The [Sony ILME-FR7 VISCA command list](https://pro.sony/s3/2022/09/14131603/VISCA-Command-List-Version-2.00.pdf)
+uses other white balance codes (`04` = ATW).
 
 Commands (reply: ACK `90 4z FF` + completion `90 5z FF`, z = socket; for absolute
 moves the completion is sent once the axes of that command have reached the target):
@@ -508,9 +518,9 @@ PTZSIM_ONVIF_CLIENT=1 uv run --group onvif-client pytest
 
 ## ONVIF conformance
 
-Checked against the ONVIF Core Specification 26.06 (`docs/ONVIF-Core-Specification.pdf`).
-The PTZ Service Specification is not in `docs/`, so the PTZ fault subcodes are not
-verified against it. Responses are not validated against the XSD schemas automatically.
+Checked against the [ONVIF Core Specification 26.06](https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf).
+The PTZ fault subcodes are not verified against the PTZ Service Specification.
+Responses are not validated against the XSD schemas automatically.
 
 - PTZ service: all mandatory operations (GetNodes, GetNode, GetConfigurations,
   GetConfiguration, GetConfigurationOptions, SetConfiguration, ContinuousMove, Stop,
@@ -532,6 +542,14 @@ SetConfiguration returns success for the known configuration token but changes n
 Not simulated: device management beyond what PTZ clients need (network, users,
 scopes, firmware), events, imaging beyond white balance, Media2, preset tours, auxiliary commands, HTTPS.
 
+## Adding a protocol
+
+Every protocol is a small plugin on top of the shared camera model, so a new one
+(e.g. Pelco-D or Panasonic AW) is one module with one class; options, start-up and
+dashboard come for free. Plugins can also live in a separate package and be found via
+the `ptzsim.protocols` entry point. The step-by-step guide with a tested example is in
+[docs/adding-a-protocol.md](docs/adding-a-protocol.md).
+
 ## Unsupported protocols
 
 These PTZ protocols are common but **not supported** by the simulator:
@@ -552,7 +570,7 @@ These PTZ protocols are common but **not supported** by the simulator:
 - ONVIF PTZ Service Specification 25.12: https://www.onvif.org/specs/2512/ONVIF-PTZ-Service-Spec-v2512.pdf
 - ONVIF Core Specification (device service, WS-Discovery on 239.255.255.250:3702): https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf
 - OASIS WS-Security UsernameToken Profile (PasswordDigest = Base64(SHA-1(nonce + created + password))): https://docs.oasis-open.org/wss/v1.1/wss-v1.1-spec-pr-UsernameTokenProfile-01.htm
-- ONVIF Imaging Service Specification 18.12 (`docs/ONVIF-Imaging-Service-Spec-v1812.pdf`)
+- ONVIF Imaging Service Specification 18.12: https://www.onvif.org/specs/srv/img/ONVIF-Imaging-Service-Spec-v1812.pdf
 - Client library used for the interop test, onvif-zeep-async: https://pypi.org/project/onvif-zeep-async/
 
 **VISCA**
@@ -576,13 +594,14 @@ These PTZ protocols are common but **not supported** by the simulator:
 
 ## Documentation website
 
-The VitePress site in `website/` uses this README as its guide. Before publishing
-it, review the examples for machine-specific hostnames and network addresses.
+The VitePress site in `docs/` uses this README as its guide and includes the
+PTZ protocol reference. Before publishing it, review the examples for
+machine-specific hostnames and network addresses.
 
 Node.js 20.19+ (20.x) or 22.12+ is required. From the repository directory:
 
 ```bash
-cd website
+cd docs
 npm ci
 npm run docs:dev      # local development server
 npm test              # check root and GitHub Pages subpath builds

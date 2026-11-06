@@ -8,15 +8,21 @@ if (!/^\/(?!\/)[^?#]*$/.test(pagesBase)) {
   throw new Error('BASE_PATH must start with "/" and be a local path without a query or fragment')
 }
 
-// README.md (included as the guide) refers to images by their repository path so that
-// they also show on GitHub; on the site they are served from the public directory.
-function publicImagesFromReadme(md) {
-  md.core.ruler.push('readme-public-images', (state) => {
+// README.md (included as the guide) refers to images and pages by their repository
+// path (docs/...) so that they also work on GitHub; on the site the images are served
+// from the public directory and the pages from the site root.
+function repositoryPathsInReadme(md) {
+  md.core.ruler.push('readme-repository-paths', (state) => {
     for (const token of state.tokens) {
       for (const child of token.children || []) {
         const src = child.type === 'image' && child.attrGet('src')
-        if (src && src.startsWith('website/public/')) {
-          child.attrSet('src', src.slice('website/public'.length))
+        if (src && src.startsWith('docs/public/')) {
+          child.attrSet('src', src.slice('docs/public'.length))
+        }
+        const href = child.type === 'link_open' && child.attrGet('href')
+        const page = href && href.match(/^docs\/([^/#]+)\.md(#.*)?$/)
+        if (page) {
+          child.attrSet('href', `/${page[1]}${page[2] || ''}`)
         }
       }
     }
@@ -28,11 +34,12 @@ export default defineConfig({
   lang: 'en-US',
   title: 'ptzsim',
   description: 'A PTZ camera simulator for ONVIF, VISCA and NDI.',
-  markdown: { config: publicImagesFromReadme },
+  markdown: { config: repositoryPathsInReadme },
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide' },
       { text: 'Camera scene', link: '/scene' },
+      { text: 'Protocol reference', link: '/ptz_control_protocols_reference_guide' },
       { text: 'Get started', link: '/guide#running' }
     ],
     sidebar: [
@@ -49,6 +56,7 @@ export default defineConfig({
       {
         text: 'Protocols',
         items: [
+          { text: 'Protocol reference', link: '/ptz_control_protocols_reference_guide' },
           { text: 'ONVIF integration', link: '/guide#testing-onvif-clients' },
           { text: 'ONVIF scope', link: '/guide#onvif-scope' },
           { text: 'VISCA clients', link: '/guide#testing-visca-clients' },
