@@ -271,8 +271,11 @@ class SceneRenderer:
                 continue
             grid = np.ix_(rows[ys], cols[xs])
             hit = mask[grid]
-            region = frame[ys[0]:ys[-1] + 1, xs[0]:xs[-1] + 1]
+            # xs need not be contiguous: a very wide view can see a landmark twice.
+            target = np.ix_(ys, xs)
+            region = frame[target]
             region[hit, :3] = rgb[grid][hit]
+            frame[target] = region
 
     def render(self, s: st.CameraState):
         np = self.np
