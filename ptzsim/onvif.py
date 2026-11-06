@@ -213,10 +213,17 @@ class OnvifCamera:
             "SetPreset": self.set_preset,
             "GotoPreset": self.goto_preset,
             "RemovePreset": self.remove_preset,
+            "GetVideoSources": self.get_video_sources,
+            "GetWsdlUrl": self.get_wsdl_url,
+        }
+        # The imaging service reuses operation names of the PTZ service (GetStatus, Stop,
+        # Move), so requests in its namespace are dispatched separately.
+        self._imaging_actions: Dict[str, Callable[[ET.Element, str], str]] = {
             "GetImagingSettings": self.get_imaging_settings,
             "SetImagingSettings": self.set_imaging_settings,
             "GetOptions": self.get_options,
-            "GetVideoSources": self.get_video_sources,
+            "GetMoveOptions": self.get_move_options,
+            "GetStatus": self.get_imaging_status,
         }
 
     @property
@@ -231,6 +238,9 @@ class OnvifCamera:
         ``authorization`` is the HTTP Authorization header. Raises :class:`Unauthorized`
         when the HTTP layer has to answer 401 with a digest challenge.
         """
+        if not xml_body.strip() and self._digest_offered(authorization):
+            # e.g. curl --digest probes with an empty POST: answer with the challenge
+            raise Unauthorized()
         try:
             root = ET.fromstring(xml_body)
         except ET.ParseError as err:
@@ -244,7 +254,10 @@ class OnvifCamera:
         try:
             if action not in PRE_AUTH:
                 self._check_auth(root, authorization, method, uri)
-            handler = self._actions.get(action)
+            if request.tag.startswith("{" + NS["timg"] + "}"):
+                handler = self._imaging_actions.get(action)
+            else:
+                handler = self._actions.get(action)
             if action == "GetServiceCapabilities":
                 handler = self._service_capabilities_handler(request)
             if handler is None:
@@ -257,6 +270,10 @@ class OnvifCamera:
             self.camera.record("ONVIF", f"{action}: {err}", ok=False)
             return 400, envelope(OnvifFault("ter:InvalidArgVal", str(err)).xml())
         return 200, envelope(response)
+
+    def _digest_offered(self, authorization: Optional[str]) -> bool:
+        """Credentials are required, none were sent on the HTTP level and digest is offered."""
+        return self.username is not None and self.auth != "wsse" and not authorization
 
     def _check_auth(self, root: ET.Element, authorization: Optional[str], method: str, uri: str) -> None:
         """Core spec 5.9.1, figure 4: HTTP digest first, then WS-UsernameToken."""
@@ -287,8 +304,10 @@ class OnvifCamera:
 
     def _check_http_digest(self, header: str, method: str, uri: str) -> None:
         params = {k: a or b for k, a, b in re.findall(r'(\w+)=(?:"([^"]*)"|([^,\s]*))', header[7:])}
+        # Core spec 5.9.1, figure 4: failed HTTP digest credentials get HTTP 401
         if params.get("username") != self.username or params.get("nonce") not in self._digest_nonces:
-            raise OnvifFault("ter:NotAuthorized", "HTTP digest: unknown user or nonce")
+            self.camera.record("ONVIF", "HTTP digest: unknown user or nonce", ok=False)
+            raise Unauthorized()
         def md5(text: str) -> str:
             return hashlib.md5(text.encode()).hexdigest()
         ha1 = md5(f"{self.username}:{params.get('realm', DIGEST_REALM)}:{self.password}")
@@ -299,7 +318,8 @@ class OnvifCamera:
         else:  # RFC 2069 style
             expected = md5(f"{ha1}:{params['nonce']}:{ha2}")
         if params.get("response") != expected:
-            raise OnvifFault("ter:NotAuthorized", "HTTP digest: wrong password")
+            self.camera.record("ONVIF", "HTTP digest: wrong password", ok=False)
+            raise Unauthorized()
 
     def _check_username_token(self, token: ET.Element) -> None:
         user = text_of(token, "Username")
@@ -383,6 +403,10 @@ class OnvifCamera:
             return (f"<{prefix}:GetServiceCapabilitiesResponse>{self._service_capabilities(prefix)}"
                     f"</{prefix}:GetServiceCapabilitiesResponse>")
         return handler
+
+    def get_wsdl_url(self, request, host) -> str:
+        return ("<tds:GetWsdlUrlResponse><tds:WsdlUrl>http://www.onvif.org/</tds:WsdlUrl>"
+                "</tds:GetWsdlUrlResponse>")
 
     def get_device_information(self, request, host) -> str:
         return ("<tds:GetDeviceInformationResponse><tds:Manufacturer>ptzsim</tds:Manufacturer>"
@@ -760,6 +784,15 @@ class OnvifCamera:
         self.camera.record("ONVIF", f"SetImagingSettings white balance {s.white_balance}")
         return "<timg:SetImagingSettingsResponse/>"
 
+    def get_move_options(self, request, host) -> str:
+        """No remote focus: the imaging spec (5.3.2) requires an empty answer."""
+        self._check_source(request)
+        return "<timg:GetMoveOptionsResponse><timg:MoveOptions/></timg:GetMoveOptionsResponse>"
+
+    def get_imaging_status(self, request, host) -> str:
+        self._check_source(request)
+        return "<timg:GetStatusResponse><timg:Status/></timg:GetStatusResponse>"
+
     def get_video_sources(self, request, host) -> str:
         return ("<trt:GetVideoSourcesResponse>"
                 f'<trt:VideoSources token="{IMAGING_SOURCE_TOKEN}"><tt:Framerate>{VIDEO_FRAMERATE}</tt:Framerate>'
@@ -796,7 +829,11 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
                 host_header = headers.get("host") or f"{local_ip}:{local_port}"
 
                 extra = ""
-                if method == "POST":
+                if method not in ("POST", "GET"):  # Core spec 5.8.2.4, table 5
+                    status, payload = 405, ""
+                    content_type = "text/plain; charset=utf-8"
+                    extra = "Allow: GET, POST\r\n"
+                elif method == "POST":
                     content_type = "application/soap+xml; charset=utf-8"
                     try:
                         status, payload = onvif.handle(body, host_header, headers.get("authorization"),
@@ -810,7 +847,7 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
                     content_type = "text/plain; charset=utf-8"
                 data = payload.encode()
                 reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized",
-                          500: "Internal Server Error"}[status]
+                          405: "Method Not Allowed", 500: "Internal Server Error"}[status]
                 close = headers.get("connection", "").lower() == "close"
                 writer.write(
                     f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{extra}"

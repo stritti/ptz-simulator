@@ -281,3 +281,58 @@ def test_broken_datagram_is_ignored():
     protocol = discovery()
     protocol.datagram_received(b"<not xml", ("10.0.0.1", 5000))
     assert protocol.transport.sent == []
+
+
+# ------------------------------------------------ review fixes (Core 26.06, Imaging 18.12)
+def test_imaging_requests_do_not_reach_ptz():
+    onvif = OnvifCamera(ViscaCamera())
+    call(onvif, f'<tptz:ContinuousMove>{P}<tptz:Velocity><tt:PanTilt x="0.5" y="0"/></tptz:Velocity>'
+                "</tptz:ContinuousMove>")
+    status, root = call(onvif, f"<timg:Stop {IMG_NS}>{SOURCE}</timg:Stop>")
+    assert status == 500 and subcodes(root) == ["ter:ActionNotSupported"]
+    assert onvif.state.pan_velocity != 0  # imaging Stop (focus) must not stop the PTZ unit
+    status, root = call(onvif, f"<timg:GetStatus {IMG_NS}>{SOURCE}</timg:GetStatus>")
+    response = find(root, "Body")[0]
+    assert status == 200 and response.tag == "{http://www.onvif.org/ver20/imaging/wsdl}GetStatusResponse"
+
+
+def test_imaging_move_options_are_empty(onvif):
+    status, root = call(onvif, f"<timg:GetMoveOptions {IMG_NS}>{SOURCE}</timg:GetMoveOptions>")
+    assert status == 200 and find(root, "MoveOptions") is not None and len(find(root, "MoveOptions")) == 0
+
+
+def test_get_wsdl_url_without_login():
+    onvif = OnvifCamera(ViscaCamera(), username="admin", password="secret")
+    status, root = call(onvif, "<tds:GetWsdlUrl/>")
+    assert status == 200 and text_of(root, "WsdlUrl")
+
+
+def test_failed_http_digest_gets_401():
+    onvif = OnvifCamera(ViscaCamera(), username="admin", password="secret")
+    port, stop = serve(onvif)
+    try:
+        assert post(port, "<trt:GetProfiles/>", user="admin", password="wrong")[0] == 401
+    finally:
+        stop()
+
+
+def raw_http(port, method, body=b""):
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    conn.request(method, "/onvif/device_service", body=body,
+                 headers={"Content-Type": "application/soap+xml", "Connection": "close"})
+    response = conn.getresponse()
+    response.read()
+    conn.close()
+    return response.status, response.getheader("WWW-Authenticate")
+
+
+def test_empty_post_gets_digest_challenge_and_other_methods_405():
+    onvif = OnvifCamera(ViscaCamera(), username="admin", password="secret")
+    port, stop = serve(onvif)
+    try:
+        status, challenge = raw_http(port, "POST")
+        assert status == 401 and challenge.startswith("Digest ")
+        assert raw_http(port, "PUT")[0] == 405
+    finally:
+        stop()
