@@ -14,6 +14,7 @@ import asyncio
 import base64
 import hashlib
 import io
+import json
 import logging
 import re
 import socket
@@ -26,6 +27,7 @@ from xml.sax.saxutils import escape
 
 from . import state as st
 from .visca import ViscaCamera
+from .network import get_all_interfaces_detailed, get_hostname_and_fqdn, interface_sort_key
 
 log = logging.getLogger("ptzsim")
 
@@ -806,8 +808,41 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
                         content_type = "text/plain; charset=utf-8"
                         extra = f"WWW-Authenticate: {onvif.digest_challenge()}\r\n"
                 else:
-                    status, payload = 200, f"ptzsim ONVIF camera '{onvif.name}'\n"
-                    content_type = "text/plain; charset=utf-8"
+                    # Handle GET requests
+                    if path == "/health" or path == "/":
+                        # Health check endpoint for frontend with detailed network info
+                        status = 200
+                        hostname, fqdn = get_hostname_and_fqdn()
+                        interfaces = get_all_interfaces_detailed()
+
+                        # Build a list of interfaces with addresses, main interfaces first
+                        iface_list = []
+                        for iface in sorted(interfaces.values(), key=interface_sort_key):
+                            ipv4_addrs = [addr for addr, _ in iface.ipv4_addresses]
+                            ipv6_addrs = iface.ipv6_addresses
+                            if ipv4_addrs or ipv6_addrs:
+                                iface_list.append({
+                                    "name": iface.name,
+                                    "ipv4": ipv4_addrs,
+                                    "ipv6": ipv6_addrs
+                                })
+
+                        health_data = {
+                            "status": "ok",
+                            "camera": onvif.name,
+                            "hostname": hostname,
+                            "fqdn": fqdn,
+                            "address": local_ip,
+                            "port": local_port,
+                            "interfaces": iface_list[:10] if iface_list else []  # Limit to 10 to avoid huge responses
+                        }
+                        payload = json.dumps(health_data) + "\n"
+                        content_type = "application/json; charset=utf-8"
+                    else:
+                        # Default response for other GET requests
+                        status = 200
+                        payload = f"ptzsim ONVIF camera '{onvif.name}'\n"
+                        content_type = "text/plain; charset=utf-8"
                 data = payload.encode()
                 reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized",
                           500: "Internal Server Error"}[status]

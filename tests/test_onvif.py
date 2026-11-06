@@ -7,6 +7,7 @@ import asyncio
 import base64
 import hashlib
 import http.client
+import json
 import os
 import socket
 import xml.etree.ElementTree as ET
@@ -14,6 +15,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from ptzsim import state as st
+from ptzsim.network import InterfaceInfo
 from ptzsim.onvif import (OnvifCamera, find, parse_duration, pan_from_onvif, pan_to_onvif,
                           serve_discovery, serve_onvif, text_of, tilt_from_onvif, tilt_to_onvif)
 from ptzsim.transports import Simulator
@@ -232,6 +234,34 @@ def test_http_server_keep_alive():
     results = asyncio.run(run())
     assert [s for s, _ in results] == [200, 200]
     assert b"ptz_service" in results[0][1] and b"Profile_1" in results[1][1]
+
+
+def test_health_lists_main_interface_first(monkeypatch):
+    interfaces = {}
+    for i in range(12):
+        bridge = InterfaceInfo(f"br-{i:02d}")
+        bridge.add_ipv4(f"172.{18 + i}.0.1", "255.255.0.0")
+        interfaces[bridge.name] = bridge
+    eth0 = InterfaceInfo("eth0")
+    eth0.add_ipv4("172.28.67.216", "255.255.240.0")
+    interfaces["eth0"] = eth0
+    monkeypatch.setattr("ptzsim.onvif.get_all_interfaces_detailed", lambda: interfaces)
+
+    async def run():
+        port = free_port()
+        await serve_onvif(OnvifCamera(ViscaCamera(instant=True)), "127.0.0.1", port)
+
+        def get():
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+            conn.request("GET", "/health")
+            response = conn.getresponse()
+            return response.status, json.loads(response.read())
+
+        return await asyncio.get_running_loop().run_in_executor(None, get)
+
+    status, health = asyncio.run(run())
+    assert status == 200 and health["status"] == "ok"
+    assert health["interfaces"][0] == {"name": "eth0", "ipv4": ["172.28.67.216"], "ipv6": []}
 
 
 PROBE = ('<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope" '

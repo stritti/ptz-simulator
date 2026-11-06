@@ -163,6 +163,47 @@ interfaces with `getifaddrs(3)` (Linux, macOS, BSD; no extra packages). Where
 `getifaddrs` is not available (Windows), the simulator falls back to the addresses
 of the hostname.
 
+### Health-Check API
+The simulator provides a health-check endpoint at `/health` (or `/`) that returns
+detailed JSON information:
+
+```bash
+curl http://127.0.0.1:8080/health
+```
+
+Response example:
+```json
+{
+    "status": "ok",
+    "camera": "PTZ-Simulator",
+    "hostname": "camera-host",
+    "fqdn": "camera-host.example.test",
+    "address": "192.0.2.10",
+    "port": 8080,
+    "interfaces": [
+        {
+            "name": "eth0",
+            "ipv4": ["192.0.2.10"],
+            "ipv6": ["fe80::1"]
+        },
+        {
+            "name": "docker0",
+            "ipv4": ["172.17.0.1"],
+            "ipv6": ["fe80::3"]
+        }
+    ]
+}
+```
+
+Clients can use this endpoint to:
+- Verify connectivity to the simulator
+- Discover available network interfaces
+- Identify the correct IP address to use for the connection
+- Get the hostname and FQDN for display purposes
+
+The `interfaces` list contains up to 10 interfaces with an address, main
+interfaces first.
+
 ## Keyboard control (TUI)
 
 In a terminal, `serve` shows the live dashboard and lets you drive the camera
