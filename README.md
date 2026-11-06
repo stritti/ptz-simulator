@@ -404,6 +404,39 @@ Start the simulator with `--sony`, `--tcp`, `--udp` or `--pty /tmp/ttyPTZ` and
 enter the IP and port in the client (52381 for Sony VISCA/IP, 5678 for
 VISCA/TCP), or `/tmp/ttyPTZ` as the serial port.
 
+## Testing Pelco-D clients
+
+Start the simulator with `--pelco-d [LINK]` (e.g. `--pelco-d /tmp/ttyPelcoD`) and
+open the printed pseudo terminal as the serial port in the client (2400–38400
+baud, 8N1; the simulator does not check the baud rate). The Pelco-D camera
+address is 1–255 (`--pelco-d-address`, default 1); frames for other addresses
+are ignored silently, as on a real RS-485 bus.
+
+Frames are 7 bytes: `FF <addr> <cmd1> <cmd2> <data1> <data2> <checksum>`, where
+`checksum = (addr + cmd1 + cmd2 + data1 + data2) mod 256`. Every executed command
+is answered with the 4-byte general response `FF <addr> <cmd1> <checksum>` (e.g.
+`FF 01 00 02 20 00 23` is answered with `FF 01 00 23`); a frame with a wrong
+checksum gets no reply. Implemented commands:
+
+| Command | Bytes | Effect |
+|---|---|---|
+| Drive | `FF a <cmd1> <bits> <pan spd> <tilt spd> chk` | cmd2 bits (bit 0 = 0): 0x02 pan right, 0x04 pan left, 0x08 tilt up, 0x10 tilt down, 0x20 zoom tele, 0x40 zoom wide, 0x80 focus far; focus near is bit 0 of cmd1 (`FF a 01 00 00 00 chk`); combinable |
+| Stop all | `FF a 00 00 00 00 chk` | stops pan/tilt/zoom/focus |
+| Set preset | `FF a 00 03 00 <n> chk` | saves the current position as preset n (0–99) |
+| Call preset | `FF a 00 07 00 <n> chk` | moves to preset n (no response if not set) |
+| Clear preset | `FF a 00 05 00 <n> chk` | deletes preset n |
+
+A drive frame describes the whole motion state: an axis whose direction bit is
+cleared stops (a later zoom-only frame also stops the pan). Speeds are
+0x00–0x3F, where 0x00 is the slowest speed (not a stop) and 0xFF is turbo
+(maximum), mapped onto the VISCA speed ranges; the pan speed field doubles as
+the zoom speed for zoom commands. Focus commands only move the focus in manual
+focus mode (like VISCA, they are ignored while autofocus is on). Presets are
+the same 100 presets as for VISCA and ONVIF. Pelco-D has no position inquiry,
+so a client can only read the position via VISCA/ONVIF (run e.g.
+`--sony --pelco-d` at the same time). Example: pan right at medium speed on
+camera 1 is `FF 01 00 02 20 00 23`.
+
 ## NDI
 
 ```bash
@@ -579,7 +612,7 @@ These PTZ protocols are common but **not supported** by the simulator:
 
 | Protocol | Used for | Note |
 |---|---|---|
-| Pelco-D / Pelco-P | serial control over RS-485/RS-422, mostly older surveillance cameras | byte protocol with checksum, about as simple as VISCA |
+| Pelco-P | serial control over RS-485/RS-422, mostly older surveillance cameras | 8-byte frames with STX/ETX and XOR checksum |
 | Panasonic AW protocol (HTTP CGI) | Panasonic PTZ (AW-UE/AW-HE), supported by many switchers | HTTP GET on `/cgi-bin/aw_ptz` and `/cgi-bin/aw_cam` |
 | PTZOptics HTTP-CGI | PTZOptics cameras via browser URL | `/cgi-bin/ptzctrl.cgi`; VISCA over TCP/UDP is supported |
 | Sony CGI | Sony BRC/SRG via HTTP | Sony VISCA over IP is supported |

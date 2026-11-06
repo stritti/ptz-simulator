@@ -11,7 +11,8 @@ This is a general protocol reference; not all protocols listed here are
 implemented by the simulator. ptzsim implements ONVIF (Core Specification
 v26.06, PTZ Service Specification v25.12, Imaging Service Specification
 v18.12, WS-Discovery 1.0 (April 2005 revision), WS-Security UsernameToken 1.1,
-HTTP digest per RFC 2617), Sony VISCA (command list v2.00, VISCA over IP) and NDI PTZ
+HTTP digest per RFC 2617), Sony VISCA (command list v2.00, VISCA over IP), Pelco-D
+(7-byte frames with checksum: drive, stop and preset commands) and NDI PTZ
 metadata (`ntk_ptz_*`); see [supported standards](/guide#supported-standards)
 in the guide for the full list with versions and references.
 
@@ -47,8 +48,8 @@ Pelco-D is a widely used 7-byte framing protocol operating over RS-485 different
 +---------+---------------+-----------+-----------+--------+--------+----------+
 ```
 
-* **Motion Command Field Bitmasks (Byte 4 - Command 2):**
-  * Bit 0: Fixed to 0
+* **Command 1 (Byte 3):** bit 0 = Focus Near (`FF 01 01 00 00 00 02`); other non-zero values are extended commands (e.g. `0x10` autoscan).
+* **Motion Command Field Bitmasks (Byte 4 - Command 2, bit 0 = 0 for motion commands):**
   * Bit 1: Pan Right
   * Bit 2: Pan Left
   * Bit 3: Tilt Up
@@ -56,10 +57,12 @@ Pelco-D is a widely used 7-byte framing protocol operating over RS-485 different
   * Bit 5: Zoom Tele
   * Bit 6: Zoom Wide
   * Bit 7: Focus Far
+* **Extended commands (Byte 4 bit 0 = 1):** `0x03` Set Preset, `0x05` Clear Preset, `0x07` Call Preset — preset number in Data 2 (set preset 5 on camera 1: `FF 01 00 03 00 05 09`).
+* **Responses:** executed commands get the 4-byte general response `FF <addr> <cmd1> <checksum>` (echoing the request checksum), e.g. `FF 01 00 02 20 00 23` → `FF 01 00 23`. Frames with a wrong checksum get no reply.
 
 * **Data Fields:**
-  * **Data 1 (Pan Speed):** Range `0x00` to `0x3F` (`0xFF` for high-speed turbo mode).
-  * **Data 2 (Tilt Speed):** Range `0x00` to `0x3F`.
+  * **Data 1 (Pan Speed):** Range `0x00` to `0x3F` (`0xFF` for high-speed turbo mode). `0x00` is the slowest speed, not a stop — an axis stops when its direction bits are cleared.
+  * **Data 2 (Tilt Speed):** Range `0x00` to `0x3F` (or the preset number for extended commands).
 
 * **Checksum Calculation:**
 
@@ -67,6 +70,11 @@ Pelco-D is a widely used 7-byte framing protocol operating over RS-485 different
 
 * **Example Command Frame (Pan Right, Camera Address 1, Pan Speed `0x20`):**
   `FF 01 00 02 20 00 23`
+
+ptzsim implements the drive, stop-all and preset (set `0x03` / call `0x07` / clear
+`0x05`) commands described here and answers executed commands with the 4-byte
+general response `FF <addr> <cmd1> <checksum>`; see
+[Testing Pelco-D clients](/guide#testing-pelco-d-clients) in the guide.
 
 ### 2.2 Pelco-P
 

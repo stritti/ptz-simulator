@@ -197,9 +197,14 @@ async def serve_udp(sim: Simulator, host: str, port: int, sony: bool):
 
 # ------------------------------------------------------------ serial (pty)
 class PtyPort:
-    """A pseudo terminal that behaves like the camera's RS-232/RS-422 port."""
+    """A pseudo terminal that behaves like the camera's RS-232/RS-422 port.
 
-    def __init__(self, sim: Simulator, link: Optional[str] = None):
+    ``sim`` is anything with ``process(packet, send)`` (the VISCA
+    :class:`Simulator` or e.g. a :class:`~ptzsim.pelco.PelcoCamera`); ``split``
+    cuts the byte stream into packets (VISCA terminator or fixed-length frames).
+    """
+
+    def __init__(self, sim, link: Optional[str] = None, split=split_packets):
         import termios
         import tty
 
@@ -219,6 +224,7 @@ class PtyPort:
             os.symlink(self.path, link)
             self.path = link
         self.sim = sim
+        self.split = split
         self._buffer = bytearray()
         self._loop = asyncio.get_running_loop()
         self._loop.add_reader(master, self._readable)
@@ -229,7 +235,7 @@ class PtyPort:
         except (BlockingIOError, OSError):
             return
         self._buffer.extend(data)
-        for packet in split_packets(self._buffer):
+        for packet in self.split(self._buffer):
             self.sim.process(packet, lambda reply: os.write(self.master, reply))
 
     def close(self) -> None:
@@ -245,10 +251,10 @@ class PtyPort:
             os.unlink(self.link)
 
 
-def serve_pty(sim: Simulator, link: Optional[str] = None) -> str:
+def serve_pty(sim, link: Optional[str] = None, split=split_packets) -> str:
     """Open a pseudo terminal that behaves like the camera's RS-232/RS-422 port.
 
     Returns the path of the slave device a client can open like a serial port.
     Use :class:`PtyPort` directly to close it again.
     """
-    return PtyPort(sim, link).path
+    return PtyPort(sim, link, split).path

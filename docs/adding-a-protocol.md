@@ -13,7 +13,7 @@ your protocol shows up in the dashboard, in VISCA inquiries and in ONVIF
 `GetStatus`.
 
 - Interface: [`ptzsim/protocol.py`](https://github.com/stritti/ptz-simulator/blob/main/ptzsim/protocol.py)
-- Built-in plugins (VISCA, ONVIF, NDI), good templates:
+- Built-in plugins (VISCA, Pelco-D, ONVIF, NDI), good templates:
   [`ptzsim/builtin_protocols.py`](https://github.com/stritti/ptz-simulator/blob/main/ptzsim/builtin_protocols.py)
 - Camera model: [`ptzsim/state.py`](https://github.com/stritti/ptz-simulator/blob/main/ptzsim/state.py)
 - Test helpers: [`ptzsim/testing.py`](https://github.com/stritti/ptz-simulator/blob/main/ptzsim/testing.py)

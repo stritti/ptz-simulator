@@ -33,7 +33,7 @@ export default defineConfig({
   base: pagesBase.endsWith('/') ? pagesBase : `${pagesBase}/`,
   lang: 'en-US',
   title: 'ptzsim',
-  description: 'A PTZ camera simulator for ONVIF, VISCA and NDI.',
+  description: 'A PTZ camera simulator for ONVIF, VISCA, Pelco-D and NDI.',
   markdown: { config: repositoryPathsInReadme },
   themeConfig: {
     nav: [
@@ -62,6 +62,7 @@ export default defineConfig({
           { text: 'ONVIF scope', link: '/guide#onvif-scope' },
           { text: 'VISCA clients', link: '/guide#testing-visca-clients' },
           { text: 'VISCA commands', link: '/guide#supported-visca-commands' },
+          { text: 'Pelco-D clients', link: '/guide#testing-pelco-d-clients' },
           { text: 'NDI', link: '/guide#ndi' }
         ]
       },

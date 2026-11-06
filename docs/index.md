@@ -3,7 +3,7 @@ layout: home
 hero:
   name: ptzsim
   text: A PTZ camera for your test bench.
-  tagline: Test camera control without camera hardware. Connect over ONVIF, VISCA or NDI and watch the same simulated camera respond.
+  tagline: Test camera control without camera hardware. Connect over ONVIF, VISCA, Pelco-D or NDI and watch the same simulated camera respond.
   actions:
     - theme: brand
       text: Run the simulator
@@ -55,7 +55,7 @@ Some details only show up when you zoom in.
 See the [camera scene](/scene) for every viewpoint with its VISCA packets and ONVIF
 values.
 
-## One camera, three ways to connect
+## One camera, four ways to connect
 
 The simulator shares position, motion and presets across its interfaces, so you
 can test a client against the same camera from different protocols.
@@ -64,6 +64,7 @@ can test a client against the same camera from different protocols.
 | --- | --- | --- | --- |
 | [ONVIF](/guide#onvif-scope) | Core Spec v26.06, PTZ Service v25.12, Imaging v18.12 | SOAP over HTTP with WS-Discovery | [Core](https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf), [PTZ](https://www.onvif.org/specs/2512/ONVIF-PTZ-Service-Spec-v2512.pdf), [Imaging](https://www.onvif.org/specs/srv/img/ONVIF-Imaging-Service-Spec-v1812.pdf) |
 | [VISCA](/guide#testing-visca-clients) | Sony VISCA command list v2.00; VISCA over IP per the Sony manuals | Sony VISCA over IP, TCP, UDP or a pseudo terminal | [Command list v2.00](https://pro.sony/s3/2022/09/14131603/VISCA-Command-List-Version-2.00.pdf), [Axis interface description](https://www.axis.com/dam/public/70/3d/31/visca-interface-api-description-en-US-266656.pdf) |
+| [Pelco-D](/guide#testing-pelco-d-clients) | De-facto standard (Pelco "D" Protocol) | Serial RS-485 via a pseudo terminal | [Pelco "D" Protocol manual](https://www.bit-cctv.com/uploads/file/pelco-ptz-protocols-d-protocol-revision-5.0.1.pdf), [Fujifilm SX400 specification](https://asset.fujifilm.com/www/tw/files/2026-04/f5bc920c501c1c6a7f321ad8aa5dcb65/pelco-d_protocol_specification_for_sx400_v1.10.0_en.pdf) |
 | [NDI](/guide#ndi) | NDI SDK PTZ metadata (`ntk_ptz_*`) | Optional NDI source with PTZ control and a test picture | [NDI PTZ and control messages](https://docs.ndi.video/all/developing-with-ndi/ndi-metadata/ptz-and-control-messages) |
 
 The full list of supported standards with versions and references is in the
