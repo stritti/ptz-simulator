@@ -6,18 +6,22 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import re
+import textwrap
 import time
 from typing import Callable, List, Optional, Tuple
 
 from . import state as st
 from . import viewfinder as vf
-from .display import render
+from .display import render_camera, render_network
 from .viewfinder import CELL_ASPECT, framed_view
 from .visca import ViscaCamera
 
 ViewBox = Tuple[int, int, int, int]
 
 SPEED_LEVELS = 8
+MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS = 120, 8
 DASHBOARD_WIDTH = 84  # widest dashboard line (the command log)
 MIN_VIEW_COLS, MAX_VIEW_COLS = 30, 90
 MIN_VIEW_ROWS = 8
@@ -32,10 +36,22 @@ PAN_TILT_KEYS = {
 }
 ZOOM_KEYS = {"+": 1, "=": 1, "-": -1}
 
-HELP = [
-    "arrows/WASD pan+tilt   +/- zoom   space stop   [ ] speed   h home",
-    "1-9 recall preset   P then 1-9 save preset   C then 1-9 clear preset",
-    "f autofocus on/off   b white balance   o power on/standby   q quit",
+COMMANDS = [
+    ("Arrows/WASD", "pan/tilt while held"),
+    ("+/-", "zoom tele/wide while held"),
+    ("Space", "stop all movement"),
+    ("[ / ]", "speed down/up"),
+    ("h", "home position"),
+    ("1-9", "recall preset"),
+    ("P then 1-9", "save preset"),
+    ("C then 1-9", "clear preset"),
+    ("f", "toggle autofocus"),
+    ("b", "one-push white balance"),
+    ("o", "power on/standby"),
+    ("c / n", "camera / network view"),
+    ("PgUp/PgDn", "scroll content"),
+    ("? / Esc", "open/close help; cancel preset"),
+    ("q", "quit simulator"),
 ]
 
 
@@ -49,6 +65,10 @@ class TuiController:
         self.pending: Optional[str] = None  # "save" or "clear" while waiting for a digit
         self.message = ""
         self.quit = False
+        self.current_view = "camera"
+        self.help_visible = False
+        self.scroll = 0
+        self._page_rows = 1
         self._pan_tilt_jog: Optional[tuple] = None
         self._pan_tilt_until = 0.0
         self._zoom_jog: Optional[int] = None
@@ -60,6 +80,22 @@ class TuiController:
 
     # ------------------------------------------------------------------ keys
     def handle_key(self, key: str) -> None:
+        if key == "KEY_RESIZE":
+            return
+        if key in ("PAGEUP", "PAGEDOWN"):
+            step = self._page_rows if key == "PAGEDOWN" else -self._page_rows
+            self.scroll = max(0, self.scroll + step)
+            return
+        if key in ("?", "ESC"):
+            if self.pending:
+                self.pending = None
+                self.message = "preset action cancelled"
+            if key == "?" or self.help_visible:
+                self.help_visible = not self.help_visible
+                self.scroll = 0
+            return
+        if self.help_visible and key not in ("c", "n", "q", "Q", " "):
+            return
         if self.pending and key.isdigit() and key != "0":
             self._preset_action(self.pending, int(key) - 1)
             self.pending = None
@@ -97,6 +133,14 @@ class TuiController:
             if not self.state.power:
                 self.state.stop_all()
             self._record(f"power {'on' if self.state.power else 'standby'}")
+        elif key == "n":
+            if self.current_view != "network" or self.help_visible:
+                self.scroll = 0
+            self.current_view, self.help_visible = "network", False
+        elif key == "c":
+            if self.current_view != "camera" or self.help_visible:
+                self.scroll = 0
+            self.current_view, self.help_visible = "camera", False
         elif key in ("q", "Q"):
             self.quit = True
 
@@ -169,40 +213,127 @@ class TuiController:
 
     # ---------------------------------------------------------------- output
     def frame(self, title: str, log_lines: int = 10) -> List[str]:
-        lines = render(self.camera, title, color=False, log_lines=log_lines).splitlines()
-        if lines and lines[-1].startswith("Ctrl+C"):
-            lines.pop()
-        status = f"Speed {self.speed}/{SPEED_LEVELS}"
-        if self.message:
-            status += f"   {self.message}"
-        return lines + [status, ""] + HELP
+        """Render view content without the fixed interactive chrome."""
+        if self.current_view == "network":
+            return render_network(title, color=False).splitlines()
+        return render_camera(self.camera, title, color=False, log_lines=log_lines).splitlines()
 
     def layout(self, title: str, width: int, height: int) -> Tuple[List[str], Optional[ViewBox]]:
-        """Dashboard plus camera picture for a screen of width x height.
+        """Fit scrollable content between fixed view, status and command bars."""
+        if width < MIN_TERMINAL_COLS or height < MIN_TERMINAL_ROWS:
+            footer = self.shortcuts(width, height)
+            footer = footer[-height:] if height > 0 else []
+            room = max(height - len(footer), 0)
+            view_name = self.current_view.upper()
+            if self.help_visible:
+                view_name = f"HELP | {view_name}"
+            notice = [
+                f"{view_name} | Terminal too small",
+                f"Minimum: {MIN_TERMINAL_COLS} columns, {MIN_TERMINAL_ROWS} rows",
+                f"Current: {width} columns, {height} rows",
+            ]
+            if room == 1:
+                notice = [f"Resize: {MIN_TERMINAL_COLS}x{MIN_TERMINAL_ROWS}"]
+            lines = notice[:room] + [""] * max(room - len(notice), 0) + footer
+            return [line[:max(width, 0)] for line in lines], None
 
-        Returns the lines and where the picture is (row, col, rows, cols), or None if
-        the screen is too small for it.
-        """
-        if width >= DASHBOARD_WIDTH + 2 + MIN_VIEW_COLS:  # picture to the right
-            lines = self.frame(title)
-            cols = min(width - DASHBOARD_WIDTH - 2, MAX_VIEW_COLS)
-            rows = min(height - 1, _view_rows(cols))
-            view = framed_view(self.state, cols, rows)
+        footer = self.shortcuts(width, height)
+        room = height - 3 - len(footer)
+        view_name = self.current_view.upper()
+        heading = "Network Information" if self.current_view == "network" else "PTZ camera simulator"
+        header = f"{view_name} | {heading}"
+        if self.help_visible:
+            header = f"HELP | {view_name}"
+        camera_tab = "[c]:Camera" if self.current_view == "camera" else "c:Camera"
+        network_tab = "[n]:Network" if self.current_view == "network" else "n:Network"
+        tabs = f"{camera_tab}  {network_tab}  | {title}"
+        if self.help_visible:
+            content = ["Keyboard commands", ""] + [
+                f"{key:<14} {description}" for key, description in COMMANDS
+            ] + ["", "Space stops the camera even in help.",
+                 "Camera controls also work in Network view."]
+        else:
+            content = self.frame(title)[1:]
+        if content and not content[0]:
+            content = content[1:]
+        box = None
+        picture: List[str] = []
+        side_by_side = (not self.help_visible and self.current_view == "camera"
+                        and width >= DASHBOARD_WIDTH + 2 + MIN_VIEW_COLS
+                        and room >= MIN_VIEW_ROWS)
+        content_width = DASHBOARD_WIDTH if side_by_side else width
+        content = [part for line in content
+                   for part in (textwrap.wrap(line, content_width, subsequent_indent="  ",
+                                             replace_whitespace=False) or [""])]
+        if not self.help_visible and self.current_view == "camera":
+            if side_by_side:
+                cols = min(width - DASHBOARD_WIDTH - 2, MAX_VIEW_COLS)
+                rows = min(room, _view_rows(cols))
+                picture = framed_view(self.state, cols, rows)
+                box = (2, DASHBOARD_WIDTH + 2, rows, cols)
+
+        self._page_rows = max(1, room)
+        self.scroll = min(self.scroll, max(0, len(content) - room))
+        body = content[self.scroll:self.scroll + room]
+        body += [""] * (room - len(body))
+        if side_by_side:
             col = DASHBOARD_WIDTH + 2
-            merged = []
-            for i in range(max(len(lines), len(view))):
-                left = lines[i] if i < len(lines) else ""
-                right = view[i] if i < len(view) else ""
-                merged.append(left[:DASHBOARD_WIDTH].ljust(col) + right if right else left)
-            return merged, (0, col, len(view), cols)
-        if width >= MIN_VIEW_COLS and height >= 2 * MIN_VIEW_ROWS:  # picture on top
-            lines = self.frame(title)
-            cols = min(width - 1, MAX_VIEW_COLS)
-            # Shrink the picture before the dashboard gets cut off at the bottom.
-            rows = max(MIN_VIEW_ROWS, min(_view_rows(cols), height - 1 - len(lines)))
-            view = framed_view(self.state, cols, rows)
-            return view + lines, (0, 0, len(view), cols)
-        return self.frame(title), None
+            body = [line.ljust(col) + (picture[i] if i < len(picture) else "")
+                    for i, line in enumerate(body)]
+        status = self.message or f"Speed {self.speed}/{SPEED_LEVELS} | Ready"
+        if self.pending:
+            status = f"{self.pending} preset: press 1-9 | Esc cancel"
+        if len(content) > room and not self.pending:
+            position = f"{self.scroll + 1}-{min(self.scroll + room, len(content))}/{len(content)}"
+            available = max(0, width - len(position) - 3)
+            text = status[:available].rstrip(" |")
+            status = f"{text.ljust(available)} | {position}"
+        lines = [header, tabs] + body + [status] + footer
+        return [line[:width] for line in lines], box
+
+    def shortcuts(self, width: int, height: int) -> List[str]:
+        """Group commands by purpose, keeping essential actions on small screens."""
+        if width < MIN_TERMINAL_COLS or height < MIN_TERMINAL_ROWS:
+            if width >= 22:
+                return ["[Space] Stop  [q] Quit"]
+            return ["[Space] Stop", "[q] Quit"]
+        if self.help_visible:
+            return ["[Space] Stop  [PgUp/PgDn] Scroll",
+                    "[c/n] View  [?/Esc] Back  [q] Quit"]
+        if height < 15:
+            return ["[Space] Stop  [PgUp/PgDn] Scroll", "[?] Help  [q] Quit"]
+        groups = [
+            ("MOVE", [[("[Arrows/WASD]", "Pan/Tilt")],
+                      [("[+/-]", "Zoom"), ("[h]", "Home")],
+                      [("[Space]", "Stop"), ("[ / ]", "Speed")]]),
+            ("PRESET", [[("[1-9]", "Recall")], [("[P then 1-9]", "Save")],
+                        [("[C then 1-9]", "Clear")]]),
+            ("CAMERA", [[("[f]", "Autofocus")], [("[b]", "White balance")],
+                        [("[o]", "Power")]]),
+            ("VIEW", [[("[c]", "Camera")], [("[n]", "Network"), ("[?]", "Help")],
+                      [("[PgUp/PgDn]", "Scroll"), ("[q]", "Quit")]]),
+        ]
+        columns = []
+        for label, rows in groups:
+            key_width = max(len(row[0][0]) for row in rows)
+            action_width = max(len(row[0][1]) for row in rows)
+            second_width = max((len(row[1][0]) for row in rows if len(row) > 1), default=0)
+            cells = [label]
+            for row in rows:
+                key, action = row[0]
+                if len(row) == 1:
+                    cells.append(f"{key:<{key_width}} {action}")
+                else:
+                    second_key, second_action = row[1]
+                    cells.append(f"{key:<{key_width}} {action:<{action_width}}  "
+                                 f"{second_key:<{second_width}} {second_action}")
+            columns.append(cells)
+        widths = [max(len(cell) for cell in column) for column in columns]
+        return [
+            "      ".join(cell.ljust(widths[index]) if index < len(row) - 1 else cell
+                          for index, cell in enumerate(row))
+            for row in zip(*columns)
+        ]
 
 
 def _view_rows(cols: int) -> int:
@@ -210,7 +341,8 @@ def _view_rows(cols: int) -> int:
     return round((cols - 2) * 9 / 16 / CELL_ASPECT) + 2
 
 
-CURSES_KEYS = {"KEY_UP": "UP", "KEY_DOWN": "DOWN", "KEY_LEFT": "LEFT", "KEY_RIGHT": "RIGHT"}
+CURSES_KEYS = {"KEY_UP": "UP", "KEY_DOWN": "DOWN", "KEY_LEFT": "LEFT", "KEY_RIGHT": "RIGHT",
+               "KEY_PPAGE": "PAGEUP", "KEY_NPAGE": "PAGEDOWN"}
 
 
 async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05) -> None:
@@ -218,6 +350,7 @@ async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05) -
     import curses
 
     controller = TuiController(camera)
+    os.environ.setdefault("ESCDELAY", "100")
     screen = curses.initscr()
     try:
         curses.noecho()
@@ -240,7 +373,8 @@ async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05) -
                 controller.handle_key(CURSES_KEYS.get(key, key))
             controller.tick()
             height, width = screen.getmaxyx()
-            _draw(screen, *controller.layout(title, width, height), colors)
+            _draw(screen, *controller.layout(title, width, height), colors,
+                  footer_rows=len(controller.shortcuts(width, height)) + 1)
             await asyncio.sleep(interval)
     finally:
         screen.keypad(False)
@@ -250,7 +384,8 @@ async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05) -
 
 
 ARROW_SEQUENCES = {"[A": "UP", "[B": "DOWN", "[C": "RIGHT", "[D": "LEFT",
-                   "OA": "UP", "OB": "DOWN", "OC": "RIGHT", "OD": "LEFT"}
+                   "OA": "UP", "OB": "DOWN", "OC": "RIGHT", "OD": "LEFT",
+                   "[5~": "PAGEUP", "[6~": "PAGEDOWN"}
 
 
 def _escape_sequence(screen) -> str:
@@ -258,10 +393,12 @@ def _escape_sequence(screen) -> str:
     import curses
 
     sequence = ""
-    for _ in range(2):
+    for _ in range(3):
         try:
             sequence += screen.getkey()
         except curses.error:
+            break
+        if sequence in ARROW_SEQUENCES:
             break
     return ARROW_SEQUENCES.get(sequence, "ESC")
 
@@ -286,20 +423,49 @@ def _init_colors() -> dict:
         curses.init_pair(number, color, -1)
         colors[ch] = curses.color_pair(number) | (curses.A_BOLD if ch == vf.CROSS else 0)
     colors[vf.HORIZON] = curses.A_BOLD
+    for number, (name, foreground, background) in enumerate([
+        ("header", curses.COLOR_WHITE, curses.COLOR_BLUE),
+        ("commands", curses.COLOR_WHITE, curses.COLOR_BLUE),
+        ("shortcut", curses.COLOR_BLACK, curses.COLOR_CYAN),
+        ("status", curses.COLOR_BLACK, curses.COLOR_WHITE),
+    ], start=len(pairs) + 1):
+        curses.init_pair(number, foreground, background)
+        colors[name] = curses.color_pair(number)
     return colors
 
 
-def _draw(screen, lines: List[str], view: Optional[ViewBox], colors: dict) -> None:
+def _draw(screen, lines: List[str], view: Optional[ViewBox], colors: dict,
+          footer_rows: int = 0) -> None:
     import curses
 
     height, width = screen.getmaxyx()
     screen.erase()
-    for row, line in enumerate(lines[: height - 1]):
-        attr = curses.A_BOLD if row == 0 else curses.A_NORMAL
+    footer_start = len(lines) - footer_rows
+    for row, line in enumerate(lines[:height]):
+        if row < 2:
+            attr = colors.get("header", curses.A_REVERSE) | curses.A_BOLD
+        elif footer_rows and row >= footer_start:
+            name = "status" if row == footer_start else "commands"
+            attr = colors.get(name, curses.A_REVERSE)
+        else:
+            attr = curses.A_NORMAL
         try:
-            screen.addnstr(row, 0, line, width - 1, attr)
-        except curses.error:
+            screen.addnstr(row, 0, line.ljust(width), width, attr)
+        except curses.error:  # Writing the lower-right cell can report ERR after drawing it.
             pass
+        if row == 1:
+            for tab in ("[c]:Camera", "[n]:Network"):
+                col = line.find(tab)
+                if col >= 0:
+                    screen.addnstr(row, col, tab, min(len(tab), width - col),
+                                   colors.get("shortcut", curses.A_NORMAL) | curses.A_BOLD)
+        elif footer_rows and row > footer_start:
+            for match in re.finditer(r"\[[^\[\]]+\]", line):
+                try:
+                    screen.addnstr(row, match.start(), match.group(), len(match.group()),
+                                   colors.get("shortcut", curses.A_NORMAL) | curses.A_BOLD)
+                except curses.error:
+                    pass
     if view and colors:
         top, left, rows, cols = view
         # Colour the inside of the picture, not its border.

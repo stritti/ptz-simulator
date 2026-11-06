@@ -10,13 +10,14 @@ import asyncio
 import logging
 import socket
 import sys
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .display import dashboard, log_printer
 from .transports import (SONY_HEADER, SONY_VISCA_COMMAND, SONY_VISCA_INQUIRY,
                          Simulator, serve_pty, serve_tcp, serve_udp)
 from .onvif import OnvifCamera, serve_discovery, serve_onvif
 from .visca import ViscaCamera, hexdump, parse_hex
+from .network import get_resolved_addresses, format_network_info_for_startup, format_network_summary
 
 DEFAULT_PORTS = {"sony": 52381, "tcp": 5678, "udp": 1259, "onvif": 8080}
 
@@ -73,6 +74,7 @@ async def _serve(args: argparse.Namespace) -> None:
     camera = ViscaCamera(address=args.address, instant=args.instant)
     sim = Simulator(camera)
     endpoints: List[str] = []
+    ports: Dict[str, int] = {}
     discovery = None
 
     if all(v is None for v in (args.sony, args.tcp, args.udp, args.pty, args.onvif)) and not args.ndi:
@@ -80,12 +82,15 @@ async def _serve(args: argparse.Namespace) -> None:
     if args.sony is not None:
         await serve_udp(sim, args.host, args.sony, sony=True)
         endpoints.append(f"Sony VISCA/IP udp://{args.host}:{args.sony}")
+        ports["Sony VISCA/IP"] = args.sony
     if args.tcp is not None:
         await serve_tcp(sim, args.host, args.tcp)
         endpoints.append(f"VISCA tcp://{args.host}:{args.tcp}")
+        ports["VISCA/TCP"] = args.tcp
     if args.udp is not None:
         await serve_udp(sim, args.host, args.udp, sony=False)
         endpoints.append(f"VISCA udp://{args.host}:{args.udp}")
+        ports["VISCA/UDP"] = args.udp
     if args.pty is not None:
         endpoints.append(f"VISCA serial {serve_pty(sim, args.pty or None)}")
     if args.onvif is not None:
@@ -94,6 +99,7 @@ async def _serve(args: argparse.Namespace) -> None:
                             absolute=not args.onvif_no_absolute, auth=args.onvif_auth)
         await serve_onvif(onvif, args.host, args.onvif)
         endpoints.append(f"ONVIF http://{args.host}:{args.onvif}/onvif/device_service")
+        ports["ONVIF"] = args.onvif
         if not args.no_discovery:
             discovery = await serve_discovery(onvif, args.onvif, advertise_host=args.advertise_host)
             endpoints.append("WS-Discovery udp/3702")
@@ -105,10 +111,27 @@ async def _serve(args: argparse.Namespace) -> None:
 
     title = " | ".join(endpoints)
     logging.getLogger("ptzsim").info("listening: %s", title)
+    loop = asyncio.get_running_loop()
+
+    # Show network information
+    if args.host == "0.0.0.0":
+        resolved = await loop.run_in_executor(None, get_resolved_addresses, args.host)
+        if resolved:
+            addr_str = ", ".join(resolved[:3])
+            if len(resolved) > 3:
+                addr_str += f", +{len(resolved) - 3} more"
+            logging.getLogger("ptzsim").info("Available on: %s", addr_str)
+
+    # Show full network info on startup
+    network_info = await loop.run_in_executor(None, format_network_info_for_startup)
+    for line in network_info.split("\n"):
+        if line:
+            logging.getLogger("ptzsim").info(line)
+
     if args.no_tui:
-        view = log_printer(camera)
+        view = log_printer(camera, bind_address=args.host, ports=ports)
     elif args.view_only or not _interactive_terminal():
-        view = dashboard(camera, title)
+        view = dashboard(camera, title, bind_address=args.host, ports=ports)
     else:
         from .tui import interactive
 
