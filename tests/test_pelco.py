@@ -46,6 +46,15 @@ def test_split_frames_resyncs_on_the_sync_byte():
     assert split_frames(buffer) == [make_frame(3, 0x00, 0x00, 0x00, 0x00)]
 
 
+def test_split_frames_resyncs_after_a_stray_sync_byte():
+    # a stray 0xFF before a valid frame must not swallow it: the invalid
+    # 7-byte candidate is dropped byte by byte, the real frame survives
+    valid = make_frame(1, 0x00, PAN_RIGHT, 0x20, 0x00)  # FF 01 00 02 20 00 23
+    buffer = bytearray(b"\xFF" + valid)
+    assert split_frames(buffer) == [valid]
+    assert not buffer
+
+
 def test_wrong_checksum_gets_no_reply():
     pelco, camera = make()
     frame = bytearray(make_frame(1, 0x00, PAN_RIGHT, 0x20, 0x00))
@@ -161,8 +170,9 @@ def test_preset_set_call_clear():
     assert run(pelco, make_frame(1, 0x00, 0x03, 0x00, 0x05)) == [bytes.fromhex("FF 01 00 09")]
     pelco.state.pan = pelco.state.tilt = 0.0
     assert run(pelco, make_frame(1, 0x00, 0x07, 0x00, 0x05)) == [bytes.fromhex("FF 01 00 0D")]
-    pelco.state.finish_moves()  # instant mode in tests
+    # instant mode (the test camera has instant=True): the recall jumps at once
     assert (pelco.state.pan, pelco.state.tilt) == (100.0, -50.0)
+    assert not pelco.state.busy
     assert run(pelco, make_frame(1, 0x00, 0x05, 0x00, 0x05)) == [bytes.fromhex("FF 01 00 0B")]
     assert 5 not in pelco.state.presets
 
@@ -171,6 +181,17 @@ def test_preset_frames_do_not_trigger_motion():
     pelco, _ = make()
     run(pelco, make_frame(1, 0x00, 0x03, 0x00, 0x05))  # set preset 5: cmd2 0x03 has bit 1 set
     assert not pelco.state.moving
+
+
+def test_preset_recall_without_instant_mode_moves_at_motor_speed():
+    camera = ViscaCamera(instant=False)
+    pelco = PelcoCamera(camera)
+    pelco.state.pan = 500.0
+    run(pelco, make_frame(1, 0x00, 0x03, 0x00, 0x02))  # set preset 2
+    pelco.state.pan = 0.0
+    run(pelco, make_frame(1, 0x00, 0x07, 0x00, 0x02))  # call preset 2
+    assert pelco.state.busy  # still moving towards the target, not jumped
+    assert pelco.state.pan == 0.0
 
 
 def test_call_of_an_unset_preset_gets_no_reply():

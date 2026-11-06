@@ -53,7 +53,12 @@ def checksum(frame: bytes) -> int:
 
 
 def split_frames(buffer: bytearray) -> List[bytes]:
-    """Remove and return every complete 7-byte frame, resyncing on the sync byte."""
+    """Remove and return every complete, checksum-valid 7-byte frame.
+
+    Resyncs on the sync byte: garbage before it is dropped, and a 7-byte
+    candidate with a wrong checksum is discarded byte by byte (only its sync
+    byte), so a stray ``0xFF`` cannot swallow a following valid frame.
+    """
     frames = []
     while True:
         try:
@@ -65,9 +70,12 @@ def split_frames(buffer: bytearray) -> List[bytes]:
             del buffer[:start]  # drop garbage before the sync byte
         if len(buffer) < FRAME_LEN:
             return frames
-        frame = bytes(buffer[:FRAME_LEN])
-        del buffer[:FRAME_LEN]
-        frames.append(frame)
+        candidate = bytes(buffer[:FRAME_LEN])
+        if candidate[-1] == checksum(candidate):
+            del buffer[:FRAME_LEN]
+            frames.append(candidate)
+        else:
+            del buffer[:1]  # invalid candidate: the next byte may be the real sync
 
 
 def make_frame(address: int, cmd1: int, cmd2: int, data1: int, data2: int) -> bytes:
@@ -172,6 +180,8 @@ class PelcoCamera:
         elif not s.recall_preset(number):
             self.camera.record("Pelco-D", f"preset {number + 1} not set", ok=False)
             return None
+        if action == "call" and self.camera.instant:
+            s.finish_moves()  # --instant: jump to the preset instead of motor speed
         self.camera.record("Pelco-D", f"preset {number + 1} {action}")
         return self.ack(frame)
 
