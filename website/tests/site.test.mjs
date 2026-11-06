@@ -40,6 +40,14 @@ for (const { name, input, base } of [
     assert.match(guide, /id="running"/)
     assert.match(guide, /id="onvif-scope"/)
     assert.match(guide, /id="supported-visca-commands"/)
+    assert.ok(
+      guide.includes(`href="${base}guide.html#testing-onvif-clients"`),
+      'the ONVIF integration link must point to the client guide'
+    )
+    assert.ok(
+      guide.includes('id="testing-onvif-clients"'),
+      'the ONVIF client guide target must be generated'
+    )
 
     const assets = [...home.matchAll(/(?:href|src)="([^"]*\/assets\/[^"]+)"/g)].map(
       (match) => match[1]

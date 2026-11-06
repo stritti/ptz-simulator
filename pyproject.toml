@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ptzsim"
 version = "0.1.0"
-description = "CLI simulator for ONVIF, VISCA and NDI PTZ cameras, for testing the hai-end streaming-server"
+description = "CLI simulator for testing ONVIF, VISCA and NDI PTZ clients"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = []
