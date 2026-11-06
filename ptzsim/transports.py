@@ -196,38 +196,59 @@ async def serve_udp(sim: Simulator, host: str, port: int, sony: bool):
 
 
 # ------------------------------------------------------------ serial (pty)
+class PtyPort:
+    """A pseudo terminal that behaves like the camera's RS-232/RS-422 port."""
+
+    def __init__(self, sim: Simulator, link: Optional[str] = None):
+        import termios
+        import tty
+
+        master, slave = os.openpty()
+        tty.setraw(slave)
+        attrs = termios.tcgetattr(slave)
+        attrs[3] &= ~termios.ECHO
+        termios.tcsetattr(slave, termios.TCSANOW, attrs)
+        os.set_blocking(master, False)
+        # The slave fd stays open so the pty survives client reconnects.
+        self.master, self.slave = master, slave
+        self.path = os.ttyname(slave)
+        self.link = link
+        if link:
+            if os.path.islink(link):
+                os.unlink(link)
+            os.symlink(self.path, link)
+            self.path = link
+        self.sim = sim
+        self._buffer = bytearray()
+        self._loop = asyncio.get_running_loop()
+        self._loop.add_reader(master, self._readable)
+
+    def _readable(self) -> None:
+        try:
+            data = os.read(self.master, 1024)
+        except (BlockingIOError, OSError):
+            return
+        self._buffer.extend(data)
+        for packet in split_packets(self._buffer):
+            self.sim.process(packet, lambda reply: os.write(self.master, reply))
+
+    def close(self) -> None:
+        """Stop reading, close both ends and remove the symlink."""
+        if self.master < 0:
+            return
+        if not self._loop.is_closed():
+            self._loop.remove_reader(self.master)
+        for fd in (self.master, self.slave):
+            os.close(fd)
+        self.master = self.slave = -1
+        if self.link and os.path.islink(self.link):
+            os.unlink(self.link)
+
+
 def serve_pty(sim: Simulator, link: Optional[str] = None) -> str:
     """Open a pseudo terminal that behaves like the camera's RS-232/RS-422 port.
 
     Returns the path of the slave device a client can open like a serial port.
+    Use :class:`PtyPort` directly to close it again.
     """
-    import termios
-    import tty
-
-    master, slave = os.openpty()
-    tty.setraw(slave)
-    attrs = termios.tcgetattr(slave)
-    attrs[3] &= ~termios.ECHO
-    termios.tcsetattr(slave, termios.TCSANOW, attrs)
-    os.set_blocking(master, False)
-    path = os.ttyname(slave)
-    if link:
-        if os.path.islink(link):
-            os.unlink(link)
-        os.symlink(path, link)
-        path = link
-
-    buffer = bytearray()
-
-    def readable() -> None:
-        try:
-            data = os.read(master, 1024)
-        except (BlockingIOError, OSError):
-            return
-        buffer.extend(data)
-        for packet in split_packets(buffer):
-            sim.process(packet, lambda reply: os.write(master, reply))
-
-    asyncio.get_running_loop().add_reader(master, readable)
-    serve_pty.keep_open = slave  # keep the slave fd open so the pty survives client reconnects
-    return path
+    return PtyPort(sim, link).path

@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import List
 
 from .protocol import Endpoint, PortPlugin, ProtocolPlugin, ServeContext, register
-from .transports import serve_pty, serve_tcp, serve_udp
+from .transports import PtyPort, serve_tcp, serve_udp
 
 
 @register
@@ -72,7 +72,9 @@ class ViscaSerial(ProtocolPlugin):
         return args.pty is not None
 
     async def start(self, ctx: ServeContext) -> List[Endpoint]:
-        return [Endpoint("VISCA", f"serial {serve_pty(ctx.simulator, ctx.args.pty or None)}")]
+        port = PtyPort(ctx.simulator, ctx.args.pty or None)
+        self.servers.append(port)
+        return [Endpoint("VISCA", f"serial {port.path}")]
 
 
 @register
@@ -126,6 +128,10 @@ class Ndi(ProtocolPlugin):
     name = "ndi"
     title = "NDI"
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.source = None
+
     @classmethod
     def add_arguments(cls, group) -> None:
         group.add_argument("--ndi", action="store_true",
@@ -140,4 +146,10 @@ class Ndi(ProtocolPlugin):
         from .ndi import start_ndi  # optional dependencies, imported only when used
 
         source = start_ndi(ctx.camera, ctx.name, ctx.args.ndi_fps)
+        self.source = source
         return [Endpoint("NDI", source.source_name or "")]
+
+    def stop(self) -> None:
+        if self.source is not None:
+            self.source.stop()  # ends the sender thread, which destroys the NDI sender
+        super().stop()

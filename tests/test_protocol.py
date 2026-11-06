@@ -5,6 +5,7 @@
 example plugin from docs/adding-a-protocol.md."""
 
 import argparse
+import os
 import asyncio
 import re
 import socket
@@ -211,3 +212,19 @@ def test_plugin_failing_during_start_is_stopped(isolated_registry):
         asyncio.run(run())
     with pytest.raises(OSError):  # the server opened before the failure is closed
         socket.create_connection(("127.0.0.1", port), timeout=1).close()
+
+
+@pytest.mark.skipif(not hasattr(os, "openpty"), reason="pty needs POSIX")
+def test_serial_plugin_releases_the_pty(tmp_path):
+    link = tmp_path / "ttyPTZ"
+
+    async def run():
+        async with serve("--pty", str(link)) as ctx:
+            assert [str(e) for e in ctx.endpoints] == [f"VISCA serial {link}"]
+            port = ctx.plugins[0].servers[0]
+            assert link.is_symlink()
+            return port
+
+    port = asyncio.run(run())
+    assert (port.master, port.slave) == (-1, -1)
+    assert not link.exists()
