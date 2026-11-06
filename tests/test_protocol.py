@@ -239,3 +239,14 @@ def test_port_can_be_reused_right_after_the_context():
                 pass
 
     asyncio.run(run())
+
+
+def test_onvif_plugin_announces_ws_discovery_and_says_bye_on_stop():
+    async def run():
+        port = free_port()
+        async with serve("--onvif", str(port)) as ctx:  # --no-discovery not given
+            return [str(e) for e in ctx.endpoints]
+
+    titles = asyncio.run(run())
+    assert any(t.startswith("ONVIF http://127.0.0.1:") for t in titles)
+    assert "WS-Discovery udp/3702" in titles  # discovery endpoint added; stop() sent Bye

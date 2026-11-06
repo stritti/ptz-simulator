@@ -509,6 +509,9 @@ TCP/UDP sockets, Sony VISCA/IP, HTTP, WS-Discovery and a pseudo terminal. With
 `uv run --extra ndi pytest`, a real NDI round trip runs as well (a receiver calls
 `NDIlib_recv_ptz_*`, the simulator executes the commands).
 
+Every test run also measures the code coverage of `ptzsim` (pytest-cov, see
+`pyproject.toml`) and fails below 80 %.
+
 There is also a test against the real ONVIF client library
 (`onvif-zeep-async`, same WSDLs as `onvif-zeep`):
 

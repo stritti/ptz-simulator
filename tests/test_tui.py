@@ -587,3 +587,230 @@ def test_dashboard_input_preserves_terminal_modes(monkeypatch, check):
     finally:
         os.close(master)
         os.close(slave)
+
+
+# ------------------------------------------------------- missing key handling
+def test_autofocus_key_toggles_autofocus():
+    tui, _ = make()
+    assert tui.state.autofocus
+    tui.handle_key("f")
+    assert not tui.state.autofocus
+    assert tui.camera.log[-1].description == "autofocus off"
+    tui.handle_key("f")
+    assert tui.state.autofocus
+    assert tui.camera.log[-1].description == "autofocus on"
+
+
+def test_zoom_jog_stops_when_the_key_repeat_ends():
+    tui, clock = make()
+    tui.handle_key("+")
+    assert tui.state.zoom_velocity > 0
+    clock.now += JOG_TIMEOUT + 0.01
+    tui.tick()
+    assert tui.state.zoom_velocity == 0
+
+
+def test_zoom_jog_is_blocked_in_standby():
+    tui, _ = make()
+    tui.handle_key("o")
+    tui.handle_key("+")
+    assert tui.state.zoom_velocity == 0
+    assert "standby" in tui.message
+
+
+def test_zoom_key_repeat_keeps_a_single_log_entry():
+    tui, _ = make()
+    tui.handle_key("+")
+    tui.handle_key("+")
+    tui.handle_key("=")
+    entries = [e for e in tui.camera.log if e.source == "TUI"]
+    assert [e.description for e in entries] == [f"zoom tele (speed {SPEED_LEVELS // 2})"]
+
+
+def test_tiny_terminal_shows_a_single_resize_hint():
+    tui, _ = make()
+    lines, box = tui.layout("t", 100, 2)
+    assert box is None
+    assert lines[0] == "Resize: 120x8"
+    assert "[q]" in lines[1]
+
+
+# ------------------------------------------- curses helpers with a fake module
+import types
+
+from ptzsim import tui as tui_mod
+
+
+class FakeScreen:
+    def __init__(self, keys=(), size=(24, 120)):
+        self.keys = list(keys)
+        self.size = size
+        self.calls = []
+        self.error = None  # set by fake_curses()
+
+    def keypad(self, on):
+        self.calls.append(("keypad", on))
+
+    def nodelay(self, on):
+        self.calls.append(("nodelay", on))
+
+    def getmaxyx(self):
+        return self.size
+
+    def erase(self):
+        self.calls.append(("erase",))
+
+    def addnstr(self, row, col, text, count, attr):
+        self.calls.append(("addnstr", row, col, text[:count], attr))
+
+    def addstr(self, row, col, ch, attr):
+        self.calls.append(("addstr", row, col, ch, attr))
+
+    def refresh(self):
+        self.calls.append(("refresh",))
+
+    def getkey(self):
+        if self.keys:
+            return self.keys.pop(0)
+        raise self.error()
+
+
+def fake_curses(keys=(), size=(24, 120), **overrides):
+    mod = types.ModuleType("curses")
+
+    class error(Exception):
+        pass
+
+    mod.error = error
+    mod.A_NORMAL, mod.A_BOLD, mod.A_REVERSE = 0, 1, 2
+    for index, name in enumerate(("BLACK", "RED", "GREEN", "YELLOW", "BLUE", "MAGENTA", "CYAN", "WHITE")):
+        setattr(mod, "COLOR_" + name, index)
+    screen = FakeScreen(keys, size)
+    screen.error = error
+    mod._screen = screen
+    mod.initscr = lambda: screen
+    mod.noecho = mod.cbreak = mod.nocbreak = mod.echo = mod.endwin = lambda: None
+    mod.curs_set = lambda visibility: None
+    mod.has_colors = lambda: True
+    mod.start_color = lambda: None
+    mod.use_default_colors = lambda: None
+    mod.init_pair = lambda number, fg, bg: None
+    mod.color_pair = lambda number: 1000 + number
+    for key, value in overrides.items():
+        setattr(mod, key, value)
+    return mod
+
+
+def test_interactive_processes_keys_until_quit(monkeypatch):
+    mod = fake_curses(keys=["d", "\x1b", "[", "C", "q"])
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    cam = ViscaCamera()
+    asyncio.run(tui_mod.interactive(cam, "title", interval=0.01))
+    screen = mod._screen
+    assert os.environ.get("ESCDELAY") == "100"
+    assert any(call[0] == "refresh" for call in screen.calls)
+    assert any(call[0] == "addnstr" for call in screen.calls)
+    assert ("keypad", False) in screen.calls  # terminal restored on exit
+    descriptions = [e.description for e in cam.log]
+    assert any("pan/tilt right" in d for d in descriptions)  # "d" and ESC [ C both jog right
+
+
+def test_interactive_tolerates_curs_set_failure(monkeypatch):
+    mod = fake_curses(keys=["q"])
+
+    def broken_curs_set(visibility):
+        raise mod.error()
+
+    mod.curs_set = broken_curs_set
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    asyncio.run(tui_mod.interactive(ViscaCamera(), "t", interval=0.01))
+    assert ("keypad", False) in mod._screen.calls
+
+
+@pytest.mark.parametrize("keys, expected", [
+    (["[", "A"], "UP"), (["[", "B"], "DOWN"), (["[", "C"], "RIGHT"), (["[", "D"], "LEFT"),
+    (["O", "A"], "UP"), (["O", "B"], "DOWN"), (["[", "5", "~"], "PAGEUP"), (["[", "6", "~"], "PAGEDOWN"),
+    (["x"], "ESC"), ([], "ESC"),
+])
+def test_escape_sequence_maps_raw_arrow_keys(monkeypatch, keys, expected):
+    mod = fake_curses(keys=keys)
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    assert tui_mod._escape_sequence(mod._screen) == expected
+
+
+def test_init_colors_without_color_support(monkeypatch):
+    mod = fake_curses(has_colors=lambda: False)
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    assert tui_mod._init_colors() == {}
+
+
+def test_init_colors_when_start_color_fails(monkeypatch):
+    mod = fake_curses(start_color=lambda: (_ for _ in ()).throw(mod.error()))
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    assert tui_mod._init_colors() == {}
+
+
+def test_init_colors_registers_the_chrome_pairs(monkeypatch):
+    mod = fake_curses()
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    colors = tui_mod._init_colors()
+    assert colors["header"] == 1001 and colors["commands"] == 1002
+    assert colors["shortcut"] == 1003 and colors["status"] == 1004
+    assert colors["_pairs"] == {}
+
+
+def test_style_attr_caches_and_combines_styles(monkeypatch):
+    mod = fake_curses()
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    colors = tui_mod._init_colors()
+    assert tui_mod._style_attr(colors, None) == 0
+    assert tui_mod._style_attr({}, "red") == 0  # no colour support: plain text
+    attr = tui_mod._style_attr(colors, "red")
+    assert attr == mod.color_pair(5)  # first pair after the four chrome pairs
+    assert tui_mod._style_attr(colors, "red") == attr  # cached
+    assert tui_mod._style_attr(colors, "bold") == mod.A_BOLD
+    both = tui_mod._style_attr(colors, "white/blue+bold")
+    assert both & mod.A_BOLD and both & mod.color_pair(6)
+
+
+def test_style_attr_survives_exhausted_color_pairs(monkeypatch):
+    mod = fake_curses()
+
+    def init_pair(number, fg, bg):
+        if number >= 5:
+            raise mod.error()
+
+    mod.init_pair = init_pair
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    colors = tui_mod._init_colors()
+    assert tui_mod._style_attr(colors, "green") == 0
+
+
+def test_draw_colours_the_picture_inside_the_view_box(monkeypatch):
+    mod = fake_curses(size=(10, 40))
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    colors = tui_mod._init_colors()
+    lines = ["H" * 40, "T" * 30 + "[c]:Camera", "r2" + " " * 37, "r3" + " " * 37,
+             "r4" + " " * 37, "status", "foot [q] Quit"]
+    styles = [["red", None], ["bold", "white/blue"]]
+    tui_mod._draw(mod._screen, lines, (2, 5, 4, 10), colors, styles, footer_rows=2)
+    added = [call for call in mod._screen.calls if call[0] == "addstr"]
+    assert added and all(call[1] > 2 for call in added)  # inside the box, below the header
+    addnstr = [call for call in mod._screen.calls if call[0] == "addnstr"]
+    assert any("[c]:Camera" in call[3] for call in addnstr)  # active tab highlighted
+    assert any("[q]" in call[3] for call in addnstr)  # footer key highlighted
+
+
+def test_draw_ignores_curses_write_errors(monkeypatch):
+    mod = fake_curses(size=(6, 20))
+
+    def broken(*args):
+        raise mod.error()
+
+    mod._screen.addnstr = broken
+    mod._screen.addstr = broken
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    colors = {"header": 1, "shortcut": 2, "status": 3, "commands": 4, "_pairs": {}}
+    lines = ["H" * 20, "T" * 20, "body", "body2", "status", "foot [q]"]
+    tui_mod._draw(mod._screen, lines, (2, 2, 3, 6), colors, [["red"]], footer_rows=2)
+    assert ("refresh",) in mod._screen.calls
