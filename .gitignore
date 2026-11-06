@@ -3,3 +3,15 @@ __pycache__/
 .pytest_cache/
 ptzsim.log
 .venv/
+website/node_modules/
+website/.vitepress/cache/
+website/.vitepress/dist/
+website/.vitepress/.temp/
+dist/
+build/
+.axet-plugin/
+.claude/
+.codex/
+.copilot/
+.gemini/
+.opencode/
