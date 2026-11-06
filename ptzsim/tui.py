@@ -10,9 +10,8 @@ import time
 from typing import Callable, List, Optional, Tuple
 
 from . import state as st
-from . import viewfinder as vf
 from .display import render
-from .viewfinder import CELL_ASPECT, framed_view
+from .viewfinder import CELL_ASPECT, Styles, framed_picture
 from .visca import ViscaCamera
 
 ViewBox = Tuple[int, int, int, int]
@@ -53,6 +52,7 @@ class TuiController:
         self._pan_tilt_until = 0.0
         self._zoom_jog: Optional[int] = None
         self._zoom_until = 0.0
+        self.view_styles: Styles = []  # colours of the picture from the last layout()
 
     @property
     def state(self) -> st.CameraState:
@@ -187,7 +187,7 @@ class TuiController:
             lines = self.frame(title)
             cols = min(width - DASHBOARD_WIDTH - 2, MAX_VIEW_COLS)
             rows = min(height - 1, _view_rows(cols))
-            view = framed_view(self.state, cols, rows)
+            view, self.view_styles = framed_picture(self.state, cols, rows)
             col = DASHBOARD_WIDTH + 2
             merged = []
             for i in range(max(len(lines), len(view))):
@@ -200,7 +200,7 @@ class TuiController:
             cols = min(width - 1, MAX_VIEW_COLS)
             # Shrink the picture before the dashboard gets cut off at the bottom.
             rows = max(MIN_VIEW_ROWS, min(_view_rows(cols), height - 1 - len(lines)))
-            view = framed_view(self.state, cols, rows)
+            view, self.view_styles = framed_picture(self.state, cols, rows)
             return view + lines, (0, 0, len(view), cols)
         return self.frame(title), None
 
@@ -240,7 +240,8 @@ async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05) -
                 controller.handle_key(CURSES_KEYS.get(key, key))
             controller.tick()
             height, width = screen.getmaxyx()
-            _draw(screen, *controller.layout(title, width, height), colors)
+            lines, view = controller.layout(title, width, height)
+            _draw(screen, lines, view, colors, controller.view_styles)
             await asyncio.sleep(interval)
     finally:
         screen.keypad(False)
@@ -266,30 +267,62 @@ def _escape_sequence(screen) -> str:
     return ARROW_SEQUENCES.get(sequence, "ESC")
 
 
-def _init_colors() -> dict:
-    """Colour attribute per picture character (empty without colour support)."""
+class _Colors:
+    """curses attributes for the picture's colour styles ("fg[/bg][+bold]")."""
+
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+        self._attrs: dict = {}
+        self._pairs: dict = {}
+
+    def attr(self, style: Optional[str]) -> int:
+        if not style or not self.enabled:
+            return 0
+        if style not in self._attrs:
+            self._attrs[style] = self._make(style)
+        return self._attrs[style]
+
+    def _make(self, style: str) -> int:
+        import curses
+
+        colours, _, flag = style.partition("+")
+        bold = curses.A_BOLD if flag == "bold" or colours == "bold" else 0
+        if colours == "bold":
+            return bold
+        fg, _, bg = colours.partition("/")
+        key = (_curses_color(fg), _curses_color(bg) if bg else -1)
+        if key not in self._pairs:
+            number = len(self._pairs) + 1
+            try:
+                curses.init_pair(number, *key)
+            except curses.error:  # out of colour pairs
+                return bold
+            self._pairs[key] = curses.color_pair(number)
+        return self._pairs[key] | bold
+
+
+def _curses_color(name: str) -> int:
+    import curses
+
+    return getattr(curses, "COLOR_" + name.upper())
+
+
+def _init_colors() -> _Colors:
+    """Colour attributes for the picture (disabled without colour support)."""
     import curses
 
     try:
         if not curses.has_colors():
-            return {}
+            return _Colors(False)
         curses.start_color()
         curses.use_default_colors()
     except curses.error:
-        return {}
-    pairs = {
-        vf.STAR: curses.COLOR_BLUE, vf.GROUND_A: curses.COLOR_GREEN, vf.GROUND_B: curses.COLOR_GREEN,
-        vf.POST: curses.COLOR_RED, vf.CROSS: curses.COLOR_YELLOW, vf.FINE: curses.COLOR_CYAN,
-    }
-    colors = {}
-    for number, (ch, color) in enumerate(pairs.items(), start=1):
-        curses.init_pair(number, color, -1)
-        colors[ch] = curses.color_pair(number) | (curses.A_BOLD if ch == vf.CROSS else 0)
-    colors[vf.HORIZON] = curses.A_BOLD
-    return colors
+        return _Colors(False)
+    return _Colors(True)
 
 
-def _draw(screen, lines: List[str], view: Optional[ViewBox], colors: dict) -> None:
+def _draw(screen, lines: List[str], view: Optional[ViewBox], colors: _Colors,
+          styles: Styles) -> None:
     import curses
 
     height, width = screen.getmaxyx()
@@ -300,13 +333,15 @@ def _draw(screen, lines: List[str], view: Optional[ViewBox], colors: dict) -> No
             screen.addnstr(row, 0, line, width - 1, attr)
         except curses.error:
             pass
-    if view and colors:
+    if view and colors.enabled:
         top, left, rows, cols = view
         # Colour the inside of the picture, not its border.
         for row in range(top + 1, min(top + rows - 1, height - 1)):
             line = lines[row]
+            style_row = styles[row - top - 1] if row - top - 1 < len(styles) else []
             for col in range(left + 1, min(left + cols - 1, width - 1, len(line))):
-                attr = colors.get(line[col])
+                index = col - left - 1
+                attr = colors.attr(style_row[index] if index < len(style_row) else None)
                 if attr:
                     try:
                         screen.addstr(row, col, line[col], attr)

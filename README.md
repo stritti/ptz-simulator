@@ -101,6 +101,29 @@ appears when zoomed in. The field of view is 60° at 1× and narrows with the zo
 (3° at 20×); the caption shows pan, tilt and zoom. Moves from any client show up
 in the picture as they happen.
 
+The landscape has landmarks at fixed coordinates, so you can check by eye that a
+client's absolute moves and presets land where they should. Small details only
+become readable when you zoom in:
+
+| Landmark | Pan | Tilt | Zoom to see details |
+|---|---|---|---|
+| Alps with snow caps | 52° … 108° | 0° … 14° | 1× |
+| Summit cross with a waving climber | 78.2° | 14° | 14×–20× |
+| Forest (with a fox hiding in it) | −28° … −8° | 0° … 7° | 1× (fox at −14.3°: 10×–20×) |
+| House with smoking chimney and a cat in the window | −95° | 0° … 10° | 1.5× |
+| Sun wearing sunglasses | −50° | 28° … 39° | 2× |
+| Flock of birds (a straggler calls “wait for me!” at 17.3°) | 22° | 20° … 28° | 1× (call: 10×–20×) |
+| Plane towing a “HELLO, PTZ CLIENT!” banner | 48° | 34° … 37° | 2×–3× |
+| UFO beaming up a cow | 140° | 0° … 20° | 1.5× (cow at 6°: 3×–6×) |
+| Hot-air balloon | −140° | 20° … 28° | 2× |
+| Lake with a rubber duck (−63°) and a lake monster (−55°) | −60° | −13° … −5° | 1× (duck, monster: 6×–10×) |
+| Billboard “VISCA HOME COMMAND 81 01 06 04 FF” | −165° | 0° … 5° | 4× |
+| Billboard “ONVIF says: `<tptz:GotoHomePosition/>`” | 165° | 0° … 5° | 4× |
+| Rocket | 10° | 60° … 67° | 1.5× |
+| Buried treasure with a “dig here!” note | 30° | −28° … −26° | 3× (note: 12×–20×) |
+
+The billboards stand behind the camera, near the pan limits (±170°).
+
 The keyboard UI uses `curses` and needs a terminal, so it is not available on
 native Windows Python (use WSL) or when stdin/stdout are redirected; `serve` then
 falls back to the read-only dashboard.
@@ -184,8 +207,10 @@ uv run --extra ndi ptzsim serve --ndi --name "Camera 1"
 ```
 
 The simulator shows up as the NDI source `HOSTNAME (Camera 1)` and sends a test
-picture (640×360, `--ndi-fps`, default 25): a grid with sky, ground, horizon and
-red posts every 45° that moves with pan, tilt and zoom. It announces PTZ support
+picture (640×360, `--ndi-fps`, default 25): a grid with sky, ground, horizon,
+red posts every 45° and the same landmarks as the
+[TUI camera picture](#keyboard-control-tui) (mountains, house, UFO, billboards, …),
+moving with pan, tilt and zoom. It announces PTZ support
 (`<ndi_capabilities ntk_ptz="true" .../>` with pan/tilt, zoom, focus, autofocus, white balance and preset speed; NDI preset indexes 0–99, of which the camera has 64), so NDI Studio Monitor, vMix, OBS
 (DistroAV) etc. offer PTZ control.
 
