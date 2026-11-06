@@ -183,6 +183,19 @@ def main() -> int:
             return True, "reply %s" % dump(got[0])
         return _expect
 
+    def expect_nibble_inquiry(payload_len):
+        """`90 50` + exactly payload_len nibble-encoded bytes (0x00..0x0F) + FF."""
+        def _expect(got):
+            if len(got) != 1:
+                return False, "expected 1 reply, got %s" % [dump(g) for g in got]
+            p = got[0]
+            if len(p) != 2 + payload_len + 1 or p[:2] != b"\x90\x50" or p[-1] != 0xFF \
+                    or any(b > 0x0F for b in p[2:-1]):
+                return False, "expected `90 50` + %d nibble bytes + `FF`, got %s" \
+                    % (payload_len, dump(p))
+            return True, "reply %s" % dump(p)
+        return _expect
+
     def expect_ack_completion():
         def _expect(got):
             if len(got) != 2:
@@ -197,10 +210,10 @@ def main() -> int:
     check("if_clear", "81 01 00 01 FF", expect_single("90 50 FF"))
     check("power inquiry (on or standby)", "81 09 04 00 FF", expect_inquiry(4))
     check("version inquiry", "81 09 00 02 FF", expect_inquiry(7))
-    check("pan/tilt position inquiry (8 payload bytes)", "81 09 06 12 FF",
-          lambda got: (len(got) == 1 and len(got[0]) == 11 and got[0][:2] == b"\x90\x50"
-                       and got[0][-1] == 0xFF, "reply %s" % [dump(g) for g in got]))
-    check("zoom inquiry (4 payload bytes)", "81 09 04 47 FF", expect_inquiry(7))
+    check("pan/tilt position inquiry (8 nibble-encoded payload bytes)", "81 09 06 12 FF",
+          expect_nibble_inquiry(8))
+    check("zoom inquiry (4 nibble-encoded payload bytes)", "81 09 04 47 FF",
+          expect_nibble_inquiry(4))
     check("pan/tilt drive stop (ACK + completion)", "81 01 06 01 01 01 03 03 FF",
           expect_ack_completion(), replies=2)
     preset_hex = "%02X" % args.preset
