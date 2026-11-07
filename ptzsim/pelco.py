@@ -283,24 +283,26 @@ class PelcoCamera:
         if opcode != CMD2_SET_ZOOM and value >= ANGLE_RANGE:
             self.camera.record("Pelco-D", f"position {value} out of range 0..35999", ok=False)
             return None
-        # The runaway timer stays armed: the move below zeroes the velocity of the axis
-        # it takes over, so the timer only stops the axes that are still being driven.
-        pan = s.pan_target[0] if s.pan_target else s.pan
-        tilt = s.tilt_target[0] if s.tilt_target else s.tilt
+        # Only the addressed axis changes: a drive or move on another axis keeps going,
+        # and the runaway timer stays armed for it (the addressed axis's velocity is
+        # zeroed, so the timer no longer touches that one).
+        # Positions beyond the end stops are clipped (the manual leaves the range of a
+        # specific device to its own documentation).
+        step = st.PAN_TILT_UNITS_PER_SPEED_STEP
         if opcode == CMD2_SET_PAN:
-            pan = self._degrees(value) * st.UNITS_PER_DEGREE
+            s.pan_velocity = 0.0
+            s.pan_target = (st.clamp(self._degrees(value) * st.UNITS_PER_DEGREE, st.PAN_MIN, st.PAN_MAX),
+                            st.PAN_SPEED_MAX * step)
             what = f"set pan position {value / 100:.2f} deg"
         elif opcode == CMD2_SET_TILT:
             tilt = -self._degrees(value) * st.UNITS_PER_DEGREE  # Pelco: down is positive
+            s.tilt_velocity = 0.0
+            s.tilt_target = (st.clamp(tilt, st.TILT_MIN, st.TILT_MAX), st.TILT_SPEED_MAX * step)
             what = f"set tilt position {value / 100:.2f} deg"
-        if opcode == CMD2_SET_ZOOM:
+        else:
             ratio = st.clamp(value / ZOOM_POSITION_MAX * st.MAX_OPTICAL_ZOOM, 1.0, st.MAX_OPTICAL_ZOOM)
             s.zoom_to(st.ZOOM_MIN + (ratio - 1.0) / (st.MAX_OPTICAL_ZOOM - 1.0) * (st.ZOOM_MAX - st.ZOOM_MIN))
             what = f"set zoom position {value} ({ratio:.1f}x)"
-        else:
-            # Positions beyond the end stops are clipped (the manual leaves the range
-            # of a specific device to its own documentation).
-            s.move_pan_tilt_to(pan, tilt, st.PAN_SPEED_MAX, st.TILT_SPEED_MAX)
         if self.camera.instant:
             s.finish_moves()
         self.camera.record("Pelco-D", what)

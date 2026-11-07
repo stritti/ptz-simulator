@@ -454,3 +454,11 @@ def test_set_position_keeps_runaway_protection_for_other_driven_axes(monkeypatch
     pelco = asyncio.run(scenario())
     assert pelco.state.pan_velocity == 0.0  # the pan drive still timed out
     assert pelco.state.zoom_target is not None  # the zoom position move keeps going
+
+
+def test_set_pan_position_leaves_the_tilt_drive_alone():
+    pelco = PelcoCamera(ViscaCamera(instant=False))
+    run(pelco, make_frame(1, 0x00, TILT_UP, 0x00, 0x20))  # continuous tilt
+    run(pelco, make_frame(1, 0x00, 0x4B, 0x23, 0x28))  # set pan position 90.00 deg
+    assert pelco.state.tilt_velocity != 0.0 and pelco.state.tilt_target is None
+    assert pelco.state.pan_target is not None and pelco.state.pan_velocity == 0.0
