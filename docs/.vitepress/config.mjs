@@ -79,6 +79,7 @@ export default defineConfig({
         items: [
           { text: 'Overview', link: '/skills' },
           { text: 'Install into your project', link: '/skills#install-into-your-project' },
+          { text: 'On skills.sh', link: '/skills#on-skills-sh' },
           { text: 'Skill directories per agent', link: '/skills#skill-directories-per-agent' },
           { text: 'Conformance scripts', link: '/skills#using-the-bundled-conformance-scripts' }
         ]
