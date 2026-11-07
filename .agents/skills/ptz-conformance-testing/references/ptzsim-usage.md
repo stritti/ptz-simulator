@@ -21,7 +21,8 @@ python3 ptzsim.pyz serve …
 
 ```bash
 python3 -m ptzsim serve --sony --tcp --udp --no-tui        # VISCA: UDP 52381, TCP 5678, UDP 1259
-python3 -m ptzsim serve --pty /tmp/ttyPTZ                  # serial via pseudo terminal
+python3 -m ptzsim serve --pty /tmp/ttyPTZ                  # VISCA serial via pseudo terminal
+python3 -m ptzsim serve --pelco-d /tmp/ttyPelcoD           # Pelco-D serial (0.4.0+); --pelco-d-address 1..255
 python3 -m ptzsim serve --onvif --onvif-user admin --onvif-password secret --name "Camera 1"
 python3 -m ptzsim serve --onvif 8081 --name "Camera 2"    # several instances = several cameras
 python3 -m ptzsim serve --sony --onvif --instant --no-tui  # moves complete at once
