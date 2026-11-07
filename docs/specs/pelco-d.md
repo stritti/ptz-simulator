@@ -27,7 +27,7 @@ module: `ptzsim/pelco.py`, option `--pelco-d [LINK]`.
 | Section | Requirement | ptzsim |
 |---|---|---|
 | D 5.0.1 4.2, SX400 3.2.1 | General Response: 4 bytes `FF addr alarms cksm`; alarms is bit-coded, cksm = checksum of the command plus the alarms byte | yes, alarms is always `00` (no alarm inputs), so cksm equals the command checksum: `FF 01 00 02 20 00 23` → `FF 01 00 23` |
-| D 5.0.1 4.1/5.1 | Extended Response (7 bytes) for queries; ack/nak for commands a unit may not execute | *missing*: no query commands yet |
+| D 5.0.1 4.1/5.1 | Extended Response (7 bytes) `FF addr 00 resp2 msb lsb cksm` for queries; ack/nak for commands a unit may not execute | Extended Response for the position queries; ack/nak *missing* |
 | D 5.0.1 5.1 | older units send a General Response for any well-formed command, even one they do not understand | *deviation*: unsupported commands get no reply, so a client sees that ptzsim did not execute them |
 
 ## Standard commands (motion)
@@ -50,5 +50,5 @@ module: `ptzsim/pelco.py`, option `--pelco-d [LINK]`.
 | D 5.0.1 5.4 | Go To Preset `00 07 00 id`; an invalid preset is ignored, a motion command aborts the move | yes; an unset preset gets no reply |
 | D 5.0.1 5.19, SX400 5.2.1 | Set Zoom Speed `00 25 00 0..3` (0 slowest, 3 fastest) | yes; zoom drives use this speed (default 3) |
 | D 5.0.1 5.20, SX400 5.2.2 | Set Focus Speed `00 27 00 0..3` | yes (default 2) |
-| D 5.0.1 5.38–5.40 | Set Pan/Tilt/Zoom Position `00 4B` / `4D` / `4F` | *missing* |
-| D 5.0.1 5.41–5.47 | Query Pan/Tilt/Zoom Position `00 51` / `53` / `55`, responses `59` / `5B` / `5D` | *missing*; read the position via VISCA or ONVIF on the same camera |
+| D 5.0.1 5.38–5.40 | Set Pan/Tilt/Zoom Position `00 4B` / `4D` / `4F`: pan/tilt 0–35999 hundredths of a degree (tilt 0 = horizon, 9000 = down), zoom = magnification / zoom limit × 65535 | yes; values ≥ 36000 get no reply, positions beyond the end stops are clipped; zoom limit is 20× |
+| D 5.0.1 5.41–5.47 | Query Pan/Tilt/Zoom Position `00 51` / `53` / `55`, responses `59` / `5B` / `5D` in the same units | yes |

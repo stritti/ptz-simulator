@@ -64,11 +64,12 @@ What "reference-conformant" means per protocol, checked against the ptzsim refer
 - [ ] Extended commands (cmd2 bit 0 set): 0x03 set / 0x05 clear / 0x07 call preset,
       preset number in data2 (0–99); call of an unset preset → no response.
 - [ ] Stop all: `FF <addr> 00 00 00 00 <chk>`. Speeds 0x00–0x3F (0x00 = slowest, not
-      stop) and 0xFF turbo; zoom/focus speed via `00 25` / `00 27` (0x00–0x03); drive
+      stop) and 0x40 pan turbo; zoom/focus speed via `00 25` / `00 27` (0x00–0x03); drive
       commands stop after 15 s without a new drive command.
 - [ ] Parser resyncs on 0xFF and discards bad-checksum candidates byte by byte.
-- [ ] Position queries (`00 51`/`00 53`/`00 55`) are not simulated yet — position is
-      read via VISCA/ONVIF instead.
+- [ ] Position: set `00 4B/4D/4F` (general response), query `00 51/53/55` → Extended
+      Response `FF a 00 59/5B/5D msb lsb cksm`; pan/tilt in 1/100° 0–35999 (tilt 0 =
+      horizon, 9000 = down), zoom = magnification / limit × 65535.
 
 ## Known deliberate deviations of the ptzsim reference
 

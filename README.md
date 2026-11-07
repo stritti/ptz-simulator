@@ -432,18 +432,21 @@ iris open + close) or with an unsupported command gets no reply. Implemented com
 | Clear preset | `FF a 00 05 00 <n> chk` | deletes preset n |
 | Set zoom speed | `FF a 00 25 00 <s> chk` | zoom speed for later zoom commands, 0x00 slowest … 0x03 highest (default 0x03) |
 | Set focus speed | `FF a 00 27 00 <s> chk` | focus speed for later focus commands, 0x00 slowest … 0x03 highest (default 0x02) |
+| Set pan / tilt position | `FF a 00 4B/4D <msb> <lsb> chk` | moves to 0–35999 hundredths of a degree; pan clockwise, tilt 0 = horizon, 9000 = straight down, 27000 = straight up |
+| Set zoom position | `FF a 00 4F <msb> <lsb> chk` | zoom to (position / 65535) × zoom limit (20×) |
+| Query pan / tilt / zoom position | `FF a 00 51/53/55 00 00 chk` | Extended Response `FF a 00 59/5B/5D <msb> <lsb> chk` in the same units |
 
 A drive frame describes the whole motion state: an axis whose direction bit is
 cleared stops (a later zoom-only frame also stops the pan). Speeds are
-0x00–0x3F, where 0x00 is the slowest speed (not a stop) and 0xFF is turbo
-(maximum), mapped onto the VISCA speed ranges. Zoom and focus speeds are not
+0x00–0x3F, where 0x00 is the slowest speed (not a stop) and 0x40 is pan turbo
+(maximum; every value above 0x3F is treated as maximum), mapped onto the VISCA speed ranges. Zoom and focus speeds are not
 taken from the data fields but from Set Zoom Speed / Set Focus Speed. As Pelco
 requires for runaway detection, a drive command stops by itself after 15 seconds
 unless a new drive command arrives. Focus commands only move the focus in manual
 focus mode (like VISCA, they are ignored while autofocus is on). Presets are
-the same 100 presets as for VISCA and ONVIF. The Pelco-D position queries
-(e.g. Query Zoom Position `00 55`) are not implemented yet, so a client reads the
-position via VISCA/ONVIF (run e.g. `--sony --pelco-d` at the same time). Example: pan right at medium speed on
+the same 100 presets as for VISCA and ONVIF. Positions follow the Pelco "D"
+Protocol manual v5.0.1 (sections 5.38–5.47); positions beyond the end stops
+(±170° pan, −30…+90° tilt) are clipped. Example: pan right at medium speed on
 camera 1 is `FF 01 00 02 20 00 23`.
 
 ## NDI
@@ -631,7 +634,7 @@ validate it against this simulator (details on the [agent skills](docs/skills.md
 | `ptz-reference-interface` | Entry point: protocol selection, implementation workflow, validation |
 | `visca-interface` | VISCA over RS-232/422 and VISCA over IP (UDP 52381): framing, command/inquiry set, ACK/completion/error replies, command sockets, value ranges, plus a `visca_conformance.py` smoke test |
 | `onvif-ptz-interface` | ONVIF Profile S/T PTZ service: SOAP operations, coordinate spaces, fault chains, WS-Discovery, WS-Security/digest auth, plus an `onvif_conformance.py` smoke test |
-| `pelco-d-interface` | Pelco-D serial (RS-485, 7-byte frames + checksum): frame layout, general response, motion bitmask, preset opcodes, speeds/turbo, addressing, plus a `pelco_conformance.py` smoke test |
+| `pelco-d-interface` | Pelco-D serial (RS-485, 7-byte frames + checksum): frame layout, general and extended response, motion bitmask, preset opcodes, position set/query, speeds/turbo, addressing, plus a `pelco_conformance.py` smoke test |
 | `ptz-conformance-testing` | Run ptzsim as the reference camera (or smoke-test your own camera-side endpoint) and follow the conformance checklists |
 
 Install the skills into your project from a clone of this repository:

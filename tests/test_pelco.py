@@ -93,7 +93,7 @@ def test_pan_right_at_medium_speed():
 
 def test_tilt_down_turbo_and_combined_move():
     pelco, _ = make()
-    run(pelco, make_frame(1, 0x00, TILT_DOWN | PAN_LEFT, 0xFF, 0x3F))
+    run(pelco, make_frame(1, 0x00, TILT_DOWN | PAN_LEFT, 0x40, 0x3F))  # 0x40 = turbo (D 5.0.1 3.1.2)
     assert pelco.state.tilt_velocity == -st.TILT_SPEED_MAX * st.PAN_TILT_UNITS_PER_SPEED_STEP
     assert pelco.state.pan_velocity == -st.PAN_SPEED_MAX * st.PAN_TILT_UNITS_PER_SPEED_STEP
 
@@ -380,3 +380,85 @@ def test_pelco_d_plugin_releases_the_pty(tmp_path):
     port = asyncio.run(run())
     assert (port.master, port.slave) == (-1, -1)
     assert not link.exists()
+
+
+# ------------------------------------------------- positions (D 5.0.1 5.38-5.47)
+def _value(reply: bytes) -> int:
+    return (reply[4] << 8) | reply[5]
+
+
+@pytest.mark.parametrize("opcode, resp", [(0x51, 0x59), (0x53, 0x5B), (0x55, 0x5D)])
+def test_queries_answer_with_an_extended_response(opcode, resp):
+    pelco, _ = make(address=3)
+    [reply] = run(pelco, make_frame(3, 0x00, opcode, 0x00, 0x00))
+    assert len(reply) == 7 and reply[:4] == bytes([0xFF, 3, 0x00, resp])
+    assert reply[6] == sum(reply[1:6]) & 0xFF  # checksum over bytes 2..6
+
+
+def test_query_pan_and_tilt_use_hundredths_of_a_degree():
+    pelco, _ = make()
+    pelco.state.pan = 45 * st.UNITS_PER_DEGREE  # 45 deg right
+    pelco.state.tilt = -45 * st.UNITS_PER_DEGREE / 3  # 15 deg down
+    assert _value(run(pelco, make_frame(1, 0x00, 0x51, 0x00, 0x00))[0]) == 4500
+    assert _value(run(pelco, make_frame(1, 0x00, 0x53, 0x00, 0x00))[0]) == 1500
+    pelco.state.pan = -90 * st.UNITS_PER_DEGREE  # 90 deg left = 270 deg
+    pelco.state.tilt = 45 * st.UNITS_PER_DEGREE  # 45 deg up reads 31500 (5.46.2)
+    assert _value(run(pelco, make_frame(1, 0x00, 0x51, 0x00, 0x00))[0]) == 27000
+    assert _value(run(pelco, make_frame(1, 0x00, 0x53, 0x00, 0x00))[0]) == 31500
+
+
+def test_query_zoom_is_magnification_over_zoom_limit():
+    pelco, _ = make()
+    pelco.state.zoom = st.ZOOM_MAX  # 20x of 20x
+    assert _value(run(pelco, make_frame(1, 0x00, 0x55, 0x00, 0x00))[0]) == 0xFFFF
+    pelco.state.zoom = st.ZOOM_MIN  # 1x of 20x
+    assert _value(run(pelco, make_frame(1, 0x00, 0x55, 0x00, 0x00))[0]) == round(65535 / 20)
+
+
+def test_set_pan_tilt_zoom_position_round_trip():
+    pelco, _ = make()
+    for opcode, value in ((0x4B, 4500), (0x4D, 31500), (0x4F, 0x8000)):
+        frame = make_frame(1, 0x00, opcode, value >> 8, value & 0xFF)
+        assert run(pelco, frame) == [pelco.ack(frame)]  # general reply
+    assert round(pelco.state.pan_degrees) == 45
+    assert round(pelco.state.tilt_degrees) == 45  # 31500 = 45 deg up
+    assert abs(pelco.pelco_position("zoom") - 0x8000) <= 2
+    # 33000 = 330 deg = 30 deg left
+    run(pelco, make_frame(1, 0x00, 0x4B, 33000 >> 8, 33000 & 0xFF))
+    assert round(pelco.state.pan_degrees) == -30
+
+
+def test_set_position_out_of_range_gets_no_reply():
+    pelco, camera = make()
+    assert run(pelco, make_frame(1, 0x00, 0x4B, 36000 >> 8, 36000 & 0xFF)) == []
+    assert "out of range" in camera.log[-1].description
+
+
+def test_set_position_moves_at_motor_speed_without_instant():
+    pelco = PelcoCamera(ViscaCamera(instant=False))
+    run(pelco, make_frame(1, 0x00, 0x4B, 4500 >> 8, 4500 & 0xFF))
+    assert pelco.state.pan == 0.0 and pelco.state.pan_target is not None
+
+
+def test_set_position_keeps_runaway_protection_for_other_driven_axes(monkeypatch):
+    import ptzsim.pelco as pelco_module
+    monkeypatch.setattr(pelco_module, "RUNAWAY_TIMEOUT", 0.02)
+
+    async def scenario():
+        pelco = PelcoCamera(ViscaCamera(instant=False))
+        run(pelco, make_frame(1, 0x00, PAN_RIGHT, 0x01, 0x00))  # slow continuous pan
+        run(pelco, make_frame(1, 0x00, 0x4F, 0x80, 0x00))  # set zoom position
+        await asyncio.sleep(0.05)
+        return pelco
+
+    pelco = asyncio.run(scenario())
+    assert pelco.state.pan_velocity == 0.0  # the pan drive still timed out
+    assert pelco.state.zoom_target is not None  # the zoom position move keeps going
+
+
+def test_set_pan_position_leaves_the_tilt_drive_alone():
+    pelco = PelcoCamera(ViscaCamera(instant=False))
+    run(pelco, make_frame(1, 0x00, TILT_UP, 0x00, 0x20))  # continuous tilt
+    run(pelco, make_frame(1, 0x00, 0x4B, 0x23, 0x28))  # set pan position 90.00 deg
+    assert pelco.state.tilt_velocity != 0.0 and pelco.state.tilt_target is None
+    assert pelco.state.pan_target is not None and pelco.state.pan_velocity == 0.0

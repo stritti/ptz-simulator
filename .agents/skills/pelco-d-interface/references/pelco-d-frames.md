@@ -53,7 +53,7 @@ A drive frame describes the **whole motion state**: an axis whose direction bit 
 cleared stops — a later zoom-only frame also stops the pan.
 
 Speed fields: data1 = pan speed, data2 = tilt speed, range 0x00–0x3F where 0x00 is the
-slowest speed (not a stop) and 0xFF is turbo (maximum). Zoom and focus speeds are not
+slowest speed (not a stop) and 0x40 is turbo (pan only, maximum; D 5.0.1 3.1.2). Zoom and focus speeds are not
 in the drive frame; they are set with the extended commands below. Speeds map onto the
 camera's internal speed ranges.
 
@@ -68,6 +68,13 @@ Stop all: `FF <addr> 00 00 00 00 <chk>`.
 | 0x07 | call preset (moves to preset n; **no response** if not set) |
 | 0x25 | set zoom speed (data2 0x00 slowest … 0x03 highest) |
 | 0x27 | set focus speed (data2 0x00 slowest … 0x03 highest) |
+| 0x4B / 0x4D | set pan / tilt position, data1/data2 = MSB/LSB in hundredths of a degree 0–35999 |
+| 0x4F | set zoom position, data1/data2 = (magnification / zoom limit) × 65535 |
+| 0x51 / 0x53 / 0x55 | query pan / tilt / zoom position → Extended Response 0x59 / 0x5B / 0x5D |
+
+Extended Response (7 bytes, D 5.0.1 4.1): `FF <addr> 00 <resp2> <msb> <lsb> <cksm>`,
+cksm = sum of bytes 2–6 modulo 256. Tilt reads 0 at the horizon, 9000 straight down
+and 27000 straight up (45° up = 31500); pan counts clockwise from zero.
 
 Focus commands only move in manual focus mode; while autofocus is on they are ignored
 (like VISCA manual focus).
@@ -81,8 +88,6 @@ Focus commands only move in manual focus mode; while autofocus is on they are ig
 ## Notes
 
 - Presets are the same 100 presets as VISCA/ONVIF (0–99).
-- Pelco-D defines position queries (e.g. Query Zoom Position `00 55` → response
-  `00 5D <MSB> <LSB>`), which ptzsim does not implement yet — read the position via
-  VISCA/ONVIF on the same camera.
-- Official specs: Pelco "D" Protocol manual rev 5.x (sections 3–4); Fujifilm SX400/SX1600
+- Official specs: Pelco "D" Protocol manual v5.0.1 (1 April 2008; not redistributable,
+  ask Pelco for a copy); Fujifilm SX400/SX1600
   Pelco-D specifications (links in the repository README).
