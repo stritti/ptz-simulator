@@ -74,6 +74,7 @@ for (const { name, input, base } of [
     for (const page of ['index', 'onvif', 'visca', 'pelco-d', 'ndi']) {
       assert.ok(existsSync(join(output, 'specs', `${page}.html`)), `the ${page} specification page must be generated`)
     }
+    assert.ok(guide.includes(`href="${base}specs/"`), 'the README link to the specification reference must work')
     const onvifSpecs = readFileSync(join(output, 'specs', 'onvif.html'), 'utf8')
     for (const pdf of ['ONVIF-Core-Spec-v2606', 'ONVIF-Media-Service-Spec-v2412',
       'ONVIF-PTZ-Service-Spec-v2512', 'ONVIF-Imaging-Service-Spec-v1812']) {

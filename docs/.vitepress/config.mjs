@@ -20,9 +20,11 @@ function repositoryPathsInReadme(md) {
           child.attrSet('src', src.slice('docs/public'.length))
         }
         const href = child.type === 'link_open' && child.attrGet('href')
-        const page = href && href.match(/^docs\/([^/#]+)\.md(#.*)?$/)
+        const page = href && href.match(/^docs\/([^#]+)\.md(#.*)?$/)
         if (page) {
-          child.attrSet('href', `/${page[1]}${page[2] || ''}`)
+          // docs/specs/index.md -> /specs/, docs/scene.md -> /scene
+          const path = page[1].replace(/(^|\/)index$/, '$1')
+          child.attrSet('href', `/${path}${page[2] || ''}`)
         }
       }
     }
