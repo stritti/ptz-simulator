@@ -48,9 +48,16 @@ def dump(data: bytes) -> str:
 
 
 class SerialPort:
-    def __init__(self, path: str, timeout: float):
+    def __init__(self, path: str, timeout: float, baud: int = 2400):
         self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         tty.setraw(self.fd)
+        speed = getattr(termios, "B%d" % baud, None)
+        if speed is None:
+            os.close(self.fd)
+            raise ValueError("unsupported baud rate %d" % baud)
+        attrs = termios.tcgetattr(self.fd)
+        attrs[4] = attrs[5] = speed  # input/output speed
+        termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
         termios.tcflush(self.fd, termios.TCIOFLUSH)
         self.timeout = timeout
 
@@ -86,12 +93,19 @@ def main() -> int:
                         help="preset number 0..99 used for set/call/clear (default 90; "
                              "the preset is cleared again at the end)")
     parser.add_argument("--timeout", type=float, default=2.0, help="reply timeout in seconds")
+    parser.add_argument("--baud", type=int, default=2400,
+                        help="serial baud rate, applied via termios (default 2400)")
+    parser.add_argument("--foreign-address", type=int, default=None, metavar="ADDR",
+                        help="address for the foreign-address silence check; must be unused "
+                             "on the bus (default: 2 if --address is 1, else 1)")
     args = parser.parse_args()
     if not 1 <= args.address <= 255 or not 0 <= args.preset <= 99:
         parser.error("--address must be 1..255 and --preset 0..99")
-    other_address = 2 if args.address == 1 else 1
+    other_address = args.foreign_address or (2 if args.address == 1 else 1)
+    if not 1 <= other_address <= 255 or other_address == args.address:
+        parser.error("--foreign-address must be 1..255 and differ from --address")
 
-    port = SerialPort(args.port, args.timeout)
+    port = SerialPort(args.port, args.timeout, baud=args.baud)
     results = []
 
     def check(name, sent, expect_reply=True, timeout=None):
@@ -99,13 +113,17 @@ def main() -> int:
         termios.tcflush(port.fd, termios.TCIOFLUSH)
         port.send(sent)
         got = port.recv(4, timeout)
+        # a valid response must be exactly 4 bytes: probe for trailing garbage
+        trailing = port.recv(16, 0.3) if expect_reply and got else b""
         if not expect_reply:
             ok = got == b""
             detail = "silence expected, got %s" % (dump(got) or "nothing")
         else:
             want = response(sent)
-            ok = got == want
-            detail = "reply %s, expected %s" % (dump(got) or "nothing", dump(want))
+            ok = got == want and trailing == b""
+            detail = "reply %s, expected %s%s" % (
+                dump(got) or "nothing", dump(want),
+                ", trailing bytes %s" % dump(trailing) if trailing else "")
         results.append((ok, name, detail))
         print("%s %s — %s" % ("PASS" if ok else "FAIL", name, detail))
 
@@ -121,7 +139,9 @@ def main() -> int:
           frame(a, 0x00, CMD2_CLEAR_PRESET, 0x00, args.preset))
     check("wrong checksum -> silence", frame(a, 0x00, CMD2_PAN_RIGHT, 0x20, 0x00, bad_checksum=True),
           expect_reply=False)
-    check("frame for other address -> silence", frame(other_address, 0x00, CMD2_PAN_RIGHT, 0x20, 0x00),
+    # foreign-address check uses an unknown, non-motion extended opcode (0x7F), so even
+    # a real camera at that address on a shared bus is neither moved nor disturbed
+    check("frame for other address -> silence", frame(other_address, 0x00, 0x7F, 0x00, 0x00),
           expect_reply=False)
 
     port.close()
