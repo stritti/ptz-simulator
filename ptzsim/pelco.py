@@ -201,6 +201,8 @@ class PelcoCamera:
         self.camera.record("Pelco-D", ", ".join(actions) if actions else "stop all")
         return self.ack(frame)
 
+    VELOCITY_AXES = ("pan_velocity", "tilt_velocity", "zoom_velocity", "focus_velocity")
+
     def _restart_runaway_timer(self, moving: bool) -> None:
         """Stop a standard-command motion after RUNAWAY_TIMEOUT seconds (section 4)."""
         if self._runaway is not None:
@@ -212,15 +214,22 @@ class PelcoCamera:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return  # no event loop (unit tests): nothing can fire later
-        self._runaway = loop.call_later(RUNAWAY_TIMEOUT, self._runaway_stop)
+        # Remember the velocities this drive set: only those are stopped later, so a
+        # move another protocol started in the meantime is left alone.
+        owned = {axis: getattr(self.state, axis) for axis in self.VELOCITY_AXES}
+        self._runaway = loop.call_later(RUNAWAY_TIMEOUT, self._runaway_stop, owned)
 
-    def _runaway_stop(self) -> None:
+    def _runaway_stop(self, owned: Optional[dict] = None) -> None:
         self._runaway = None
         s = self.state
-        # Only the drive (velocity) motion is stopped; position targets set later,
-        # e.g. by a preset recall or another protocol, keep moving.
-        s.pan_velocity = s.tilt_velocity = s.zoom_velocity = s.focus_velocity = 0.0
-        self.camera.record("Pelco-D", f"no drive command for {RUNAWAY_TIMEOUT:g}s, stopped (runaway detection)")
+        stopped = False
+        for axis in self.VELOCITY_AXES:
+            value = getattr(s, axis)
+            if value and (owned is None or value == owned[axis]):
+                setattr(s, axis, 0.0)  # position targets (preset recall, ...) keep moving
+                stopped = True
+        if stopped:
+            self.camera.record("Pelco-D", f"no drive command for {RUNAWAY_TIMEOUT:g}s, stopped (runaway detection)")
 
     def _set_speed(self, opcode: int, value: int, frame: bytes) -> bytes:
         if opcode == CMD2_SET_ZOOM_SPEED:

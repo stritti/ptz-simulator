@@ -220,6 +220,22 @@ def test_runaway_timer_does_not_abort_a_preset_recall(monkeypatch):
     assert pelco.state.pan_target is not None and pelco.state.pan_target[0] == 500.0
 
 
+def test_runaway_timer_leaves_a_newer_move_of_another_protocol_alone(monkeypatch):
+    import ptzsim.pelco as pelco_module
+    monkeypatch.setattr(pelco_module, "RUNAWAY_TIMEOUT", 0.02)
+
+    async def scenario():
+        pelco, _ = make()
+        run(pelco, make_frame(1, 0x00, PAN_RIGHT | ZOOM_TELE, 0x20, 0x00))
+        pelco.state.drive_pan_tilt(-1, 0, 5, 1)  # e.g. ONVIF ContinuousMove takes over pan
+        await asyncio.sleep(0.05)
+        return pelco
+
+    pelco = asyncio.run(scenario())
+    assert pelco.state.pan_velocity < 0.0  # the newer move keeps running
+    assert pelco.state.zoom_velocity == 0.0  # the Pelco zoom drive was stopped
+
+
 def test_runaway_stop_keeps_position_targets(monkeypatch):
     # a move to a target started elsewhere (e.g. ONVIF AbsoluteMove) is not a Pelco drive
     pelco, _ = make()
