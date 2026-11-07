@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.0](https://github.com/stritti/ptz-simulator/compare/v0.4.0...v0.5.0) (2026-11-07)
+
+
+### Features
+
+* **skills:** add pelco-d-interface skill ([fb31471](https://github.com/stritti/ptz-simulator/commit/fb31471659890b0da2a070a5554896a6505ff2c8))
+
+
+### Bug Fixes
+
+* **skills:** address pelco-d review round ([0baedbd](https://github.com/stritti/ptz-simulator/commit/0baedbd51e8112b332cf09362a33dcaddb944ccb))
+* **skills:** address pelco-d review round two ([c0effe4](https://github.com/stritti/ptz-simulator/commit/c0effe48b186f3b821dbcedbdd13ae9084d5f57b))
+
+
+### Documentation
+
+* mention pelco-d in README transports and skills intro ([4ee73de](https://github.com/stritti/ptz-simulator/commit/4ee73de1ef360f3df4e69e9a3834cdc4b24b6278))
+
 ## [0.4.0](https://github.com/stritti/ptz-simulator/compare/v0.3.0...v0.4.0) (2026-11-07)
 
 
