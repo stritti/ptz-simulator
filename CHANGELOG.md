@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.6.0](https://github.com/stritti/ptz-simulator/compare/v0.5.0...v0.6.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **skills:** scripts/install-skills.sh is removed. Install the agent skills with the skills.sh CLI instead: npx skills add stritti/ptz-simulator --skill <name> -a <agent> --yes
+
+### Features
+
+* **pelco-d:** set and query pan/tilt/zoom position ([62d9f89](https://github.com/stritti/ptz-simulator/commit/62d9f89068dae173ec44a3f9d91c9aab5aed9137))
+* **pelco-d:** set and query pan/tilt/zoom position ([590e43c](https://github.com/stritti/ptz-simulator/commit/590e43c57695cf7987b869381f2a24d8d08eb736))
+* **skills:** distribute skills via skills.sh, drop install-skills.sh ([521b26d](https://github.com/stritti/ptz-simulator/commit/521b26d37082cf4110e52b3f7904bacae7edc9b3))
+
+
+### Bug Fixes
+
+* align Pelco-D responses and ONVIF PTZ faults with their specs ([e5b7fd2](https://github.com/stritti/ptz-simulator/commit/e5b7fd2ed2db5c2d48210b13fba37e8c906e1e43))
+* **onvif:** return the PTZ service faults for spaces, speeds and tokens ([a1c2115](https://github.com/stritti/ptz-simulator/commit/a1c2115ab2a601f07da6fcd6942fa565b6ada2a2))
+* **pelco-d:** answer and validate standard commands per the Pelco-D spec ([99c8eef](https://github.com/stritti/ptz-simulator/commit/99c8eef64eb61f885843906365a1692188c20772))
+* **pelco-d:** keep a preset recall running when the runaway timer fires ([4977857](https://github.com/stritti/ptz-simulator/commit/49778571a2dfe4a40d30783236917408cd124808))
+* **pelco-d:** keep runaway timeout for axes a position command leaves driving ([7022801](https://github.com/stritti/ptz-simulator/commit/702280112f4f7ef194c90e138ede22be84714110))
+* **pelco-d:** let the runaway timer stop only motion the Pelco drive started ([415d51a](https://github.com/stritti/ptz-simulator/commit/415d51a3da6911e582c249c051a970f11465d1f6))
+* **pelco-d:** set position moves only the addressed axis ([b42443c](https://github.com/stritti/ptz-simulator/commit/b42443c6386b122bce094f636529448c719b459a))
+
+
+### Documentation
+
+* **skills:** document install via skills.sh CLI and add badge ([0ccb41f](https://github.com/stritti/ptz-simulator/commit/0ccb41fb597ec15d7ff6a4d84f5ccd3a49b713a7))
+* **skills:** document install via skills.sh CLI and add badge ([f288064](https://github.com/stritti/ptz-simulator/commit/f28806492e2a126e1a0d6c36e6c3f7c9bd62f4ac))
+* **website:** add a specification reference with the ONVIF specs ([ee1f8a3](https://github.com/stritti/ptz-simulator/commit/ee1f8a38335a18bc8ba3a616419c4b53452843a7))
+* **website:** resolve README links to pages in docs subdirectories ([de6d8ce](https://github.com/stritti/ptz-simulator/commit/de6d8ce1a676959ae9b134f102ddf1e8a556dc3b))
+
 ## [0.5.0](https://github.com/stritti/ptz-simulator/compare/v0.4.0...v0.5.0) (2026-11-07)
 
 
