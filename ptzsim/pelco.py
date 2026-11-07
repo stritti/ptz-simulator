@@ -283,7 +283,8 @@ class PelcoCamera:
         if opcode != CMD2_SET_ZOOM and value >= ANGLE_RANGE:
             self.camera.record("Pelco-D", f"position {value} out of range 0..35999", ok=False)
             return None
-        self._restart_runaway_timer(False)  # a position command supersedes the drive
+        # The runaway timer stays armed: the move below zeroes the velocity of the axis
+        # it takes over, so the timer only stops the axes that are still being driven.
         pan = s.pan_target[0] if s.pan_target else s.pan
         tilt = s.tilt_target[0] if s.tilt_target else s.tilt
         if opcode == CMD2_SET_PAN:

@@ -438,3 +438,19 @@ def test_set_position_moves_at_motor_speed_without_instant():
     pelco = PelcoCamera(ViscaCamera(instant=False))
     run(pelco, make_frame(1, 0x00, 0x4B, 4500 >> 8, 4500 & 0xFF))
     assert pelco.state.pan == 0.0 and pelco.state.pan_target is not None
+
+
+def test_set_position_keeps_runaway_protection_for_other_driven_axes(monkeypatch):
+    import ptzsim.pelco as pelco_module
+    monkeypatch.setattr(pelco_module, "RUNAWAY_TIMEOUT", 0.02)
+
+    async def scenario():
+        pelco = PelcoCamera(ViscaCamera(instant=False))
+        run(pelco, make_frame(1, 0x00, PAN_RIGHT, 0x01, 0x00))  # slow continuous pan
+        run(pelco, make_frame(1, 0x00, 0x4F, 0x80, 0x00))  # set zoom position
+        await asyncio.sleep(0.05)
+        return pelco
+
+    pelco = asyncio.run(scenario())
+    assert pelco.state.pan_velocity == 0.0  # the pan drive still timed out
+    assert pelco.state.zoom_target is not None  # the zoom position move keeps going
