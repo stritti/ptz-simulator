@@ -634,23 +634,16 @@ validate it against this simulator (details on the [agent skills](docs/skills.md
 | `pelco-d-interface` | Pelco-D serial (RS-485, 7-byte frames + checksum): frame layout, general response, motion bitmask, preset opcodes, speeds/turbo, addressing, plus a `pelco_conformance.py` smoke test |
 | `ptz-conformance-testing` | Run ptzsim as the reference camera (or smoke-test your own camera-side endpoint) and follow the conformance checklists |
 
-Install the skills into your project from a clone of this repository:
+Install the skills into your project with the [skills CLI](https://skills.sh) — no clone
+needed, `.agents/skills/` is one of its standard discovery directories:
 
 ```bash
-./scripts/install-skills.sh /path/to/your-project              # all common agent skill directories
-./scripts/install-skills.sh /path/to/your-project claude vibe   # selected agents only
-./scripts/install-skills.sh --user ~                            # personal skills for all agents
-# or by hand, e.g. for Claude Code:
-mkdir -p /path/to/your-project/.claude/skills && cp -r .agents/skills/* /path/to/your-project/.claude/skills/
-# or with the skills CLI (https://skills.sh), no clone needed:
 npx skills add stritti/ptz-simulator --list                    # list the skills in this repo
 npx skills add stritti/ptz-simulator --skill visca-interface   # install one skill
 npx skills add stritti/ptz-simulator --all -y                  # all skills into every agent
 ```
 
-The skills CLI installs straight from this repository (`.agents/skills/` is one of its
-standard discovery directories), and every install also lists the skills on
-[skills.sh/stritti/ptz-simulator](https://skills.sh/stritti/ptz-simulator).
+The skills are listed at [skills.sh/stritti/ptz-simulator](https://skills.sh/stritti/ptz-simulator).
 
 Agents read skills from their own directories; in this repository `.agents/skills/` is
 read directly by GitHub Copilot (VS Code/CLI/cloud), OpenAI Codex and Mistral Vibe:
