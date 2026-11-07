@@ -30,32 +30,9 @@ Mistral Vibe, …) pick them up in this repo directly.
 
 ## Install into your project
 
-From a clone of this repository, the installer copies every skill into the skill
-directories of the agents you choose:
-
-```bash
-./scripts/install-skills.sh /path/to/your-project              # all common agent skill directories
-./scripts/install-skills.sh /path/to/your-project claude vibe   # selected agents only
-./scripts/install-skills.sh --user ~                            # personal skills for all agents
-```
-
-Or copy by hand, e.g. for Claude Code:
-
-```bash
-mkdir -p /path/to/your-project/.claude/skills
-cp -r .agents/skills/* /path/to/your-project/.claude/skills/
-```
-
-Or with the [skills CLI](https://github.com/vercel-labs/skills):
-`npx skills add stritti/ptz-simulator --list`, then install with the agents you want
-(e.g. `-a claude-code -a copilot --yes`) — see [On skills.sh](#on-skills-sh).
-
-## On skills.sh
-
-[skills.sh](https://skills.sh) is the directory of the open agent skills ecosystem. It
-has no submission flow: a skill in a public GitHub repo is listed automatically once
-people install it with the `skills` CLI. Because the skills live in `.agents/skills/`,
-one of the CLI's standard discovery directories, this repository is installable as-is:
+Install the skills with the [skills CLI](https://skills.sh) straight from this
+repository — no clone needed, `.agents/skills/` is one of the CLI's standard
+discovery directories:
 
 ```bash
 npx skills add stritti/ptz-simulator --list                   # list the skills in this repo
@@ -63,10 +40,9 @@ npx skills add stritti/ptz-simulator --skill visca-interface  # install one skil
 npx skills add stritti/ptz-simulator --all -y                 # all skills into every agent
 ```
 
-Installs with telemetry enabled (i.e. without `DISABLE_TELEMETRY=1` or
-`DO_NOT_TRACK=1`) list the skills at
-[skills.sh/stritti/ptz-simulator](https://skills.sh/stritti/ptz-simulator), and
-`npx skills find ptz` makes them discoverable by keyword.
+Choose the agents with `-a` (e.g. `-a claude-code -a copilot --yes`). The skills are
+listed at [skills.sh/stritti/ptz-simulator](https://skills.sh/stritti/ptz-simulator) and
+discoverable with `npx skills find ptz`.
 
 ## Skill directories per agent
 
@@ -99,5 +75,5 @@ To validate a *client*, run the simulator and point the client at it instead —
 
 [`tests/test_skills.py`](https://github.com/stritti/ptz-simulator/blob/main/tests/test_skills.py)
 checks the `SKILL.md` frontmatter (name rules, description ≤ 1024 chars, ≤ 500 lines),
-that relative links resolve, that the bundled scripts compile, and that
-`scripts/install-skills.sh` copies the skills correctly — run it with `uv run pytest`.
+that relative links resolve and that the bundled scripts compile — run it with
+`uv run pytest`.

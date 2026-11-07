@@ -167,8 +167,8 @@ example working when the interface changes, and update the guide with it.
 ## Agent skills
 
 `.agents/skills/` ships [Agent Skills](https://agentskills.io) that other projects install
-(`scripts/install-skills.sh`, see the README section "Agent skills") to implement
-reference-conformant camera interfaces. Keep every `SKILL.md` self-contained (link only
+via the skills.sh CLI (`npx skills add stritti/ptz-simulator`, see the README section
+"Agent skills") to implement reference-conformant camera interfaces. Keep every `SKILL.md` self-contained (link only
 inside `.agents/skills/`, refer to this repo by absolute GitHub URLs) with valid
 frontmatter: `name` matches the directory (lowercase-hyphen, ≤64 chars), `description`
 ≤1024 chars, SKILL.md ≤500 lines with details in `references/` — `tests/test_skills.py`
