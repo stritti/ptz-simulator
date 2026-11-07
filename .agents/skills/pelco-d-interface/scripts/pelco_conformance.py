@@ -128,23 +128,32 @@ def main() -> int:
         print("%s %s — %s" % ("PASS" if ok else "FAIL", name, detail))
 
     a = args.address
-    check("drive pan right -> general response", frame(a, 0x00, CMD2_PAN_RIGHT, 0x20, 0x00))
-    check("drive zoom tele -> general response", frame(a, 0x00, CMD2_ZOOM_TELE, 0x20, 0x00))
-    check("stop all -> general response", frame(a, 0x00, 0x00, 0x00, 0x00))
-    check("set preset %d -> general response" % args.preset,
-          frame(a, 0x00, CMD2_SET_PRESET, 0x00, args.preset))
-    check("call preset %d -> general response" % args.preset,
-          frame(a, 0x00, CMD2_CALL_PRESET, 0x00, args.preset), timeout=10.0)
-    check("clear preset %d -> general response" % args.preset,
-          frame(a, 0x00, CMD2_CLEAR_PRESET, 0x00, args.preset))
-    check("wrong checksum -> silence", frame(a, 0x00, CMD2_PAN_RIGHT, 0x20, 0x00, bad_checksum=True),
-          expect_reply=False)
-    # foreign-address check uses an unknown, non-motion extended opcode (0x7F), so even
-    # a real camera at that address on a shared bus is neither moved nor disturbed
-    check("frame for other address -> silence", frame(other_address, 0x00, 0x7F, 0x00, 0x00),
-          expect_reply=False)
-
-    port.close()
+    try:
+        check("drive pan right -> general response", frame(a, 0x00, CMD2_PAN_RIGHT, 0x20, 0x00))
+        check("drive zoom tele -> general response", frame(a, 0x00, CMD2_ZOOM_TELE, 0x20, 0x00))
+        check("stop all -> general response", frame(a, 0x00, 0x00, 0x00, 0x00))
+        check("set preset %d -> general response" % args.preset,
+              frame(a, 0x00, CMD2_SET_PRESET, 0x00, args.preset))
+        check("call preset %d -> general response" % args.preset,
+              frame(a, 0x00, CMD2_CALL_PRESET, 0x00, args.preset), timeout=10.0)
+        check("clear preset %d -> general response" % args.preset,
+              frame(a, 0x00, CMD2_CLEAR_PRESET, 0x00, args.preset))
+        # malformed frame: stop-all with a wrong checksum (non-motion, so a defect
+        # endpoint that executes it merely stops instead of panning)
+        check("wrong checksum -> silence",
+              frame(a, 0x00, 0x00, 0x00, 0x00, bad_checksum=True), expect_reply=False)
+        # foreign-address check uses the supported non-motion stop-all command at an
+        # explicitly unused address: silence proves the address filter actually ran
+        check("frame for other address -> silence",
+              frame(other_address, 0x00, 0x00, 0x00, 0x00), expect_reply=False)
+    finally:
+        # never leave the camera moving, even when a check failed or raised
+        try:
+            port.send(frame(a, 0x00, 0x00, 0x00, 0x00))
+            port.recv(4, args.timeout)
+        except OSError:
+            pass
+        port.close()
     failed = [r for r in results if not r[0]]
     print("\n%d/%d checks passed" % (len(results) - len(failed), len(results)))
     for _ok, name, detail in failed:
