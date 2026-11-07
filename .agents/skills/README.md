@@ -20,25 +20,18 @@ it against the [ptzsim](https://github.com/stritti/ptz-simulator) reference simu
 
 ## Install into your project
 
-From a clone of this repository, copy the skills into the skill directory of your agent
-(see the table below) — the installer does all of them at once:
+Install the skills with the [skills CLI](https://skills.sh) straight from this
+repository — no clone needed, this directory is one of the CLI's standard discovery
+directories:
 
 ```bash
-./scripts/install-skills.sh /path/to/your-project                 # all common agents
-./scripts/install-skills.sh /path/to/your-project claude copilot   # selected agents only
-./scripts/install-skills.sh --user ~                               # personal skills for all agents
+npx skills add stritti/ptz-simulator --list                   # list the skills in this repo
+npx skills add stritti/ptz-simulator --skill visca-interface  # install one skill
+npx skills add stritti/ptz-simulator --all -y                 # all skills into every agent
 ```
 
-Or copy one directory by hand, e.g. for Claude Code:
-
-```bash
-mkdir -p /path/to/your-project/.claude/skills
-cp -r .agents/skills/* /path/to/your-project/.claude/skills/
-```
-
-Or with the [skills CLI](https://github.com/vercel-labs/skills):
-`npx skills add stritti/ptz-simulator --list` (then pick agents/skills, e.g.
-`-a claude-code -a copilot --yes`).
+Choose the agents with `-a` (e.g. `-a claude-code -a copilot --yes`). The skills are
+listed at [skills.sh/stritti/ptz-simulator](https://skills.sh/stritti/ptz-simulator).
 
 In this repository the skills live in `.agents/skills/`, which GitHub Copilot (VS Code /
 CLI / cloud), OpenAI Codex, Mistral Vibe and other agents read directly.

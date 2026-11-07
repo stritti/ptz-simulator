@@ -3,18 +3,15 @@
 
 """The agent skills in .agents/skills/ must stay valid Agent Skills
 (https://agentskills.io): SKILL.md frontmatter with a spec-conformant name and
-description, working relative links, compilable bundled scripts, and an
-install-skills.sh that copies them into the skill directories of the agents."""
+description, working relative links and compilable bundled scripts."""
 
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SKILLS = ROOT / ".agents" / "skills"
-INSTALLER = ROOT / "scripts" / "install-skills.sh"
 
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
@@ -90,36 +87,4 @@ def test_skill_scripts_compile(skill):
         compile(script.read_text(encoding="utf-8"), str(script), "exec")
 
 
-def test_install_skills_sh_syntax_and_help():
-    subprocess.run(["sh", "-n", str(INSTALLER)], check=True)
-    result = subprocess.run(["sh", str(INSTALLER), "--help"], capture_output=True, text=True)
-    assert result.returncode == 0
-    assert "install-skills.sh" in result.stdout
 
-
-def test_install_skills_copies_into_project(tmp_path):
-    result = subprocess.run(
-        ["sh", str(INSTALLER), str(tmp_path), "claude", "vibe"],
-        capture_output=True, text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    for tool_dir in (".claude/skills", ".vibe/skills"):
-        for skill in skill_dirs():
-            assert (tmp_path / tool_dir / skill.name / "SKILL.md").is_file()
-
-
-def test_install_skills_never_copies_onto_itself(tmp_path):
-    """`install-skills.sh <checkout> agents` must skip instead of deleting the source."""
-    import shutil
-
-    shutil.copytree(SKILLS, tmp_path / ".agents" / "skills")
-    (tmp_path / "scripts").mkdir()
-    shutil.copy(INSTALLER, tmp_path / "scripts" / "install-skills.sh")
-    result = subprocess.run(
-        ["sh", str(tmp_path / "scripts" / "install-skills.sh"), str(tmp_path), "agents"],
-        capture_output=True, text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "skip" in result.stdout
-    for skill in skill_dirs():
-        assert (tmp_path / ".agents" / "skills" / skill.name / "SKILL.md").is_file()
