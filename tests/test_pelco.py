@@ -202,6 +202,32 @@ def test_standard_command_stops_after_runaway_timeout(monkeypatch):
     assert "runaway" in camera.log[-1].description
 
 
+def test_runaway_timer_does_not_abort_a_preset_recall(monkeypatch):
+    import ptzsim.pelco as pelco_module
+    monkeypatch.setattr(pelco_module, "RUNAWAY_TIMEOUT", 0.02)
+
+    async def scenario():
+        pelco = PelcoCamera(ViscaCamera(instant=False))
+        pelco.state.pan = 500.0
+        run(pelco, make_frame(1, 0x00, 0x03, 0x00, 0x02))  # set preset 2
+        pelco.state.pan = 0.0
+        run(pelco, make_frame(1, 0x00, PAN_LEFT, 0x20, 0x00))  # drive, arms the timer
+        run(pelco, make_frame(1, 0x00, 0x07, 0x00, 0x02))  # call preset 2
+        await asyncio.sleep(0.05)
+        return pelco
+
+    pelco = asyncio.run(scenario())
+    assert pelco.state.pan_target is not None and pelco.state.pan_target[0] == 500.0
+
+
+def test_runaway_stop_keeps_position_targets(monkeypatch):
+    # a move to a target started elsewhere (e.g. ONVIF AbsoluteMove) is not a Pelco drive
+    pelco, _ = make()
+    pelco.state.move_pan_tilt_to(100.0, 0.0, 5, 5)
+    pelco._runaway_stop()
+    assert pelco.state.pan_target is not None
+
+
 def test_stop_cancels_the_runaway_timer(monkeypatch):
     import ptzsim.pelco as pelco_module
     monkeypatch.setattr(pelco_module, "RUNAWAY_TIMEOUT", 0.02)

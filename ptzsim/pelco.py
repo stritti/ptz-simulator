@@ -217,8 +217,9 @@ class PelcoCamera:
     def _runaway_stop(self) -> None:
         self._runaway = None
         s = self.state
-        s.stop_pan_tilt()
-        s.zoom_velocity = s.focus_velocity = 0.0
+        # Only the drive (velocity) motion is stopped; position targets set later,
+        # e.g. by a preset recall or another protocol, keep moving.
+        s.pan_velocity = s.tilt_velocity = s.zoom_velocity = s.focus_velocity = 0.0
         self.camera.record("Pelco-D", f"no drive command for {RUNAWAY_TIMEOUT:g}s, stopped (runaway detection)")
 
     def _set_speed(self, opcode: int, value: int, frame: bytes) -> bytes:
@@ -246,6 +247,8 @@ class PelcoCamera:
         elif not s.recall_preset(number):
             self.camera.record("Pelco-D", f"preset {number + 1} not set", ok=False)
             return None
+        if action == "call":
+            self._restart_runaway_timer(False)  # the recall supersedes the drive
         if action == "call" and self.camera.instant:
             s.finish_moves()  # --instant: jump to the preset instead of motor speed
         self.camera.record("Pelco-D", f"preset {number + 1} {action}")
