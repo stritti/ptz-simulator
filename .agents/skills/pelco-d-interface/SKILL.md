@@ -1,6 +1,6 @@
 ---
 name: pelco-d-interface
-description: "Implement a Pelco-D-conformant PTZ camera interface (serial RS-485/RS-422, 2400-38400 baud 8N1): 7-byte frames FF addr cmd1 cmd2 data1 data2 checksum, the 4-byte general response, the command-2 motion bitmask, extended preset opcodes, speed fields 0x00..0x3F plus 0xFF turbo, addressing 1..255 and checksum/sync error behaviour. Use when building a Pelco-D client or camera-side endpoint for surveillance cameras; validate with scripts/pelco_conformance.py against the endpoint's serial port."
+description: "Implement a Pelco-D-conformant PTZ camera interface (serial RS-485/RS-422, 2400-38400 baud 8N1): 7-byte frames FF addr cmd1 cmd2 data1 data2 checksum, the 4-byte general response, the command-2 motion bitmask, extended preset opcodes, speed fields 0x00..0x3F plus 0x40 turbo, position set/query with the extended response, addressing 1..255 and checksum/sync error behaviour. Use when building a Pelco-D client or camera-side endpoint for surveillance cameras; validate with scripts/pelco_conformance.py against the endpoint's serial port."
 license: MIT
 compatibility: The bundled conformance script needs only Python 3.8+ (standard library) and a serial device path (e.g. a pty). The reference simulator ptzsim >= 0.4.0 (https://github.com/stritti/ptz-simulator) speaks Pelco-D via --pelco-d.
 metadata:
@@ -34,7 +34,7 @@ checksum, response frame, command bitmasks, extended commands, speeds, resync ru
 3. **Motion (drive)**: cmd2 is a bitmask — 0x02 pan right, 0x04 pan left, 0x08 tilt up,
    0x10 tilt down, 0x20 zoom tele, 0x40 zoom wide, 0x80 focus far; cmd1 bit 0 = focus
    near. A drive frame describes the **whole motion state**: an axis whose bit is
-   cleared stops. data1 = pan speed, data2 = tilt speed (0x00–0x3F, 0xFF = turbo);
+   cleared stops. data1 = pan speed, data2 = tilt speed (0x00–0x3F, 0x40 = pan turbo);
    zoom/focus speeds come from Set Zoom Speed (`00 25 00 s`) / Set Focus Speed
    (`00 27 00 s`), s = 0x00–0x03. Drive commands stop by themselves after 15 s
    (runaway detection) unless repeated.
@@ -42,8 +42,12 @@ checksum, response frame, command bitmasks, extended commands, speeds, resync ru
    0x07 call preset, preset number in data2 (0–99). Stop all = `FF a 00 00 00 00 chk`.
 5. **Focus** commands only move in manual focus mode (ignored while autofocus is on).
 6. **Presets**: the same 100 presets as VISCA/ONVIF. Calling an unset preset gets no
-   response. ptzsim does not implement the Pelco-D position queries yet — read the
-   position via VISCA/ONVIF on the same camera (e.g. `ptzsim serve --sony --pelco-d`).
+   response.
+   **Positions** (Pelco "D" Protocol v5.0.1, 5.38–5.47): set pan/tilt/zoom `00 4B/4D/4F
+   <msb> <lsb>` (general response), query `00 51/53/55 00 00` → Extended Response
+   `FF a 00 59/5B/5D <msb> <lsb> cksm` (cksm = sum of bytes 2–6). Pan/tilt in hundredths
+   of a degree 0–35999 (tilt 0 = horizon, 9000 = down, 27000 = up), zoom =
+   magnification / zoom limit × 65535.
 7. **Parsing**: resync on the sync byte 0xFF — drop garbage before it, and discard a
    7-byte candidate with a wrong checksum byte by byte so a stray 0xFF cannot swallow
    a following valid frame.

@@ -48,9 +48,16 @@ CMD2_CALL_PRESET = 0x07
 PRESET_OPCODES = {CMD2_SET_PRESET: "set", CMD2_CLEAR_PRESET: "clear", CMD2_CALL_PRESET: "call"}
 CMD2_SET_ZOOM_SPEED = 0x25  # data 2: 0x00 slowest .. 0x03 highest (5.2.1)
 CMD2_SET_FOCUS_SPEED = 0x27  # data 2: 0x00 slowest .. 0x03 highest (5.2.2)
+# Position commands (D 5.0.1 5.38-5.40) and queries with their Extended Responses
+# (5.41-5.47): pan/tilt in hundredths of a degree 0..35999, zoom as
+# magnification / zoom limit * 65535.
+CMD2_SET_PAN, CMD2_SET_TILT, CMD2_SET_ZOOM = 0x4B, 0x4D, 0x4F
+QUERIES = {0x51: ("pan", 0x59), 0x53: ("tilt", 0x5B), 0x55: ("zoom", 0x5D)}
+ANGLE_RANGE = 36000  # hundredths of a degree
+ZOOM_POSITION_MAX = 0xFFFF
 
 SPEED_MAX = 0x3F  # data field range 0x00..0x3F
-TURBO = 0xFF  # turbo speed: maximum the device can go
+TURBO = 0x40  # pan turbo speed (D 5.0.1 3.1.2); any value above 0x3F is treated as maximum
 ALARMS = 0x00  # alarm byte of the general response: no alarm (3.2.1)
 # Standard commands stop by themselves after this many seconds (runaway detection,
 # section 4); a new drive command restarts the timer.
@@ -149,6 +156,10 @@ class PelcoCamera:
             # Extended command: opcode in command 2, argument in data 2.
             if cmd2 in (CMD2_SET_ZOOM_SPEED, CMD2_SET_FOCUS_SPEED):
                 return self._set_speed(cmd2, data2, frame)
+            if cmd2 in (CMD2_SET_PAN, CMD2_SET_TILT, CMD2_SET_ZOOM):
+                return self._set_position(cmd2, (data1 << 8) | data2, frame)
+            if cmd2 in QUERIES:
+                return self._query(cmd2)
             return self._preset(cmd2, data2, frame)
         if cmd1 & ~STANDARD_CMD1 & 0xFF or cmd2 & 0x01:
             self.camera.record("Pelco-D", f"unsupported command {cmd1:02X} {cmd2:02X}", ok=False)
@@ -240,6 +251,60 @@ class PelcoCamera:
             self.camera.record("Pelco-D", f"focus speed {value:02X}")
         return self.ack(frame)
 
+    # --------------------------------------------------------- positions
+    def extended_response(self, resp2: int, value: int) -> bytes:
+        """7-byte Extended Response ``FF addr 00 resp2 msb lsb cksm`` (D 5.0.1 4.1/5.1)."""
+        body = bytes([self.address, 0x00, resp2, (value >> 8) & 0xFF, value & 0xFF])
+        return bytes([SYNC]) + body + bytes([sum(body) & 0xFF])
+
+    def pelco_position(self, axis: str) -> int:
+        """Current position in Pelco-D units (D 5.0.1 5.45-5.47)."""
+        s = self.state
+        if axis == "pan":  # clockwise from the zero position
+            return round(s.pan_degrees * 100) % ANGLE_RANGE
+        if axis == "tilt":  # 0 = horizon, 9000 = straight down, 27000 = straight up
+            return round(-s.tilt_degrees * 100) % ANGLE_RANGE
+        return round(s.zoom_ratio / st.MAX_OPTICAL_ZOOM * ZOOM_POSITION_MAX)
+
+    def _query(self, opcode: int) -> bytes:
+        axis, resp2 = QUERIES[opcode]
+        value = self.pelco_position(axis)
+        self.camera.record("Pelco-D", f"query {axis} position: {value}")
+        return self.extended_response(resp2, value)
+
+    @staticmethod
+    def _degrees(value: int) -> float:
+        """0..35999 hundredths of a degree as -180..+180 degrees."""
+        degrees = value / 100.0
+        return degrees - 360.0 if degrees > 180.0 else degrees
+
+    def _set_position(self, opcode: int, value: int, frame: bytes) -> Optional[bytes]:
+        s = self.state
+        if opcode != CMD2_SET_ZOOM and value >= ANGLE_RANGE:
+            self.camera.record("Pelco-D", f"position {value} out of range 0..35999", ok=False)
+            return None
+        self._restart_runaway_timer(False)  # a position command supersedes the drive
+        pan = s.pan_target[0] if s.pan_target else s.pan
+        tilt = s.tilt_target[0] if s.tilt_target else s.tilt
+        if opcode == CMD2_SET_PAN:
+            pan = self._degrees(value) * st.UNITS_PER_DEGREE
+            what = f"set pan position {value / 100:.2f} deg"
+        elif opcode == CMD2_SET_TILT:
+            tilt = -self._degrees(value) * st.UNITS_PER_DEGREE  # Pelco: down is positive
+            what = f"set tilt position {value / 100:.2f} deg"
+        if opcode == CMD2_SET_ZOOM:
+            ratio = st.clamp(value / ZOOM_POSITION_MAX * st.MAX_OPTICAL_ZOOM, 1.0, st.MAX_OPTICAL_ZOOM)
+            s.zoom_to(st.ZOOM_MIN + (ratio - 1.0) / (st.MAX_OPTICAL_ZOOM - 1.0) * (st.ZOOM_MAX - st.ZOOM_MIN))
+            what = f"set zoom position {value} ({ratio:.1f}x)"
+        else:
+            # Positions beyond the end stops are clipped (the manual leaves the range
+            # of a specific device to its own documentation).
+            s.move_pan_tilt_to(pan, tilt, st.PAN_SPEED_MAX, st.TILT_SPEED_MAX)
+        if self.camera.instant:
+            s.finish_moves()
+        self.camera.record("Pelco-D", what)
+        return self.ack(frame)
+
     def _preset(self, opcode: int, number: int, frame: bytes) -> Optional[bytes]:
         s = self.state
         action = PRESET_OPCODES.get(opcode)
@@ -266,11 +331,11 @@ class PelcoCamera:
     # ---------------------------------------------------------------- helpers
     @staticmethod
     def _speed(value: int, maximum: int) -> int:
-        """Map a Pelco-D speed 0x00..0x3F (0xFF turbo) onto 1..maximum.
+        """Map a Pelco-D speed 0x00..0x3F (0x40 turbo) onto 1..maximum.
 
         0x00 is the slowest speed, not a stop (Pelco manual 3.1.2).
         """
-        if value >= TURBO or value > SPEED_MAX:
+        if value > SPEED_MAX:  # turbo 0x40, and anything above, is the maximum
             return maximum
         return max(1, round(value * maximum / SPEED_MAX))
 
