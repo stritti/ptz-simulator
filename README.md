@@ -13,6 +13,7 @@ SPDX-License-Identifier: MIT
 [![Python versions](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fstritti%2Fptz-simulator%2Fmain%2Fpyproject.toml)](https://github.com/stritti/ptz-simulator/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/github/license/stritti/ptz-simulator)](https://github.com/stritti/ptz-simulator/blob/main/LICENSE)
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-fe5196?logo=conventionalcommits&logoColor=white)](https://www.conventionalcommits.org/en/v1.0.0/)
+[![skills.sh](https://skills.sh/b/stritti/ptz-simulator?style=flat)](https://skills.sh/stritti/ptz-simulator)
 
 Simulates a PTZ camera controlled via **ONVIF**, **VISCA** and **NDI**, so PTZ
 clients can be tested without a real camera. All protocols control the same
@@ -641,8 +642,15 @@ Install the skills into your project from a clone of this repository:
 ./scripts/install-skills.sh --user ~                            # personal skills for all agents
 # or by hand, e.g. for Claude Code:
 mkdir -p /path/to/your-project/.claude/skills && cp -r .agents/skills/* /path/to/your-project/.claude/skills/
-# or with the skills CLI: npx skills add stritti/ptz-simulator --list
+# or with the skills CLI (https://skills.sh), no clone needed:
+npx skills add stritti/ptz-simulator --list                    # list the skills in this repo
+npx skills add stritti/ptz-simulator --skill visca-interface   # install one skill
+npx skills add stritti/ptz-simulator --all -y                  # all skills into every agent
 ```
+
+The skills CLI installs straight from this repository (`.agents/skills/` is one of its
+standard discovery directories), and every install also lists the skills on
+[skills.sh/stritti/ptz-simulator](https://skills.sh/stritti/ptz-simulator).
 
 Agents read skills from their own directories; in this repository `.agents/skills/` is
 read directly by GitHub Copilot (VS Code/CLI/cloud), OpenAI Codex and Mistral Vibe:

@@ -48,7 +48,25 @@ cp -r .agents/skills/* /path/to/your-project/.claude/skills/
 
 Or with the [skills CLI](https://github.com/vercel-labs/skills):
 `npx skills add stritti/ptz-simulator --list`, then install with the agents you want
-(e.g. `-a claude-code -a copilot --yes`).
+(e.g. `-a claude-code -a copilot --yes`) — see [On skills.sh](#on-skills-sh).
+
+## On skills.sh
+
+[skills.sh](https://skills.sh) is the directory of the open agent skills ecosystem. It
+has no submission flow: a skill in a public GitHub repo is listed automatically once
+people install it with the `skills` CLI. Because the skills live in `.agents/skills/`,
+one of the CLI's standard discovery directories, this repository is installable as-is:
+
+```bash
+npx skills add stritti/ptz-simulator --list                   # list the skills in this repo
+npx skills add stritti/ptz-simulator --skill visca-interface  # install one skill
+npx skills add stritti/ptz-simulator --all -y                 # all skills into every agent
+```
+
+Installs with telemetry enabled (i.e. without `DISABLE_TELEMETRY=1` or
+`DO_NOT_TRACK=1`) list the skills at
+[skills.sh/stritti/ptz-simulator](https://skills.sh/stritti/ptz-simulator), and
+`npx skills find ptz` makes them discoverable by keyword.
 
 ## Skill directories per agent
 
