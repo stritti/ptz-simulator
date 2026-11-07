@@ -6,7 +6,7 @@
 
 Opens a serial device (e.g. the pty of `ptzsim serve --pelco-d /tmp/ttyPelcoD`),
 sends Pelco-D frames and checks the 4-byte general response
-`FF <addr> <cmd1> <checksum>` for drive/stop/preset commands, plus the error
+`FF <addr> 00 <checksum>` for drive/stop/preset commands, plus the error
 behaviour: a wrong checksum and a frame for another address must get NO reply.
 
 Usage:
@@ -39,8 +39,8 @@ def frame(addr: int, cmd1: int, cmd2: int, data1: int, data2: int, bad_checksum:
 
 
 def response(sent: bytes) -> bytes:
-    """4-byte general response: sync, address, cmd1 echo, request checksum echo."""
-    return bytes([SYNC, sent[1], sent[2], sent[-1]])
+    """4-byte general response: sync, address, alarms 0x00, request checksum + alarms."""
+    return bytes([SYNC, sent[1], 0x00, sent[-1]])
 
 
 def dump(data: bytes) -> str:

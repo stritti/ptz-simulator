@@ -21,10 +21,11 @@ checksum = (addr + cmd1 + cmd2 + data1 + data2) mod 256
 
 ## General response (4 bytes)
 
-Every executed command is answered with `FF <addr> <cmd1> <request checksum>` — the
-sync byte, the address, the echoed cmd1 and the checksum of the request frame.
-Example: `FF 01 00 02 20 00 23` (pan right, medium speed) is answered with
-`FF 01 00 23`. Wrong checksum → no reply at all.
+Every executed command is answered with `FF <addr> <alarms> <checksum>` — the sync
+byte, the address, the alarm byte `00` and as checksum the request checksum plus the
+alarm byte, modulo 256 (Fujifilm SX400 Pelco-D spec v1.10.0, 3.2.1). Example:
+`FF 01 00 02 20 00 23` (pan right, medium speed) is answered with `FF 01 00 23`, focus
+near `FF 01 01 00 00 00 02` with `FF 01 00 02`. Wrong checksum → no reply at all.
 
 ## Drive (motion) commands
 
@@ -40,14 +41,21 @@ cmd2 bitmask (bit 0 of cmd2 is always 0 for motion):
 | 0x40 | zoom wide |
 | 0x80 | focus far |
 
-cmd1 bit 0 (0x01) = focus near. Bits are combinable (diagonal moves, pan+zoom).
+cmd1 bit 0 (0x01) = focus near, bit 1 (0x02) iris open, bit 2 (0x04) iris close; bits
+3–7 are not used by current Pelco-D. Different axes are combinable (diagonal moves,
+pan+zoom); contradicting bits of one axis (left+right, up+down, tele+wide,
+near+far, open+close) make the command invalid (SX400 spec 5.1.1 note 4).
+
+Runaway detection: a drive command stops by itself after 15 s; a new drive command
+restarts the timer (SX400 spec section 4, "Pelco has specified …").
 
 A drive frame describes the **whole motion state**: an axis whose direction bit is
 cleared stops — a later zoom-only frame also stops the pan.
 
 Speed fields: data1 = pan speed, data2 = tilt speed, range 0x00–0x3F where 0x00 is the
-slowest speed (not a stop) and 0xFF is turbo (maximum). For zoom commands data1 is the
-zoom speed. Speeds map onto the camera's internal speed ranges.
+slowest speed (not a stop) and 0xFF is turbo (maximum). Zoom and focus speeds are not
+in the drive frame; they are set with the extended commands below. Speeds map onto the
+camera's internal speed ranges.
 
 Stop all: `FF <addr> 00 00 00 00 <chk>`.
 
@@ -58,6 +66,8 @@ Stop all: `FF <addr> 00 00 00 00 <chk>`.
 | 0x03 | set preset (save current position as preset n, 0–99) |
 | 0x05 | clear preset |
 | 0x07 | call preset (moves to preset n; **no response** if not set) |
+| 0x25 | set zoom speed (data2 0x00 slowest … 0x03 highest) |
+| 0x27 | set focus speed (data2 0x00 slowest … 0x03 highest) |
 
 Focus commands only move in manual focus mode; while autofocus is on they are ignored
 (like VISCA manual focus).
@@ -71,7 +81,8 @@ Focus commands only move in manual focus mode; while autofocus is on they are ig
 ## Notes
 
 - Presets are the same 100 presets as VISCA/ONVIF (0–99).
-- Pelco-D has **no position inquiry** — read the position via VISCA/ONVIF on the same
-  camera.
+- Pelco-D defines position queries (e.g. Query Zoom Position `00 55` → response
+  `00 5D <MSB> <LSB>`), which ptzsim does not implement yet — read the position via
+  VISCA/ONVIF on the same camera.
 - Official specs: Pelco "D" Protocol manual rev 5.x (sections 3–4); Fujifilm SX400/SX1600
   Pelco-D specifications (links in the repository README).

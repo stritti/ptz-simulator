@@ -6,12 +6,14 @@
 Takes 7-byte Pelco-D frames (``FF addr cmd1 cmd2 data1 data2 checksum``), applies
 them to the shared :class:`~ptzsim.state.CameraState` and produces the 4-byte
 general response a real camera sends back. See the Pelco "D" Protocol manual
-(revision 5.x, sections 3 and 4) and the Fujifilm SX400/SX1600 specifications
-(linked in README.md).
+(revision 5.x, sections 3 and 4) and the Fujifilm SX400 Pelco-D specification
+v1.10.0 (linked in README.md): send format 3.1, general response 3.2.1, runaway
+timeout 4, standard command 5.1, Set Zoom/Focus Speed 5.2.1/5.2.2.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Callable, List, Optional
 
 from . import state as st
@@ -31,18 +33,38 @@ ZOOM_TELE = 0x20
 ZOOM_WIDE = 0x40
 FOCUS_FAR = 0x80
 
-# Command 1 bit 0: focus near. Other cmd1 values are extended commands (autoscan
-# 0x10, ...), which the simulator does not implement.
+# Command 1 bits 0..2: focus near, iris open, iris close (standard command, 5.1.1).
+# Bits 3..7 (camera on/off, auto/manual scan, sense) are not used by the current
+# Pelco-D and are not supported (5.1.1 note 1).
 FOCUS_NEAR_CMD1 = 0x01
+IRIS_OPEN_CMD1 = 0x02
+IRIS_CLOSE_CMD1 = 0x04
+STANDARD_CMD1 = FOCUS_NEAR_CMD1 | IRIS_OPEN_CMD1 | IRIS_CLOSE_CMD1
 
 # Extended-command opcodes in command 2 (bit 0 set), preset number in data 2.
 CMD2_SET_PRESET = 0x03
 CMD2_CLEAR_PRESET = 0x05
 CMD2_CALL_PRESET = 0x07
 PRESET_OPCODES = {CMD2_SET_PRESET: "set", CMD2_CLEAR_PRESET: "clear", CMD2_CALL_PRESET: "call"}
+CMD2_SET_ZOOM_SPEED = 0x25  # data 2: 0x00 slowest .. 0x03 highest (5.2.1)
+CMD2_SET_FOCUS_SPEED = 0x27  # data 2: 0x00 slowest .. 0x03 highest (5.2.2)
 
 SPEED_MAX = 0x3F  # data field range 0x00..0x3F
 TURBO = 0xFF  # turbo speed: maximum the device can go
+ALARMS = 0x00  # alarm byte of the general response: no alarm (3.2.1)
+# Standard commands stop by themselves after this many seconds (runaway detection,
+# section 4); a new drive command restarts the timer.
+RUNAWAY_TIMEOUT = 15.0
+# Set Zoom/Focus Speed 0x00..0x03 onto the VISCA speeds 0..7; other values fall
+# back to "low medium" (zoom) / "high medium" (focus) like the SX400 (5.2.1, 5.2.2).
+ZOOM_SPEEDS = {0x00: 0, 0x01: 2, 0x02: 5, 0x03: 7}
+FOCUS_SPEEDS = ZOOM_SPEEDS
+ZOOM_SPEED_FALLBACK, FOCUS_SPEED_FALLBACK = 0x01, 0x02
+ZOOM_SPEED_DEFAULT = 0x03  # the spec names no factory default: highest speed
+FOCUS_SPEED_DEFAULT = 0x02
+# Contradicting direction bits make a standard command invalid (5.1.1 note 4).
+CONTRADICTIONS = ((0, PAN_LEFT | PAN_RIGHT), (0, TILT_UP | TILT_DOWN), (0, ZOOM_TELE | ZOOM_WIDE),
+                  (FOCUS_NEAR_CMD1, FOCUS_FAR), (IRIS_OPEN_CMD1 | IRIS_CLOSE_CMD1, 0))
 
 Send = Callable[[bytes], None]
 
@@ -90,14 +112,18 @@ class PelcoCamera:
     def __init__(self, camera: ViscaCamera, address: int = 1):
         self.camera = camera
         self.address = address
+        self.zoom_speed = ZOOM_SPEED_DEFAULT  # Set Zoom Speed (0x25) value
+        self.focus_speed = FOCUS_SPEED_DEFAULT  # Set Focus Speed (0x27) value
+        self._runaway: Optional[asyncio.TimerHandle] = None
 
     @property
     def state(self) -> CameraState:
         return self.camera.state
 
     def ack(self, frame: bytes) -> bytes:
-        """4-byte general response: sync, address, command 1 echo, request checksum."""
-        return bytes([SYNC, self.address, frame[2], frame[-1]])
+        """4-byte general response (3.2.1): sync, address, alarms (0x00), and as
+        checksum the request checksum plus the alarm byte, modulo 256."""
+        return bytes([SYNC, self.address, ALARMS, (frame[-1] + ALARMS) & 0xFF])
 
     # ------------------------------------------------------------------ entry
     def process(self, frame: bytes, send: Send) -> None:
@@ -120,10 +146,16 @@ class PelcoCamera:
             return None
 
         if cmd1 == 0x00 and cmd2 & 0x01:
-            # Extended command: opcode in command 2, preset number in data 2.
+            # Extended command: opcode in command 2, argument in data 2.
+            if cmd2 in (CMD2_SET_ZOOM_SPEED, CMD2_SET_FOCUS_SPEED):
+                return self._set_speed(cmd2, data2, frame)
             return self._preset(cmd2, data2, frame)
-        if cmd1 & 0xFE:
-            self.camera.record("Pelco-D", f"unsupported extended command {cmd1:02X}", ok=False)
+        if cmd1 & ~STANDARD_CMD1 & 0xFF or cmd2 & 0x01:
+            self.camera.record("Pelco-D", f"unsupported command {cmd1:02X} {cmd2:02X}", ok=False)
+            return None
+        if any(cmd1 & c1 == c1 and cmd2 & c2 == c2 for c1, c2 in CONTRADICTIONS):
+            self.camera.record("Pelco-D", f"contradicting directions {cmd1:02X} {cmd2:02X}, command invalid",
+                               ok=False)
             return None
         return self._drive(cmd1, cmd2, data1, data2, frame)
 
@@ -145,8 +177,10 @@ class PelcoCamera:
         if tilt_dir:
             actions.append("tilt up" if tilt_dir > 0 else "tilt down")
         if cmd2 & ZOOM_TELE or cmd2 & ZOOM_WIDE:
+            # The zoom speed comes from Set Zoom Speed (0x25), not from data 1,
+            # which is the pan speed (5.1.1, 5.2.1).
             direction = 1 if cmd2 & ZOOM_TELE else -1
-            s.drive_zoom(direction, self._zoom_speed(data1))
+            s.drive_zoom(direction, ZOOM_SPEEDS.get(self.zoom_speed, ZOOM_SPEEDS[ZOOM_SPEED_FALLBACK]))
             actions.append("zoom tele" if direction > 0 else "zoom wide")
         else:
             s.zoom_velocity = 0.0
@@ -156,12 +190,44 @@ class PelcoCamera:
                 self.camera.record("Pelco-D", "focus ignored (autofocus on)", ok=False)
             else:
                 direction = -1 if cmd2 & FOCUS_FAR else 1
-                s.drive_focus(direction, 3)
+                s.drive_focus(direction, FOCUS_SPEEDS.get(self.focus_speed, FOCUS_SPEEDS[FOCUS_SPEED_FALLBACK]))
                 actions.append("focus far" if direction < 0 else "focus near")
         else:
             s.focus_velocity = 0.0
             s.focus_target = None
+        if cmd1 & (IRIS_OPEN_CMD1 | IRIS_CLOSE_CMD1):
+            actions.append(f"iris {'open' if cmd1 & IRIS_OPEN_CMD1 else 'close'} (not simulated)")
+        self._restart_runaway_timer(bool(pan_dir or tilt_dir or s.zoom_velocity or s.focus_velocity))
         self.camera.record("Pelco-D", ", ".join(actions) if actions else "stop all")
+        return self.ack(frame)
+
+    def _restart_runaway_timer(self, moving: bool) -> None:
+        """Stop a standard-command motion after RUNAWAY_TIMEOUT seconds (section 4)."""
+        if self._runaway is not None:
+            self._runaway.cancel()
+            self._runaway = None
+        if not moving:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no event loop (unit tests): nothing can fire later
+        self._runaway = loop.call_later(RUNAWAY_TIMEOUT, self._runaway_stop)
+
+    def _runaway_stop(self) -> None:
+        self._runaway = None
+        s = self.state
+        s.stop_pan_tilt()
+        s.zoom_velocity = s.focus_velocity = 0.0
+        self.camera.record("Pelco-D", f"no drive command for {RUNAWAY_TIMEOUT:g}s, stopped (runaway detection)")
+
+    def _set_speed(self, opcode: int, value: int, frame: bytes) -> bytes:
+        if opcode == CMD2_SET_ZOOM_SPEED:
+            self.zoom_speed = value
+            self.camera.record("Pelco-D", f"zoom speed {value:02X}")
+        else:
+            self.focus_speed = value
+            self.camera.record("Pelco-D", f"focus speed {value:02X}")
         return self.ack(frame)
 
     def _preset(self, opcode: int, number: int, frame: bytes) -> Optional[bytes]:
@@ -196,9 +262,3 @@ class PelcoCamera:
             return maximum
         return max(1, round(value * maximum / SPEED_MAX))
 
-    @staticmethod
-    def _zoom_speed(value: int) -> int:
-        """Map a Pelco-D speed onto the VISCA zoom speed 0..7."""
-        if value >= TURBO or value > SPEED_MAX:
-            return 7
-        return round(value * 7 / SPEED_MAX)

@@ -73,11 +73,12 @@ def test_frame_for_another_address_stays_silent():
 
 # ------------------------------------------------------------------- driving
 def test_general_response_is_4_bytes_with_the_request_checksum():
+    # SX400 Pelco-D spec 3.2.1: FF, address, ALARMS = 0x00, received CKSM + ALARMS
     pelco, _ = make(address=7)
     frame = make_frame(7, 0x00, PAN_RIGHT, 0x20, 0x00)  # FF 07 00 02 20 00 29
     assert pelco.ack(frame) == bytes([0xFF, 7, 0x00, 0x29])
-    # the response echoes command 1 (e.g. 0x01 for focus near)
-    assert pelco.ack(make_frame(7, 0x01, 0x00, 0x00, 0x00)) == bytes([0xFF, 7, 0x01, 0x08])
+    # the alarm byte stays 0x00 also when command 1 is set (focus near)
+    assert pelco.ack(make_frame(7, 0x01, 0x00, 0x00, 0x00)) == bytes([0xFF, 7, 0x00, 0x08])
 
 
 def test_pan_right_at_medium_speed():
@@ -134,6 +135,86 @@ def test_zoom_tele_and_wide():
     assert pelco.state.zoom_velocity > 0.0
     run(pelco, make_frame(1, 0x00, ZOOM_WIDE, 0x3F, 0x00))
     assert pelco.state.zoom_velocity < 0.0
+
+
+def test_zoom_speed_comes_from_set_zoom_speed_not_from_data1():
+    # data 1 is the pan speed (5.1.1); the zoom speed is set with 00 25 00 <0..3> (5.2.1)
+    pelco, _ = make()
+    run(pelco, make_frame(1, 0x00, ZOOM_TELE, 0x00, 0x00))
+    fast = pelco.state.zoom_velocity
+    assert fast == (7 + 1) * st.ZOOM_UNITS_PER_SPEED_STEP  # default: highest speed
+    frame = make_frame(1, 0x00, 0x25, 0x00, 0x00)  # slowest
+    assert run(pelco, frame) == [pelco.ack(frame)]
+    run(pelco, make_frame(1, 0x00, ZOOM_TELE, 0x3F, 0x00))
+    assert 0.0 < pelco.state.zoom_velocity < fast
+    run(pelco, make_frame(1, 0x00, 0x25, 0x00, 0x09))  # out of range: low medium
+    run(pelco, make_frame(1, 0x00, ZOOM_TELE, 0x00, 0x00))
+    assert pelco.state.zoom_velocity == (2 + 1) * st.ZOOM_UNITS_PER_SPEED_STEP
+
+
+def test_set_focus_speed():
+    pelco, _ = make()
+    pelco.state.autofocus = False
+    frame = make_frame(1, 0x00, 0x27, 0x00, 0x03)
+    assert run(pelco, frame) == [pelco.ack(frame)]
+    run(pelco, make_frame(1, 0x00, FOCUS_FAR, 0x00, 0x00))
+    assert pelco.state.focus_velocity == -(7 + 1) * st.FOCUS_UNITS_PER_SPEED_STEP
+
+
+@pytest.mark.parametrize("cmd1, cmd2", [
+    (0x00, PAN_LEFT | PAN_RIGHT), (0x00, TILT_UP | TILT_DOWN), (0x00, ZOOM_TELE | ZOOM_WIDE),
+    (0x01, FOCUS_FAR), (0x06, 0x00),
+])
+def test_contradicting_directions_are_invalid(cmd1, cmd2):
+    # SX400 Pelco-D spec 5.1.1 note 4: inconsistent combinations are invalid
+    pelco, camera = make()
+    pelco.state.autofocus = False
+    assert run(pelco, make_frame(1, cmd1, cmd2, 0x20, 0x20)) == []
+    assert not pelco.state.moving
+    assert "contradicting" in camera.log[-1].description and not camera.log[-1].ok
+
+
+def test_iris_open_close_is_acknowledged():
+    pelco, camera = make()
+    frame = make_frame(1, 0x02, 0x00, 0x00, 0x00)
+    assert run(pelco, frame) == [pelco.ack(frame)]
+    assert "iris open" in camera.log[-1].description
+
+
+def test_standard_command_stops_after_runaway_timeout(monkeypatch):
+    # section 4: standard commands stop after 15 s; a new drive restarts the timer
+    import ptzsim.pelco as pelco_module
+    monkeypatch.setattr(pelco_module, "RUNAWAY_TIMEOUT", 0.05)
+
+    async def scenario():
+        pelco, camera = make()
+        run(pelco, make_frame(1, 0x00, PAN_RIGHT | ZOOM_TELE, 0x20, 0x00))
+        await asyncio.sleep(0.03)
+        run(pelco, make_frame(1, 0x00, PAN_RIGHT | ZOOM_TELE, 0x20, 0x00))  # restarts the timer
+        await asyncio.sleep(0.03)
+        still_moving = pelco.state.pan_velocity > 0.0
+        await asyncio.sleep(0.05)
+        return pelco, camera, still_moving
+
+    pelco, camera, still_moving = asyncio.run(scenario())
+    assert still_moving
+    assert pelco.state.pan_velocity == 0.0 and pelco.state.zoom_velocity == 0.0
+    assert "runaway" in camera.log[-1].description
+
+
+def test_stop_cancels_the_runaway_timer(monkeypatch):
+    import ptzsim.pelco as pelco_module
+    monkeypatch.setattr(pelco_module, "RUNAWAY_TIMEOUT", 0.02)
+
+    async def scenario():
+        pelco, camera = make()
+        run(pelco, make_frame(1, 0x00, PAN_RIGHT, 0x20, 0x00))
+        run(pelco, make_frame(1, 0x00, 0x00, 0x00, 0x00))
+        await asyncio.sleep(0.05)
+        return camera
+
+    camera = asyncio.run(scenario())
+    assert camera.log[-1].description == "stop all"
 
 
 def test_focus_is_ignored_while_autofocus_is_on():
@@ -210,7 +291,8 @@ def test_unsupported_extended_commands_get_no_reply():
     pelco, camera = make()
     assert run(pelco, make_frame(1, 0x00, 0x45, 0x00, 0x00)) == []  # cmd2 opcode unknown
     assert run(pelco, make_frame(1, 0x10, 0x00, 0x00, 0x00)) == []  # cmd1 autoscan
-    assert camera.log[-2].ok is False and camera.log[-1].ok is False
+    assert run(pelco, make_frame(1, 0x88, 0x00, 0x00, 0x00)) == []  # sense + camera on
+    assert all(camera.log[i].ok is False for i in (-3, -2, -1))
 
 
 # ------------------------------------------------------------ end to end pty
