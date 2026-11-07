@@ -55,17 +55,20 @@ What "reference-conformant" means per protocol, checked against the ptzsim refer
 - [ ] Frame: 7 bytes `FF <addr> <cmd1> <cmd2> <data1> <data2> <checksum>`,
       `checksum = (addr + cmd1 + cmd2 + data1 + data2) mod 256`.
 - [ ] Every executed command answers the 4-byte general response
-      `FF <addr> <cmd1 echo> <request checksum>`; wrong checksum → no reply; frames for
-      other addresses → silently ignored.
+      `FF <addr> 00 <request checksum>` (alarm byte 0x00); wrong checksum or
+      contradicting direction bits → no reply; frames for other addresses → silently
+      ignored.
 - [ ] Drive bitmask in cmd2: 0x02 pan right, 0x04 pan left, 0x08 tilt up, 0x10 tilt
       down, 0x20 zoom tele, 0x40 zoom wide, 0x80 focus far; cmd1 bit 0 = focus near.
       A drive frame sets the whole motion state (cleared bit = axis stops).
 - [ ] Extended commands (cmd2 bit 0 set): 0x03 set / 0x05 clear / 0x07 call preset,
       preset number in data2 (0–99); call of an unset preset → no response.
 - [ ] Stop all: `FF <addr> 00 00 00 00 <chk>`. Speeds 0x00–0x3F (0x00 = slowest, not
-      stop) and 0xFF turbo; data1 doubles as zoom speed for zoom commands.
+      stop) and 0xFF turbo; zoom/focus speed via `00 25` / `00 27` (0x00–0x03); drive
+      commands stop after 15 s without a new drive command.
 - [ ] Parser resyncs on 0xFF and discards bad-checksum candidates byte by byte.
-- [ ] No position inquiry in Pelco-D — position is read via VISCA/ONVIF instead.
+- [ ] Position queries (`00 51`/`00 53`/`00 55`) are not simulated yet — position is
+      read via VISCA/ONVIF instead.
 
 ## Known deliberate deviations of the ptzsim reference
 

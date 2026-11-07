@@ -415,27 +415,34 @@ are ignored silently, as on a real RS-485 bus.
 
 Frames are 7 bytes: `FF <addr> <cmd1> <cmd2> <data1> <data2> <checksum>`, where
 `checksum = (addr + cmd1 + cmd2 + data1 + data2) mod 256`. Every executed command
-is answered with the 4-byte general response `FF <addr> <cmd1> <checksum>` (e.g.
-`FF 01 00 02 20 00 23` is answered with `FF 01 00 23`); a frame with a wrong
-checksum gets no reply. Implemented commands:
+is answered with the 4-byte general response `FF <addr> 00 <checksum>`: the alarm
+byte is `00` and the checksum is the request checksum plus the alarm byte (e.g.
+`FF 01 00 02 20 00 23` is answered with `FF 01 00 23`, focus near
+`FF 01 01 00 00 00 02` with `FF 01 00 02`). A frame with a wrong checksum, with
+contradicting direction bits (left + right, up + down, tele + wide, near + far,
+iris open + close) or with an unsupported command gets no reply. Implemented commands:
 
 | Command | Bytes | Effect |
 |---|---|---|
-| Drive | `FF a <cmd1> <bits> <pan spd> <tilt spd> chk` | cmd2 bits (bit 0 = 0): 0x02 pan right, 0x04 pan left, 0x08 tilt up, 0x10 tilt down, 0x20 zoom tele, 0x40 zoom wide, 0x80 focus far; focus near is bit 0 of cmd1 (`FF a 01 00 00 00 chk`); combinable |
+| Drive | `FF a <cmd1> <bits> <pan spd> <tilt spd> chk` | cmd2 bits (bit 0 = 0): 0x02 pan right, 0x04 pan left, 0x08 tilt up, 0x10 tilt down, 0x20 zoom tele, 0x40 zoom wide, 0x80 focus far; cmd1 bit 0 focus near (`FF a 01 00 00 00 chk`), bits 1/2 iris open/close (acknowledged, not simulated); different axes are combinable |
 | Stop all | `FF a 00 00 00 00 chk` | stops pan/tilt/zoom/focus |
 | Set preset | `FF a 00 03 00 <n> chk` | saves the current position as preset n (0–99) |
 | Call preset | `FF a 00 07 00 <n> chk` | moves to preset n (no response if not set) |
 | Clear preset | `FF a 00 05 00 <n> chk` | deletes preset n |
+| Set zoom speed | `FF a 00 25 00 <s> chk` | zoom speed for later zoom commands, 0x00 slowest … 0x03 highest (default 0x03) |
+| Set focus speed | `FF a 00 27 00 <s> chk` | focus speed for later focus commands, 0x00 slowest … 0x03 highest (default 0x02) |
 
 A drive frame describes the whole motion state: an axis whose direction bit is
 cleared stops (a later zoom-only frame also stops the pan). Speeds are
 0x00–0x3F, where 0x00 is the slowest speed (not a stop) and 0xFF is turbo
-(maximum), mapped onto the VISCA speed ranges; the pan speed field doubles as
-the zoom speed for zoom commands. Focus commands only move the focus in manual
+(maximum), mapped onto the VISCA speed ranges. Zoom and focus speeds are not
+taken from the data fields but from Set Zoom Speed / Set Focus Speed. As Pelco
+requires for runaway detection, a drive command stops by itself after 15 seconds
+unless a new drive command arrives. Focus commands only move the focus in manual
 focus mode (like VISCA, they are ignored while autofocus is on). Presets are
-the same 100 presets as for VISCA and ONVIF. Pelco-D has no position inquiry,
-so a client can only read the position via VISCA/ONVIF (run e.g.
-`--sony --pelco-d` at the same time). Example: pan right at medium speed on
+the same 100 presets as for VISCA and ONVIF. The Pelco-D position queries
+(e.g. Query Zoom Position `00 55`) are not implemented yet, so a client reads the
+position via VISCA/ONVIF (run e.g. `--sony --pelco-d` at the same time). Example: pan right at medium speed on
 camera 1 is `FF 01 00 02 20 00 23`.
 
 ## NDI
@@ -575,16 +582,20 @@ PTZSIM_ONVIF_CLIENT=1 uv run --group onvif-client pytest
 
 ## ONVIF conformance
 
-Checked against the [ONVIF Core Specification 26.06](https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf).
-The PTZ fault subcodes are not verified against the PTZ Service Specification.
-Responses are not validated against the XSD schemas automatically.
+Checked against the [ONVIF Core Specification 26.06](https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf)
+and the [ONVIF PTZ Service Specification 25.12](https://www.onvif.org/specs/2512/ONVIF-PTZ-Service-Spec-v2512.pdf)
+(operations and fault subcodes of chapter 5). Responses are not validated against the XSD schemas automatically.
 
 - PTZ service: all mandatory operations (GetNodes, GetNode, GetConfigurations,
   GetConfiguration, GetConfigurationOptions, SetConfiguration, ContinuousMove, Stop,
   GetStatus, GetServiceCapabilities), presets, home position, AbsoluteMove and
   RelativeMove. Faults use the spec's chains, e.g. `env:Sender / ter:InvalidArgVal /
-  ter:NoProfile`; out-of-range velocity, timeout or position is rejected, SetPreset
-  fails while the camera moves (`ter:MovingPTZ`). An omitted axis in ContinuousMove
+  ter:NoProfile`; out-of-range velocity (`ter:InvalidVelocity`), timeout
+  (`ter:TimeoutNotSupported`), position (`ter:InvalidPosition`), translation
+  (`ter:InvalidTranslation`) or speed (`ter:InvalidSpeed`) is rejected, as is a `space`
+  the node does not support (`ter:SpaceNotSupported`). SetPreset fails while the camera
+  moves (`ter:MovingPTZ`) and for a `PresetToken` that does not exist (`ter:NoToken`);
+  GotoHomePosition honours `Speed`. An omitted axis in ContinuousMove
   keeps moving, a zero velocity stops it.
 - Authentication: HTTP digest (RFC 2617, answers 401 with a challenge, also for wrong
   credentials as in Core spec figure 4) and
@@ -725,4 +736,7 @@ that override. See the [upstream compatibility guidance](https://github.com/vuej
 
 ptzsim is licensed under the [MIT License](https://github.com/stritti/ptz-simulator/blob/main/LICENSE).
 The optional NDI runtime and third-party reference documents are subject to
-their respective terms.
+their respective terms. The ONVIF specifications in `docs/public/specs/onvif/` are
+unmodified copies, © ONVIF™, redistributed under the notice on page 2 of each
+document; the [specification reference](docs/specs/index.md) on the website maps
+them and the VISCA, Pelco-D and NDI documents to the simulator's behaviour.

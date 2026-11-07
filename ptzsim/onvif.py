@@ -53,6 +53,14 @@ ZOOM_POSITION_SPACE = f"{SPACE}/ZoomSpaces/PositionGenericSpace"
 ZOOM_TRANSLATION_SPACE = f"{SPACE}/ZoomSpaces/TranslationGenericSpace"
 ZOOM_VELOCITY_SPACE = f"{SPACE}/ZoomSpaces/VelocityGenericSpace"
 ZOOM_SPEED_SPACE = f"{SPACE}/ZoomSpaces/ZoomGenericSpeedSpace"
+# The one space per kind and axis the PTZ node supports (PTZ spec 5.3: a referenced
+# space that the node does not support is ter:SpaceNotSupported).
+SUPPORTED_SPACES = {
+    "position": {"PanTilt": PT_POSITION_SPACE, "Zoom": ZOOM_POSITION_SPACE},
+    "translation": {"PanTilt": PT_TRANSLATION_SPACE, "Zoom": ZOOM_TRANSLATION_SPACE},
+    "velocity": {"PanTilt": PT_VELOCITY_SPACE, "Zoom": ZOOM_VELOCITY_SPACE},
+    "speed": {"PanTilt": PT_SPEED_SPACE, "Zoom": ZOOM_SPEED_SPACE},
+}
 
 PROFILE_TOKEN = "Profile_1"
 PTZ_CONFIG_TOKEN = "PTZConfig_1"
@@ -933,10 +941,27 @@ class OnvifCamera:
         x, y = elem.get("x"), elem.get("y")
         return (float(x) if x is not None else None), (float(y) if y is not None else None)
 
-    def _speeds(self, request: ET.Element) -> Tuple[float, float, float]:
-        """Return pan speed step, tilt speed step and a zoom factor from <Speed>."""
+    @staticmethod
+    def _check_spaces(request: ET.Element, element: str, kind: str) -> None:
+        """PTZ spec 5.3/5.4.3: only spaces the node supports may be referenced."""
+        for axis, supported in SUPPORTED_SPACES[kind].items():
+            vector = find(request, element, axis)
+            space = vector.get("space") if vector is not None else None
+            if space is not None and space != supported:
+                raise invalid_arg("ter:SpaceNotSupported", f"{axis} space {space} is not supported")
+
+    def _speed_values(self, request: ET.Element) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        """Pan, tilt and zoom of <Speed> in the generic speed spaces [0, 1] (ter:InvalidSpeed outside)."""
+        self._check_spaces(request, "Speed", "speed")
         sx, sy = self._xy(find(request, "Speed", "PanTilt"))
         sz, _ = self._xy(find(request, "Speed", "Zoom"))
+        if any(v is not None and not 0.0 <= v <= 1.0 for v in (sx, sy, sz)):
+            raise invalid_arg("ter:InvalidSpeed", "speed outside the generic speed space [0, 1]")
+        return sx, sy, sz
+
+    def _speeds(self, request: ET.Element) -> Tuple[float, float, float]:
+        """Return pan speed step, tilt speed step and a zoom factor from <Speed>."""
+        sx, sy, sz = self._speed_values(request)
         pan = st.PAN_SPEED_MAX * st.clamp(sx if sx is not None else 1.0, 0.0, 1.0)
         tilt = st.TILT_SPEED_MAX * st.clamp(sy if sy is not None else 1.0, 0.0, 1.0)
         return max(pan, 1.0), max(tilt, 1.0), st.clamp(sz if sz is not None else 1.0, 0.05, 1.0)
@@ -945,6 +970,7 @@ class OnvifCamera:
         self._check_ptz_profile(request)
         self._require_power()
         s = self.state
+        self._check_spaces(request, "Velocity", "velocity")
         vx, vy = self._xy(find(request, "Velocity", "PanTilt"))
         vz, _ = self._xy(find(request, "Velocity", "Zoom"))
         if any(v is not None and not -1.0 <= v <= 1.0 for v in (vx, vy, vz)):
@@ -1017,14 +1043,16 @@ class OnvifCamera:
                              "AbsoluteMove is not supported", sender=False)
         self._check_ptz_profile(request)
         self._require_power()
-        self._cancel_timer()
+        self._check_spaces(request, "Position", "position")
+        speeds = self._speeds(request)
         x, y = self._xy(find(request, "Position", "PanTilt"))
         z, _ = self._xy(find(request, "Position", "Zoom"))
         if any(v is not None and not -1.0 <= v <= 1.0 for v in (x, y)) or (z is not None and not 0.0 <= z <= 1.0):
             raise invalid_arg("ter:InvalidPosition", "position outside the generic space")
+        self._cancel_timer()
         self._move_to(pan_from_onvif(x) if x is not None else None,
                       tilt_from_onvif(y) if y is not None else None,
-                      zoom_from_onvif(z) if z is not None else None, self._speeds(request))
+                      zoom_from_onvif(z) if z is not None else None, speeds)
         self.camera.record("ONVIF", "AbsoluteMove " + " ".join(
             f"{n} {v:+.3f}" for n, v in (("pan", x), ("tilt", y), ("zoom", z)) if v is not None))
         return "<tptz:AbsoluteMoveResponse/>"
@@ -1032,10 +1060,16 @@ class OnvifCamera:
     def relative_move(self, request, host) -> str:
         self._check_ptz_profile(request)
         self._require_power()
-        self._cancel_timer()
+        self._check_spaces(request, "Translation", "translation")
+        speeds = self._speeds(request)
         s = self.state
         dx, dy = self._xy(find(request, "Translation", "PanTilt"))
         dz, _ = self._xy(find(request, "Translation", "Zoom"))
+        # The generic translation spaces span [-1, 1]; a translation that leads past
+        # the end stops are clipped at the border (5.3.2), larger values are faults.
+        if any(v is not None and not -1.0 <= v <= 1.0 for v in (dx, dy, dz)):
+            raise invalid_arg("ter:InvalidTranslation", "translation outside the generic space [-1, 1]")
+        self._cancel_timer()
         base_pan = s.pan_target[0] if s.pan_target else s.pan
         base_tilt = s.tilt_target[0] if s.tilt_target else s.tilt
         base_zoom = s.zoom_target[0] if s.zoom_target else s.zoom
@@ -1043,7 +1077,7 @@ class OnvifCamera:
             base_pan + dx * st.PAN_MAX if dx is not None else None,
             tilt_from_onvif(tilt_to_onvif(base_tilt) + dy) if dy is not None else None,
             base_zoom + dz * (st.ZOOM_MAX - st.ZOOM_MIN) if dz is not None else None,
-            self._speeds(request))
+            speeds)
         self.camera.record("ONVIF", "RelativeMove " + " ".join(
             f"{n} {v:+.3f}" for n, v in (("pan", dx), ("tilt", dy), ("zoom", dz)) if v is not None))
         return "<tptz:RelativeMoveResponse/>"
@@ -1051,8 +1085,9 @@ class OnvifCamera:
     def goto_home(self, request, host) -> str:
         self._check_ptz_profile(request)
         self._require_power()
+        pan_speed, tilt_speed, _ = self._speeds(request)  # 5.5.1: Speed overrides the default
         self._cancel_timer()
-        self.state.home()
+        self.state.move_pan_tilt_to(*self.state.home_position, pan_speed, tilt_speed)
         if self.camera.instant:
             self.state.finish_moves()
         self.camera.record("ONVIF", "GotoHomePosition")
@@ -1093,6 +1128,8 @@ class OnvifCamera:
                 raise action_failed("ter:TooManyPresets", "no free preset slot")
         else:
             number = self._preset_number(token)
+            if number not in self.state.presets:  # 5.4.1: the token must name an existing preset
+                raise invalid_arg("ter:NoToken", f"preset {token} does not exist")
         self.state.save_preset(number, text_of(request, "PresetName"))
         self.camera.record("ONVIF", f"SetPreset {number}")
         return f"<tptz:SetPresetResponse><tptz:PresetToken>{number}</tptz:PresetToken></tptz:SetPresetResponse>"
@@ -1100,13 +1137,13 @@ class OnvifCamera:
     def goto_preset(self, request, host) -> str:
         self._check_ptz_profile(request)
         self._require_power()
-        self._cancel_timer()
         number = self._preset_number(text_of(request, "PresetToken"))
-        sx, _ = self._xy(find(request, "Speed", "PanTilt"))
-        sz, _ = self._xy(find(request, "Speed", "Zoom"))
-        speed = next((v for v in (sx, sz) if v is not None), None)
-        if not self.state.recall_preset(number, speed):
+        if number not in self.state.presets:
             raise invalid_arg("ter:NoToken", f"preset {number} not set")
+        sx, _, sz = self._speed_values(request)
+        speed = next((v for v in (sx, sz) if v is not None), None)
+        self._cancel_timer()
+        self.state.recall_preset(number, speed)
         if self.camera.instant:
             self.state.finish_moves()
         self.camera.record("ONVIF", f"GotoPreset {number}")

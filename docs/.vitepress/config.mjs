@@ -20,9 +20,11 @@ function repositoryPathsInReadme(md) {
           child.attrSet('src', src.slice('docs/public'.length))
         }
         const href = child.type === 'link_open' && child.attrGet('href')
-        const page = href && href.match(/^docs\/([^/#]+)\.md(#.*)?$/)
+        const page = href && href.match(/^docs\/([^#]+)\.md(#.*)?$/)
         if (page) {
-          child.attrSet('href', `/${page[1]}${page[2] || ''}`)
+          // docs/specs/index.md -> /specs/, docs/scene.md -> /scene
+          const path = page[1].replace(/(^|\/)index$/, '$1')
+          child.attrSet('href', `/${path}${page[2] || ''}`)
         }
       }
     }
@@ -40,6 +42,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide' },
       { text: 'Camera scene', link: '/scene' },
       { text: 'Protocol reference', link: '/ptz_control_protocols_reference_guide' },
+      { text: 'Specifications', link: '/specs/' },
       { text: 'Agent skills', link: '/skills' },
       { text: 'Get started', link: '/guide#running' }
     ],
@@ -65,6 +68,16 @@ export default defineConfig({
           { text: 'VISCA commands', link: '/guide#supported-visca-commands' },
           { text: 'Pelco-D clients', link: '/guide#testing-pelco-d-clients' },
           { text: 'NDI', link: '/guide#ndi' }
+        ]
+      },
+      {
+        text: 'Specifications',
+        items: [
+          { text: 'Overview', link: '/specs/' },
+          { text: 'ONVIF', link: '/specs/onvif' },
+          { text: 'VISCA', link: '/specs/visca' },
+          { text: 'Pelco-D', link: '/specs/pelco-d' },
+          { text: 'NDI PTZ', link: '/specs/ndi' }
         ]
       },
       {

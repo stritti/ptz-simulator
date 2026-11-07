@@ -39,11 +39,65 @@ def onvif():
      "<tptz:Timeout>PT5M</tptz:Timeout></tptz:ContinuousMove>", ["ter:InvalidArgVal", "ter:TimeoutNotSupported"]),
     (f'<tptz:AbsoluteMove>{P}<tptz:Position><tt:Zoom x="1.5"/></tptz:Position></tptz:AbsoluteMove>',
      ["ter:InvalidArgVal", "ter:InvalidPosition"]),
+    # PTZ spec 25.12, 5.4.1: an explicit PresetToken must name an existing preset
+    (f"<tptz:SetPreset>{P}<tptz:PresetToken>42</tptz:PresetToken></tptz:SetPreset>",
+     ["ter:InvalidArgVal", "ter:NoToken"]),
+    # 5.3.1-5.3.3, 5.4.3: spaces the node does not support
+    (f'<tptz:AbsoluteMove>{P}<tptz:Position><tt:PanTilt x="0" y="0" '
+     'space="http://www.onvif.org/ver10/tptz/PanTiltSpaces/SphericalPositionSpaceDegrees"/>'
+     "</tptz:Position></tptz:AbsoluteMove>", ["ter:InvalidArgVal", "ter:SpaceNotSupported"]),
+    (f'<tptz:RelativeMove>{P}<tptz:Translation><tt:Zoom x="0.1" '
+     'space="http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"/>'
+     "</tptz:Translation></tptz:RelativeMove>", ["ter:InvalidArgVal", "ter:SpaceNotSupported"]),
+    (f'<tptz:ContinuousMove>{P}<tptz:Velocity><tt:PanTilt x="0.1" y="0" '
+     'space="http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace"/>'
+     "</tptz:Velocity></tptz:ContinuousMove>", ["ter:InvalidArgVal", "ter:SpaceNotSupported"]),
+    (f'<tptz:AbsoluteMove>{P}<tptz:Position><tt:Zoom x="0.5"/></tptz:Position><tptz:Speed>'
+     '<tt:Zoom x="0.5" space="http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace"/>'
+     "</tptz:Speed></tptz:AbsoluteMove>", ["ter:InvalidArgVal", "ter:SpaceNotSupported"]),
+    # 5.3.2: translation outside the generic translation space
+    (f'<tptz:RelativeMove>{P}<tptz:Translation><tt:PanTilt x="1.5" y="0"/></tptz:Translation>'
+     "</tptz:RelativeMove>", ["ter:InvalidArgVal", "ter:InvalidTranslation"]),
+    # 5.3.1, 5.3.2, 5.5.1: speed outside the generic speed space [0, 1]
+    (f'<tptz:AbsoluteMove>{P}<tptz:Position><tt:Zoom x="0.5"/></tptz:Position>'
+     '<tptz:Speed><tt:Zoom x="2"/></tptz:Speed></tptz:AbsoluteMove>', ["ter:InvalidArgVal", "ter:InvalidSpeed"]),
+    (f'<tptz:RelativeMove>{P}<tptz:Translation><tt:Zoom x="0.1"/></tptz:Translation>'
+     '<tptz:Speed><tt:PanTilt x="-0.5" y="0.5"/></tptz:Speed></tptz:RelativeMove>',
+     ["ter:InvalidArgVal", "ter:InvalidSpeed"]),
+    (f'<tptz:GotoHomePosition>{P}<tptz:Speed><tt:PanTilt x="1.2" y="1"/></tptz:Speed></tptz:GotoHomePosition>',
+     ["ter:InvalidArgVal", "ter:InvalidSpeed"]),
 ])
 def test_fault_chains(onvif, body, chain):
     status, root = call(onvif, body)
     assert status == 400 and text_of(root, "Code", "Value") == "s:Sender"
     assert subcodes(root) == chain
+
+
+def test_goto_preset_checks_speed_and_space(onvif):
+    _, root = call(onvif, f"<tptz:SetPreset>{P}</tptz:SetPreset>")
+    token = text_of(root, "Body", "SetPresetResponse", "PresetToken")
+    goto = f"<tptz:GotoPreset>{P}<tptz:PresetToken>{token}</tptz:PresetToken>"
+    status, root = call(onvif, goto + '<tptz:Speed><tt:PanTilt x="3" y="1"/></tptz:Speed></tptz:GotoPreset>')
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:InvalidSpeed"]
+    status, root = call(onvif, goto + '<tptz:Speed><tt:Zoom x="1" space="urn:unknown"/></tptz:Speed></tptz:GotoPreset>')
+    assert status == 400 and subcodes(root) == ["ter:InvalidArgVal", "ter:SpaceNotSupported"]
+    # an existing token updates the preset; the referenced default spaces are accepted
+    status, _ = call(onvif, f"<tptz:SetPreset>{P}<tptz:PresetToken>{token}</tptz:PresetToken></tptz:SetPreset>")
+    assert status == 200
+    status, _ = call(onvif, goto + '<tptz:Speed><tt:PanTilt x="0.5" y="0.5" '
+                     'space="http://www.onvif.org/ver10/tptz/PanTiltSpaces/GenericSpeedSpace"/></tptz:Speed>'
+                     "</tptz:GotoPreset>")
+    assert status == 200
+
+
+def test_goto_home_uses_the_requested_speed():
+    onvif = OnvifCamera(ViscaCamera())
+    onvif.state.pan = 1000.0
+    call(onvif, f'<tptz:GotoHomePosition>{P}<tptz:Speed><tt:PanTilt x="0.5" y="0.5"/></tptz:Speed>'
+                "</tptz:GotoHomePosition>")
+    slow = onvif.state.pan_target[1]
+    call(onvif, f"<tptz:GotoHomePosition>{P}</tptz:GotoHomePosition>")
+    assert slow < onvif.state.pan_target[1]
 
 
 def test_set_preset_while_moving_fails():

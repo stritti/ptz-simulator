@@ -58,7 +58,7 @@ Pelco-D is a widely used 7-byte framing protocol operating over RS-485 different
   * Bit 6: Zoom Wide
   * Bit 7: Focus Far
 * **Extended commands (Byte 4 bit 0 = 1):** `0x03` Set Preset, `0x05` Clear Preset, `0x07` Call Preset — preset number in Data 2 (set preset 5 on camera 1: `FF 01 00 03 00 05 09`).
-* **Responses:** executed commands get the 4-byte general response `FF <addr> <cmd1> <checksum>` (echoing the request checksum), e.g. `FF 01 00 02 20 00 23` → `FF 01 00 23`. Frames with a wrong checksum get no reply.
+* **Responses:** executed commands get the 4-byte general response `FF <addr> <alarms> <checksum>` with alarms `0x00` and the request checksum plus the alarm byte, e.g. `FF 01 00 02 20 00 23` → `FF 01 00 23`. Frames with a wrong checksum get no reply.
 
 * **Data Fields:**
   * **Data 1 (Pan Speed):** Range `0x00` to `0x3F` (`0xFF` for high-speed turbo mode). `0x00` is the slowest speed, not a stop — an axis stops when its direction bits are cleared.
@@ -73,7 +73,7 @@ Pelco-D is a widely used 7-byte framing protocol operating over RS-485 different
 
 ptzsim implements the drive, stop-all and preset (set `0x03` / call `0x07` / clear
 `0x05`) commands described here and answers executed commands with the 4-byte
-general response `FF <addr> <cmd1> <checksum>`; see
+general response `FF <addr> 00 <checksum>`; see
 [Testing Pelco-D clients](/guide#testing-pelco-d-clients) in the guide.
 
 ### 2.2 Pelco-P
