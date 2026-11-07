@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.4.0](https://github.com/stritti/ptz-simulator/compare/v0.3.0...v0.4.0) (2026-11-07)
+
+
+### Features
+
+* **pelco-d:** simulate Pelco-D over a serial pseudo terminal ([3f45b8a](https://github.com/stritti/ptz-simulator/commit/3f45b8a72c377e37aa0b762533b6f2ec81b14a03))
+* **skills:** add agent skills for conformant camera interfaces ([857b92e](https://github.com/stritti/ptz-simulator/commit/857b92e08d35ad486090ee87cf96a8d2c3da99ba))
+
+
+### Bug Fixes
+
+* **pelco-d:** correct preset, focus-near, speed and response encoding ([129ff42](https://github.com/stritti/ptz-simulator/commit/129ff425eaeb5348dd6e5e8fb60844564dbb6e13))
+* **pelco-d:** resync splitter after invalid frames, honor --instant on recall ([9ce6a64](https://github.com/stritti/ptz-simulator/commit/9ce6a64ea5faab7d21e6b2bf5a61a4d4a1a65035))
+* **skills:** address codex review findings ([f9a0baa](https://github.com/stritti/ptz-simulator/commit/f9a0baab32a241387c801ce1184f63f00d28a777))
+* **skills:** address eighth codex review round ([510f650](https://github.com/stritti/ptz-simulator/commit/510f650be7a0c6e5bfdaed739e726868ab250c24))
+* **skills:** address eleventh codex review round ([e253f34](https://github.com/stritti/ptz-simulator/commit/e253f3408ff3b688bf8f3bcd6df52917cfe971ee))
+* **skills:** address fifth codex review round ([498e5d9](https://github.com/stritti/ptz-simulator/commit/498e5d9694316416b41d6fb40ddd136daabcc672))
+* **skills:** address fourteenth codex review round ([52335cd](https://github.com/stritti/ptz-simulator/commit/52335cd9819d74fbfa7d4fa6f143b191dcc594ca))
+* **skills:** address fourth codex review round ([58c77da](https://github.com/stritti/ptz-simulator/commit/58c77daa9aa6cb4a1e078448a475d1ed32b6a40f))
+* **skills:** address ninth codex review round ([13696b3](https://github.com/stritti/ptz-simulator/commit/13696b34da3cb0ea40d17dc4f73b268167f037b0))
+* **skills:** address second codex review round ([491387f](https://github.com/stritti/ptz-simulator/commit/491387f120a1000212a689bf78589b4c56bbd9f9))
+* **skills:** address seventh codex review round ([7cba59e](https://github.com/stritti/ptz-simulator/commit/7cba59e62940617459c2c77350e46512c66fa19a))
+* **skills:** address sixth codex review round ([bfe1d8f](https://github.com/stritti/ptz-simulator/commit/bfe1d8f7f4966fde8f27322a538d8ed7d928cae9))
+* **skills:** address tenth codex review round ([7ebc402](https://github.com/stritti/ptz-simulator/commit/7ebc402bcc9294fcee07d1d33d3d9c29ae836988))
+* **skills:** address third codex review round ([8e2dd5b](https://github.com/stritti/ptz-simulator/commit/8e2dd5b07f63447853d01205891402f4fe77ba95))
+* **skills:** address thirteenth codex review round ([5f279f7](https://github.com/stritti/ptz-simulator/commit/5f279f76121b8506605fd859ee4bb2dd6c028d98))
+* **skills:** address twelfth codex review round ([3259e7d](https://github.com/stritti/ptz-simulator/commit/3259e7deb1d97b57a1617dbca89762a83ba30297))
+
+
+### Documentation
+
+* list supported standards with versions and references ([58ee9a6](https://github.com/stritti/ptz-simulator/commit/58ee9a61a84e05125cb129b9d4e47544deb2fc97))
+* make PyPI badge track new releases within minutes ([c3c3662](https://github.com/stritti/ptz-simulator/commit/c3c3662f00081d8e47d042e550c31abd7dbf87a2))
+* state the implemented WS-Discovery version (1.0, 2005/04) ([19f78d4](https://github.com/stritti/ptz-simulator/commit/19f78d4808cca53a1fda1b565b8702da88c784af))
+* **website:** add agent skills page to the documentation site ([3cdff2b](https://github.com/stritti/ptz-simulator/commit/3cdff2b7ac1fa14d556cb129f16116052356b4b1))
+* **website:** document Pelco-D on the documentation site ([35177c5](https://github.com/stritti/ptz-simulator/commit/35177c50b64159986c0cf1abd3b611ab88e327fb))
+
 ## [0.3.0](https://github.com/stritti/ptz-simulator/compare/v0.2.0...v0.3.0) (2026-11-06)
 
 
