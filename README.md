@@ -71,6 +71,7 @@ install the extra: `uv tool install "ptzsim[ndi] @ git+https://github.com/stritt
 | `--tcp [PORT]`   | raw VISCA over TCP (e.g. PTZOptics)                  | 5678         |
 | `--udp [PORT]`   | raw VISCA over UDP                                   | 1259         |
 | `--pty [LINK]`   | serial VISCA via a pseudo terminal (RS-232/422 stand-in) | –        |
+| `--pelco-d [LINK]` | Pelco-D serial via a pseudo terminal (RS-485 stand-in) | –      |
 | `--ndi`          | NDI source with PTZ control and a test picture       | NDI default (mDNS, TCP 5960+) |
 
 Transports can be combined; they all control the same camera. Without any option
@@ -610,8 +611,8 @@ the `ptzsim.protocols` entry point. The step-by-step guide with a tested example
 
 `.agents/skills/` ships [Agent Skills](https://agentskills.io) (a `SKILL.md` plus
 `references/` and `scripts/` per skill) that other projects can install to implement a
-reference-conformant camera interface — wire-exact VISCA or ONVIF — and to validate it
-against this simulator (details on the [agent skills](docs/skills.md) page):
+reference-conformant camera interface — wire-exact VISCA, ONVIF or Pelco-D — and to
+validate it against this simulator (details on the [agent skills](docs/skills.md) page):
 
 | Skill | Purpose |
 |---|---|
