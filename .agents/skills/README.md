@@ -7,7 +7,7 @@ SPDX-License-Identifier: MIT
 
 [Agent Skills](https://agentskills.io) (a directory with a `SKILL.md` plus optional
 `references/`, `scripts/`, `assets/`) that help any project implement a
-**reference-conformant PTZ camera interface** — wire-exact VISCA or ONVIF — and validate
+**reference-conformant PTZ camera interface** — wire-exact VISCA, ONVIF or Pelco-D — and validate
 it against the [ptzsim](https://github.com/stritti/ptz-simulator) reference simulator.
 
 | Skill | Purpose |

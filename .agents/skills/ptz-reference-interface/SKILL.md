@@ -21,8 +21,9 @@ published standard**, so real clients and real cameras accept it. "Reference-con
 here means: byte-exact framing and reply codes (VISCA) or SOAP operations, coordinate
 spaces, fault chains and discovery/auth behaviour (ONVIF), validated against a reference
 implementation — the [ptzsim](https://github.com/stritti/ptz-simulator) simulator, which
-implements VISCA (serial, TCP, UDP, Sony VISCA over IP) and ONVIF (Device/Media/PTZ,
-WS-Discovery, WS-Security) strictly per the standards.
+implements VISCA (serial, TCP, UDP, Sony VISCA over IP), ONVIF (Device/Media/PTZ,
+WS-Discovery, WS-Security) and Pelco-D (serial RS-485, since ptzsim 0.4.0) strictly per
+the standards.
 
 ## Workflow
 
@@ -30,6 +31,7 @@ WS-Discovery, WS-Security) strictly per the standards.
    (comparison matrix, default ports, selection guide, official specification links).
    - VISCA (Sony) for broadcast/hardware controllers → skill `visca-interface`
    - ONVIF Profile S/T for VMS/surveillance integrations → skill `onvif-ptz-interface`
+   - Pelco-D over RS-485 for legacy surveillance cabling → skill `pelco-d-interface`
 2. **Implement** the interface with the matching protocol skill. Keep parsing strictly
    separated from I/O so every message handler is unit-testable without sockets.
    Be strict where the standard is strict (framing, checksums, error codes, ranges);
