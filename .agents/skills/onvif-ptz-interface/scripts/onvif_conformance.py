@@ -425,6 +425,8 @@ def main() -> int:
             if root is not None else []
         if resp_tokens:
             preset_token = resp_tokens[0]
+        # raw token for response comparisons, escaped form for request bodies
+        preset_token_body = escape(preset_token)
         check("SetPreset accepted (camera-allocated token %s)" % preset_token,
               status == 200 and root is not None
               and response_name(root) == "SetPresetResponse", "HTTP %s" % status)
@@ -439,14 +441,14 @@ def main() -> int:
         status, text, root = client.call(
             "ptz",
             "<tptz:GotoPreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
-            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:GotoPreset>" % (profile_body, preset_token))
+            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:GotoPreset>" % (profile_body, preset_token_body))
         check("GotoPreset %s accepted" % preset_token, status == 200 and root is not None
               and response_name(root) == "GotoPresetResponse", "HTTP %s" % status)
 
         status, text, root = client.call(
             "ptz",
             "<tptz:RemovePreset><tptz:ProfileToken>%s</tptz:ProfileToken>"
-            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:RemovePreset>" % (profile_body, preset_token))
+            "<tptz:PresetToken>%s</tptz:PresetToken></tptz:RemovePreset>" % (profile_body, preset_token_body))
         check("RemovePreset %s accepted (only the new preset)" % preset_token,
               status == 200 and root is not None
               and response_name(root) == "RemovePresetResponse", "HTTP %s" % status)
