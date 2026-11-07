@@ -51,9 +51,12 @@ Reference documents:
    (−1 = −30°, 0 = level, +1 = +90°), zoom 0…1 (1×…20×), velocities −1…1. Declare the
    spaces in the PTZ node's `SupportedPTZSpaces` and use the `space` attribute URIs.
 5. **Faults** use the spec chains, e.g. unknown profile → HTTP 400 + fault
-   `env:Sender / ter:InvalidArgVal / ter:NoProfile`; out-of-range velocity/position or
-   timeout (outside PT0.1S…PT60S) → `ter:InvalidArgVal` (+ `ter:TimeoutNotSupported`);
-   `SetPreset` while moving → `env:Receiver / ter:Action / ter:MovingPTZ`; after
+   `env:Sender / ter:InvalidArgVal / ter:NoProfile`; out-of-range velocity, position,
+   translation or speed → `ter:InvalidArgVal / ter:InvalidVelocity|InvalidPosition|
+   InvalidTranslation|InvalidSpeed`; timeout outside PT0.1S…PT60S →
+   `ter:TimeoutNotSupported`; an unsupported `space` URI → `ter:SpaceNotSupported`;
+   `SetPreset` with an unknown `PresetToken` → `ter:NoToken`, while moving →
+   `env:Receiver / ter:Action / ter:MovingPTZ` (PTZ spec 25.12, chapter 5); after
    `RemovePTZConfiguration` PTZ operations fail with `ter:NoPTZProfile`.
 6. **Motion semantics**: `ContinuousMove` velocity 0 on an axis stops that axis; an
    omitted axis keeps moving; `Timeout` (default 5 s, PT0.1S…PT60S) ends the move and

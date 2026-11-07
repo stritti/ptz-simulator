@@ -48,7 +48,11 @@ clients must parse the SOAP fault, not only the status code. Common chains:
 
 - unknown profile: `env:Sender / ter:InvalidArgVal / ter:NoProfile`
 - no PTZ configuration: `ter:NoPTZProfile`
-- out-of-range value: `ter:InvalidArgVal` (+ leaf, e.g. `ter:NoProfile`)
+- out-of-range value: `ter:InvalidArgVal` + `ter:InvalidPosition` (AbsoluteMove),
+  `ter:InvalidTranslation` (RelativeMove), `ter:InvalidVelocity` (ContinuousMove),
+  `ter:InvalidSpeed` (any `Speed` outside 0…1)
+- unsupported `space` URI: `ter:InvalidArgVal / ter:SpaceNotSupported`
+- SetPreset/GotoPreset/RemovePreset with an unknown token: `ter:InvalidArgVal / ter:NoToken`
 - timeout outside PT0.1S…PT60S: `ter:InvalidArgVal / ter:TimeoutNotSupported`
 - SetPreset while moving: `env:Receiver / ter:Action / ter:MovingPTZ`
 - unsupported operation: `env:Receiver / ter:ActionNotSupported` (optionally

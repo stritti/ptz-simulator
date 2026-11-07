@@ -582,16 +582,20 @@ PTZSIM_ONVIF_CLIENT=1 uv run --group onvif-client pytest
 
 ## ONVIF conformance
 
-Checked against the [ONVIF Core Specification 26.06](https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf).
-The PTZ fault subcodes are not verified against the PTZ Service Specification.
-Responses are not validated against the XSD schemas automatically.
+Checked against the [ONVIF Core Specification 26.06](https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf)
+and the [ONVIF PTZ Service Specification 25.12](https://www.onvif.org/specs/2512/ONVIF-PTZ-Service-Spec-v2512.pdf)
+(operations and fault subcodes of chapter 5). Responses are not validated against the XSD schemas automatically.
 
 - PTZ service: all mandatory operations (GetNodes, GetNode, GetConfigurations,
   GetConfiguration, GetConfigurationOptions, SetConfiguration, ContinuousMove, Stop,
   GetStatus, GetServiceCapabilities), presets, home position, AbsoluteMove and
   RelativeMove. Faults use the spec's chains, e.g. `env:Sender / ter:InvalidArgVal /
-  ter:NoProfile`; out-of-range velocity, timeout or position is rejected, SetPreset
-  fails while the camera moves (`ter:MovingPTZ`). An omitted axis in ContinuousMove
+  ter:NoProfile`; out-of-range velocity (`ter:InvalidVelocity`), timeout
+  (`ter:TimeoutNotSupported`), position (`ter:InvalidPosition`), translation
+  (`ter:InvalidTranslation`) or speed (`ter:InvalidSpeed`) is rejected, as is a `space`
+  the node does not support (`ter:SpaceNotSupported`). SetPreset fails while the camera
+  moves (`ter:MovingPTZ`) and for a `PresetToken` that does not exist (`ter:NoToken`);
+  GotoHomePosition honours `Speed`. An omitted axis in ContinuousMove
   keeps moving, a zero velocity stops it.
 - Authentication: HTTP digest (RFC 2617, answers 401 with a challenge, also for wrong
   credentials as in Core spec figure 4) and
