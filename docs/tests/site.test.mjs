@@ -71,6 +71,16 @@ for (const { name, input, base } of [
       'the ONVIF client guide target must be generated'
     )
 
+    for (const page of ['index', 'onvif', 'visca', 'pelco-d', 'ndi']) {
+      assert.ok(existsSync(join(output, 'specs', `${page}.html`)), `the ${page} specification page must be generated`)
+    }
+    const onvifSpecs = readFileSync(join(output, 'specs', 'onvif.html'), 'utf8')
+    for (const pdf of ['ONVIF-Core-Spec-v2606', 'ONVIF-Media-Service-Spec-v2412',
+      'ONVIF-PTZ-Service-Spec-v2512', 'ONVIF-Imaging-Service-Spec-v1812']) {
+      assert.ok(existsSync(join(output, 'specs', 'onvif', `${pdf}.pdf`)), `${pdf}.pdf must be published`)
+      assert.ok(onvifSpecs.includes(`href="${base}specs/onvif/${pdf}.pdf"`), `${pdf}.pdf must be linked under the Pages base`)
+    }
+
     const scenePath = join(output, 'scene.html')
     assert.ok(existsSync(scenePath), 'the camera scene page must be generated')
     const scene = readFileSync(scenePath, 'utf8')

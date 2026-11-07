@@ -736,4 +736,7 @@ that override. See the [upstream compatibility guidance](https://github.com/vuej
 
 ptzsim is licensed under the [MIT License](https://github.com/stritti/ptz-simulator/blob/main/LICENSE).
 The optional NDI runtime and third-party reference documents are subject to
-their respective terms.
+their respective terms. The ONVIF specifications in `docs/public/specs/onvif/` are
+unmodified copies, © ONVIF™, redistributed under the notice on page 2 of each
+document; the [specification reference](docs/specs/index.md) on the website maps
+them and the VISCA, Pelco-D and NDI documents to the simulator's behaviour.
