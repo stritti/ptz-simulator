@@ -47,6 +47,7 @@ WS-Discovery, WS-Security) strictly per the standards.
 |---|---|
 | `visca-interface` | Implement/validate a VISCA endpoint or client (RS-232/422, VISCA over IP UDP 52381) |
 | `onvif-ptz-interface` | Implement/validate an ONVIF Profile S/T PTZ service (SOAP, WS-Discovery, WS-Security) |
+| `pelco-d-interface` | Implement/validate a Pelco-D serial endpoint or client (RS-485, 7-byte frames + checksum) |
 | `ptz-conformance-testing` | Test any camera interface against the ptzsim reference simulator + checklists |
 
 ## Ground rules

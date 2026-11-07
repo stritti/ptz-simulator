@@ -50,6 +50,23 @@ What "reference-conformant" means per protocol, checked against the ptzsim refer
       clamp or fault; GetStatus returns Position + MoveStatus.
 - [ ] Presets: Set/Get/Goto/Remove with PresetToken; GotoPreset Speed overrides.
 
+## Pelco-D (serial RS-485, ptzsim >= 0.4.0)
+
+- [ ] Frame: 7 bytes `FF <addr> <cmd1> <cmd2> <data1> <data2> <checksum>`,
+      `checksum = (addr + cmd1 + cmd2 + data1 + data2) mod 256`.
+- [ ] Every executed command answers the 4-byte general response
+      `FF <addr> <cmd1 echo> <request checksum>`; wrong checksum → no reply; frames for
+      other addresses → silently ignored.
+- [ ] Drive bitmask in cmd2: 0x02 pan right, 0x04 pan left, 0x08 tilt up, 0x10 tilt
+      down, 0x20 zoom tele, 0x40 zoom wide, 0x80 focus far; cmd1 bit 0 = focus near.
+      A drive frame sets the whole motion state (cleared bit = axis stops).
+- [ ] Extended commands (cmd2 bit 0 set): 0x03 set / 0x05 clear / 0x07 call preset,
+      preset number in data2 (0–99); call of an unset preset → no response.
+- [ ] Stop all: `FF <addr> 00 00 00 00 <chk>`. Speeds 0x00–0x3F (0x00 = slowest, not
+      stop) and 0xFF turbo; data1 doubles as zoom speed for zoom commands.
+- [ ] Parser resyncs on 0xFF and discards bad-checksum candidates byte by byte.
+- [ ] No position inquiry in Pelco-D — position is read via VISCA/ONVIF instead.
+
 ## Known deliberate deviations of the ptzsim reference
 
 - ONVIF: checked against the ONVIF Core Specification; PTZ fault subcodes are **not**
@@ -59,5 +76,5 @@ What "reference-conformant" means per protocol, checked against the ptzsim refer
 - VISCA: follows the classic 4-digit Sony BRC/EVI/Axis command set — check the target
   model's command list for model-specific codes (e.g. FR7 white balance `04` = ATW,
   5-digit positions).
-- Not simulated at all: Pelco-D/Pelco-P, Panasonic AW CGI, PTZOptics HTTP-CGI,
+- Not simulated at all: Pelco-P, Panasonic AW CGI, PTZOptics HTTP-CGI,
   Sony CGI, Axis VAPIX, Canon XC.

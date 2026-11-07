@@ -15,6 +15,7 @@ it against the [ptzsim](https://github.com/stritti/ptz-simulator) reference simu
 | `ptz-reference-interface` | Entry point: choose the protocol, implement, validate, document |
 | `visca-interface` | VISCA over RS-232/422 and VISCA over IP (UDP 52381): framing, commands, inquiries, replies, sockets, ranges + `scripts/visca_conformance.py` |
 | `onvif-ptz-interface` | ONVIF Profile S/T PTZ service: SOAP services, spaces, faults, WS-Discovery, auth + `scripts/onvif_conformance.py` |
+| `pelco-d-interface` | Pelco-D serial (RS-485): 7-byte frames + checksum, general response, motion bitmask, preset opcodes, speeds + `scripts/pelco_conformance.py` |
 | `ptz-conformance-testing` | Test any camera interface against ptzsim; conformance checklists |
 
 ## Install into your project
