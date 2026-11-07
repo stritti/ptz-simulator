@@ -163,3 +163,15 @@ New protocols are plugins; follow [docs/adding-a-protocol.md](docs/adding-a-prot
 (step by step, with a tested example). Do not add protocol options or start-up code to
 `cli.py` directly. `tests/test_protocol.py` runs the guide's example code, so keep the
 example working when the interface changes, and update the guide with it.
+
+## Agent skills
+
+`.agents/skills/` ships [Agent Skills](https://agentskills.io) that other projects install
+(`scripts/install-skills.sh`, see the README section "Agent skills") to implement
+reference-conformant camera interfaces. Keep every `SKILL.md` self-contained (link only
+inside `.agents/skills/`, refer to this repo by absolute GitHub URLs) with valid
+frontmatter: `name` matches the directory (lowercase-hyphen, ≤64 chars), `description`
+≤1024 chars, SKILL.md ≤500 lines with details in `references/` — `tests/test_skills.py`
+enforces this. Bundled `scripts/*.py` must stay Python 3.8+ standard-library only.
+The documentation site has a page for them, `docs/skills.md` (register new pages in
+`docs/.vitepress/config.mjs`; `docs/tests/site.test.mjs` builds the site and must pass).
