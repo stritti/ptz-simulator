@@ -63,6 +63,52 @@ Wheel, sdist and `ptzsim.pyz` of every version are attached to the
 [GitHub releases](https://github.com/stritti/ptz-simulator/releases). For NDI,
 install the extra: `uv tool install "ptzsim[ndi] @ git+https://github.com/stritti/ptz-simulator"`.
 
+### Windows
+
+ptzsim runs with the normal Windows Python (python.org or Microsoft Store). Use
+`python` (or `py`); `python3` is not available in every setup.
+
+```bat
+:: Install from GitHub (or download ptzsim.pyz and run: python ptzsim.pyz serve)
+python -m pip install "ptzsim[tui] @ https://github.com/stritti/ptz-simulator/archive/refs/heads/main.zip"
+ptzsim serve --onvif --sony
+```
+
+The keyboard UI needs `curses`, which the Windows Python does not ship. The `tui`
+extra installs [windows-curses](https://pypi.org/project/windows-curses/); with
+`ptzsim.pyz` or a checkout, run `python -m pip install windows-curses` once. Without it
+ptzsim shows the read-only dashboard and says so in a `Note:` line at the bottom.
+
+To run from a checkout without installing, point `PYTHONPATH` at it. A checkout
+inside WSL works too (`\\wsl.localhost\<distro>\home\<user>\ptz-simulator`).
+The syntax differs between the shells:
+
+```bat
+:: cmd.exe: no quotes around the path
+set PYTHONPATH=C:\src\ptz-simulator
+python -m ptzsim serve --onvif
+```
+
+```powershell
+# PowerShell
+$env:PYTHONPATH = 'C:\src\ptz-simulator'
+python -m ptzsim serve --onvif
+```
+
+On the first start, Windows Firewall asks whether Python may accept connections.
+Allow it for **private networks**, or a camera client on the LAN gets no reply. If
+you missed the prompt, add the rules in an administrator PowerShell (only the ports
+you use: UDP 52381 for Sony VISCA/IP, TCP 8080 and UDP 3702 for ONVIF and
+WS-Discovery, TCP 5678 / UDP 1259 for raw VISCA):
+
+```powershell
+New-NetFirewallRule -DisplayName "ptzsim VISCA/IP" -Direction Inbound -Protocol UDP -LocalPort 52381 -Profile Private -Action Allow
+New-NetFirewallRule -DisplayName "ptzsim ONVIF" -Direction Inbound -Protocol TCP -LocalPort 8080 -Profile Private -Action Allow
+New-NetFirewallRule -DisplayName "ptzsim WS-Discovery" -Direction Inbound -Protocol UDP -LocalPort 3702 -Profile Private -Action Allow
+```
+
+`--pty` and `--pelco-d` (pseudo terminals) need Linux or macOS.
+
 ## Supported transports
 
 | Option           | Protocol                                             | Default port |
@@ -78,6 +124,12 @@ install the extra: `uv tool install "ptzsim[ndi] @ git+https://github.com/stritt
 Transports can be combined; they all control the same camera. Without any option
 `--sony` is started.
 
+Every network option takes a port: `--onvif 8090`, `--sony 52382`, … The ONVIF
+default 8080 is also the default of Vite and many other dev servers, so pick another
+port when the client under test runs a dev server on the same machine. If a port is
+taken, ptzsim exits with a message that names it, e.g.
+`ptzsim: ONVIF: cannot listen on port 8080: the port is already in use by another program; choose another port with --onvif <PORT>`.
+
 ## Running
 
 ```bash
@@ -92,7 +144,8 @@ uv run ptzsim serve --view-only          # dashboard without keyboard control
 uv run ptzsim serve --no-tui -v          # line log instead of the dashboard
 ```
 
-Without uv, `python3 -m ptzsim serve ...` works as well (standard library only).
+Without uv, `python3 -m ptzsim serve ...` works as well (standard library only;
+on Windows `python -m ptzsim serve ...`, see [Windows](#windows)).
 
 More options: `--onvif-auth both|digest|wsse` (HTTP digest and/or WS-UsernameToken,
 default both), `--onvif-no-absolute` (camera without `AbsoluteMove`, presets only via
@@ -134,12 +187,13 @@ MOVE                                     PRESET                   CAMERA        
 ```
 
 #### Network Information View (Press `n`)
-Lists the hostname and every network interface of the machine (also interfaces
+Lists the address to enter in a client, the hostname and every network interface of the machine (also interfaces
 that are down or have no address), the main interfaces first:
 ```
 NETWORK | Network Information
 c:Camera  [n]:Network  | ONVIF http://0.0.0.0:8103/onvif/device_service
 
+Address for clients: 192.0.2.10 or camera-host
 Hostname: camera-host
 FQDN:     camera-host.example.test
 
@@ -181,6 +235,9 @@ paused except for `Space` (stop); `c` or `n` returns directly to that view.
 
 ### Startup Information
 When the simulator starts, it displays comprehensive network information in the startup logs:
+- **Address for clients** first: the LAN IPv4 addresses (without loopback, link-local
+  and Docker/VM bridges) and the plain hostname, the values to enter in a camera
+  client. The network view (`n`) shows the same line.
 - **Hostname and FQDN** (e.g., `camera-host` and `camera-host.example.test`)
 - **All Network Interfaces** with their IP addresses:
   - IPv4 addresses with netmasks (e.g., `eth0: 192.0.2.10/255.255.255.0`)
@@ -334,6 +391,46 @@ falls back to the read-only dashboard. On Unix, that dashboard still accepts
 only disables keyboard input; it does not stop the simulator. On native Windows,
 use Ctrl+C to exit the read-only dashboard.
 
+## Testing from another device
+
+To control the simulator from another computer, a Raspberry Pi or a phone on the LAN:
+
+1. Start ptzsim on all interfaces (the default `--host 0.0.0.0`).
+2. Enter the address from the `Address for clients:` line (startup log, or `n` in
+   the dashboard) in the client. Prefer the IPv4 address: a laptop's company DNS
+   name (FQDN) often does not resolve on a home network.
+3. Allow the ports in the firewall of the machine running ptzsim (Windows: see
+   [Windows](#windows); Linux with ufw: `sudo ufw allow 52381/udp`, `sudo ufw allow 8080/tcp`,
+   `sudo ufw allow 3702/udp`).
+4. Check from the other device: `ptzsim send --host <IP> "81 09 06 12 FF"` should
+   print the pan/tilt position (Sony VISCA/IP).
+
+**WSL 2:** with the default NAT networking, ptzsim inside WSL is reachable only
+from Windows itself, not from the LAN. This affects all UDP protocols (Sony VISCA/IP
+52381, raw VISCA UDP 1259, WS-Discovery 3702), and `netsh interface portproxy`
+forwards only TCP. Two ways that work:
+
+- Mirrored networking (Windows 11 22H2 or later): add to `%UserProfile%\.wslconfig`
+
+  ```ini
+  [wsl2]
+  networkingMode=mirrored
+  ```
+
+  run `wsl --shutdown`, start WSL again and allow the ports in the Hyper-V firewall
+  (administrator PowerShell):
+
+  ```powershell
+  New-NetFirewallHyperVRule -Name ptzsim -DisplayName "ptzsim" -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol UDP -LocalPorts 52381,1259,3702 -Action Allow
+  ```
+
+  (and a second rule with `-Protocol TCP -LocalPorts 8080,5678` for ONVIF and raw VISCA/TCP).
+- Run ptzsim with the Windows Python instead (see [Windows](#windows)); it needs only
+  the standard library, and the checkout can stay in WSL.
+
+Docker: publish the ports with the protocol, e.g. `-p 52381:52381/udp -p 8080:8080`;
+WS-Discovery multicast does not cross the Docker NAT, so enter the address directly.
+
 ## Testing ONVIF clients
 
 1. Start the simulator in the same network as the client:
@@ -349,7 +446,7 @@ use Ctrl+C to exit the read-only dashboard.
    position, motion, presets and the latest commands.
 
 If a client runs in Docker/WSL and multicast discovery fails, enter the
-simulator's address directly. Set `--advertise-host <IP>` if the address
+simulator's address directly (see [Testing from another device](#testing-from-another-device)). Set `--advertise-host <IP>` if the address
 advertised by discovery is not reachable by the client. Port 80 (the ONVIF
 default) needs root privileges, so 8080 is the default.
 
