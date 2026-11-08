@@ -82,4 +82,6 @@ python3 scripts/onvif_conformance.py --host 127.0.0.1 --user admin --password se
 
 To validate a *client*, point it at the reference simulator (skill
 `ptz-conformance-testing`): `ptzsim serve --onvif --onvif-user admin --onvif-password secret`
-and let the client discover or enter `http://<ip>:8080/onvif/device_service`.
+and let the client discover or enter `http://<ip>:8080/onvif/device_service`. A client
+must send every axis in each `ContinuousMove` (velocity 0 for an axis that should stand
+still): an omitted axis keeps moving. See the checklist section "Client side".

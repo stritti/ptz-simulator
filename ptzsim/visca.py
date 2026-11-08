@@ -122,6 +122,9 @@ class ViscaCamera:
         self.address = address
         self.instant = instant
         self.log: Deque[LogEntry] = deque(maxlen=200)
+        # Rejected commands only, so later successful traffic cannot push them out
+        # of the bounded command log (read by ptzsim.testing.rejected).
+        self.errors: Deque[LogEntry] = deque(maxlen=200)
         self.command_count = 0
         self._pan_tilt_instructed = False  # for the "operation complete" status bits
         # Busy command sockets and the axes their completion waits for.
@@ -196,10 +199,15 @@ class ViscaCamera:
     def record(self, label: str, description: str, ok: bool = True) -> None:
         """Log a command that arrived over another protocol (e.g. ONVIF)."""
         self.command_count += 1
-        self.log.append(LogEntry(b"", description, ok, label))
+        self._append(LogEntry(b"", description, ok, label))
 
     def _log(self, raw: bytes, description: str, ok: bool = True) -> None:
-        self.log.append(LogEntry(raw, description, ok))
+        self._append(LogEntry(raw, description, ok))
+
+    def _append(self, entry: LogEntry) -> None:
+        self.log.append(entry)
+        if not entry.ok:
+            self.errors.append(entry)
 
     def _cancel(self, packet: bytes, socket: int) -> List[Reply]:
         """Command cancel ``8x 2z FF``: stop the command waiting in socket z."""

@@ -80,6 +80,30 @@ asyncio.run(run())
 `free_port(socket.SOCK_DGRAM)` for UDP). Tests that need optional packages must skip
 cleanly (`pytest.importorskip` / env-var skipif).
 
+### Client-side assertions (ptzsim >= 0.7.0)
+
+When your code is the client, drive ptzsim with it and assert on the camera model; this
+catches the pitfalls of the checklist section "Client side":
+
+```python
+from ptzsim.testing import assert_no_errors, assert_stopped, moving_axes, rejected, serve
+
+async with serve("--onvif", str(port), "--no-discovery") as ctx:
+    await my_client.zoom_in(); await my_client.pan_left(); await my_client.stop()
+    assert_stopped(ctx.camera.state)          # no axis may keep moving after Stop
+    assert_stopped(ctx.camera.state, ["zoom"])  # or only the axes set to speed 0
+    assert_no_errors(ctx.camera)              # no VISCA error, control error or fault
+```
+
+- `moving_axes(state)` lists the axes (`pan`, `tilt`, `zoom`, `focus`) with a running
+  velocity or a pending absolute target; `assert_stopped(state, axes)` fails naming them.
+- `rejected(camera)` returns the rejected commands from the command log: VISCA errors
+  (e.g. `90 60 02 FF` for tilt speed `0x18`), VISCA over IP control errors `0F 01` /
+  `0F 02`, ONVIF faults, invalid Pelco-D frames; `assert_no_errors(camera)` fails on any.
+  The same entries appear in red in the dashboard's command log and in the `--no-tui` log.
+- Pass `instant=False` to `serve()` when the client must see moves take time (e.g. to
+  test that it waits for the VISCA completion).
+
 ## Smoke-test your own camera-side endpoint
 
 Use the scripts bundled with the protocol skills:

@@ -406,6 +406,27 @@ Start the simulator with `--sony`, `--tcp`, `--udp` or `--pty /tmp/ttyPTZ` and
 enter the IP and port in the client (52381 for Sony VISCA/IP, 5678 for
 VISCA/TCP), or `/tmp/ttyPTZ` as the serial port.
 
+## Checking a client in your test suite
+
+`ptzsim.testing` starts the simulator inside your own tests (same arguments as
+`ptzsim serve`) and asserts on the camera model after your client has driven it:
+
+```python
+from ptzsim.testing import assert_no_errors, assert_stopped, free_port, serve
+
+async with serve("--onvif", str(port), "--no-discovery") as ctx:
+    ...                               # drive 127.0.0.1:port with the client under test
+    assert_stopped(ctx.camera.state)  # no axis still moving after Stop
+    assert_no_errors(ctx.camera)      # no VISCA error, VISCA/IP control error or ONVIF fault
+```
+
+This catches the usual client pitfalls: an axis left out of an ONVIF `ContinuousMove`
+keeps moving (only velocity 0 stops it), a tilt speed above `0x17` is a VISCA syntax
+error (`90 60 02 FF`), and a VISCA over IP message answered with the control reply
+`0F 01` / `0F 02` gets no ACK or completion. Control errors are also shown in the
+command log. The [agent skill](docs/skills.md) `ptz-conformance-testing` has the full
+client-side checklist.
+
 ## Testing Pelco-D clients
 
 Start the simulator with `--pelco-d [LINK]` (e.g. `--pelco-d /tmp/ttyPelcoD`) and
@@ -645,6 +666,14 @@ npx skills add stritti/ptz-simulator --list                    # list the skills
 npx skills add stritti/ptz-simulator --skill visca-interface   # install one skill
 npx skills add stritti/ptz-simulator --all -y                  # all skills into every agent
 ```
+
+Use `-g` to install into your personal skill directories (e.g. `~/.claude/skills/`)
+instead of the project, when the project should not commit the skill files:
+`npx skills add stritti/ptz-simulator --skill visca-interface -a claude-code -g -y`.
+`npx` needs Node on the `PATH` of the shell that runs it: when Node comes from nvm
+(or fnm, asdf, …) and an agent runs the command in a non-interactive shell such as
+`bash -lc`, the shell profile that loads nvm is not read and `npx` is not found; run it
+in your interactive shell, or load nvm first (`. ~/.nvm/nvm.sh && npx skills add …`).
 
 The skills are listed at [skills.sh/stritti/ptz-simulator](https://skills.sh/stritti/ptz-simulator).
 

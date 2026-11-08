@@ -26,7 +26,7 @@ Mistral Vibe, …) pick them up in this repo directly.
 | [`visca-interface`](https://github.com/stritti/ptz-simulator/tree/main/.agents/skills/visca-interface) | VISCA over RS-232/422 and VISCA over IP (UDP 52381): framing, command/inquiry set, ACK/completion/error replies, the two command sockets, sequence numbers, value ranges | `references/visca-transports.md`, `references/visca-commands.md`, `scripts/visca_conformance.py` |
 | [`onvif-ptz-interface`](https://github.com/stritti/ptz-simulator/tree/main/.agents/skills/onvif-ptz-interface) | ONVIF Profile S/T PTZ service: Device/Media/PTZ operations, generic coordinate spaces, SOAP 1.2 fault chains, WS-Discovery (UDP 3702), WS-Security UsernameToken PasswordDigest and HTTP digest auth | `references/onvif-services.md`, `references/onvif-spaces-faults-auth.md`, `references/soap-examples.md`, `scripts/onvif_conformance.py` |
 | [`pelco-d-interface`](https://github.com/stritti/ptz-simulator/tree/main/.agents/skills/pelco-d-interface) | Pelco-D serial over RS-485/RS-422: 7-byte frames + checksum, 4-byte general response, command-2 motion bitmask, extended preset opcodes, speed fields 0x00..0x3F / 0x40 turbo, position set/query, addressing 1..255 | `references/pelco-d-frames.md`, `scripts/pelco_conformance.py` |
-| [`ptz-conformance-testing`](https://github.com/stritti/ptz-simulator/tree/main/.agents/skills/ptz-conformance-testing) | Validate any camera interface against the ptzsim reference: run it as the camera for your client, or smoke-test your own camera-side endpoint; conformance checklists incl. known deviations | `references/ptzsim-usage.md`, `references/conformance-checklist.md` |
+| [`ptz-conformance-testing`](https://github.com/stritti/ptz-simulator/tree/main/.agents/skills/ptz-conformance-testing) | Validate any camera interface against the ptzsim reference: run it as the camera for your client, or smoke-test your own camera-side endpoint; conformance checklists incl. client-side pitfalls and known deviations, `ptzsim.testing` client assertions | `references/ptzsim-usage.md`, `references/conformance-checklist.md` |
 
 ## Install into your project
 
@@ -39,6 +39,14 @@ npx skills add stritti/ptz-simulator --list                   # list the skills 
 npx skills add stritti/ptz-simulator --skill visca-interface  # install one skill
 npx skills add stritti/ptz-simulator --all -y                 # all skills into every agent
 ```
+
+Use `-g` to install into your personal skill directories (e.g. `~/.claude/skills/`)
+instead of the project, when the project should not commit the skill files:
+`npx skills add stritti/ptz-simulator --skill visca-interface -a claude-code -g -y`.
+`npx` needs Node on the `PATH` of the shell that runs it: when Node comes from nvm
+(or fnm, asdf, …) and an agent runs the command in a non-interactive shell such as
+`bash -lc`, the shell profile that loads nvm is not read and `npx` is not found; run it
+in your interactive shell, or load nvm first (`. ~/.nvm/nvm.sh && npx skills add …`).
 
 Choose the agents with `-a` (e.g. `-a claude-code -a copilot --yes`). The skills are
 listed at [skills.sh/stritti/ptz-simulator](https://skills.sh/stritti/ptz-simulator) and

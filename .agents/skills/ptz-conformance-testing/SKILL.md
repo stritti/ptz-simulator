@@ -28,7 +28,9 @@ both directions:
   `../onvif-ptz-interface/scripts/onvif_conformance.py` (ONVIF). They exit 0 only when
   every wire-level check passes. Also point a real client library at your endpoint.
 - **Your code is the client** (drives a camera): start ptzsim and point your client at
-  it; compare replies with the checklists below.
+  it; work through the checklist section "Client side" (VISCA over IP control errors,
+  separate pan/tilt speed maximums, ONVIF omitted axes) and assert on the camera model
+  with the `ptzsim.testing` helpers `assert_stopped` / `assert_no_errors`.
 
 References:
 
@@ -37,8 +39,8 @@ References:
   end-to-end tests in your own test suite.
 - [references/conformance-checklist.md](references/conformance-checklist.md) — what
   "reference-conformant" means per protocol: the exact checks to verify (VISCA framing,
-  sockets, error codes; ONVIF spaces, faults, discovery, auth, timeouts) plus the known
-  deliberate deviations of the reference.
+  sockets, error codes; ONVIF spaces, faults, discovery, auth, timeouts), the
+  client-side pitfalls, plus the known deliberate deviations of the reference.
 
 ## Quick start
 
@@ -63,5 +65,8 @@ python3 onvif_conformance.py  --host 192.168.1.50 --port 8080 --user admin --pas
   not executable, buffer full; InvalidArgVal, NoProfile, MovingPTZ, ActionNotSupported).
 - Cover discovery (Probe → ProbeMatches with XAddrs) and auth (401 challenge; digest and
   WSSE UsernameToken PasswordDigest) when the interface has them.
+- For a client, check after every Stop that no axis is still moving and that the
+  camera rejected nothing; a client call that only returns after its timeout means it
+  missed a reply (often a VISCA over IP control reply `0F 01` / `0F 02`).
 - Where the reference deliberately deviates from the full standard, document the
   deviation in your README instead of "fixing" the test (see the checklist).

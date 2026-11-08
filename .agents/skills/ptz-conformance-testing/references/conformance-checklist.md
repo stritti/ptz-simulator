@@ -6,6 +6,10 @@ SPDX-License-Identifier: MIT
 # Conformance checklist
 
 What "reference-conformant" means per protocol, checked against the ptzsim reference.
+The protocol sections check the **camera side**; [Client side](#client-side) lists the
+pitfalls of a client that drives a camera. Those show up only end to end: run the
+client against ptzsim and assert on the camera model with the `ptzsim.testing`
+helpers (see `ptzsim-usage.md`).
 
 ## VISCA (any transport)
 
@@ -70,6 +74,57 @@ What "reference-conformant" means per protocol, checked against the ptzsim refer
 - [ ] Position: set `00 4B/4D/4F` (general response), query `00 51/53/55` → Extended
       Response `FF a 00 59/5B/5D msb lsb cksm`; pan/tilt in 1/100° 0–35999 (tilt 0 =
       horizon, 9000 = down), zoom = magnification / limit × 65535.
+
+## Client side
+
+Checks for code that **drives** a camera. Run the client against ptzsim and check the
+camera model after each step (`assert_stopped`, `assert_no_errors` from
+`ptzsim.testing`); a hung or slow call usually means the client missed a reply.
+
+### VISCA
+
+- [ ] VISCA over IP control replies: a message the camera rejects with control reply
+      `0x0201` + `0F 01` (abnormality in the sequence number, e.g. a repeated number)
+      or `0F 02` (abnormality in the message type) gets **no ACK and no completion**.
+      Treat the control reply as the answer: fail the pending request at once instead
+      of waiting for the timeout (a client that ignores it waits its full timeout, e.g.
+      15 s on a preset recall). Then resynchronise: send RESET (`0x0200`, payload `01`,
+      answer `0x0201` + `01`) and restart the counter, or retransmit with a new sequence
+      number if the result is still needed (after `0F 01` on a retransmission the
+      command was already performed).
+- [ ] Sequence numbers: increment per message, wrap to 0; send RESET when the client
+      (re)connects, since the camera remembers the last number per sender.
+- [ ] Speed ranges: pan and tilt speeds have **separate** maximums. Ask the camera with
+      the max-speed inquiry `81 09 06 11 FF` → `90 50 ww zz FF` (ww pan, zz tilt
+      maximum) and scale to that. Until it has answered, use the conservative classic
+      maximums pan `0x18`, tilt `0x17` (Sony BRC/EVI, Axis; ptzsim answers `18 17`).
+      A client that uses `0x18` for both gets `90 60 02 FF` (syntax error) on a
+      full-speed tilt. Some models allow more (the ILME-FR7 list gives 18 normal / 32
+      extended for both axes), which is why the inquiry wins over any fallback.
+- [ ] Every command waits for its ACK (`90 4z FF`) and then the completion
+      (`90 5z FF`) **or** an error (`90 6z …`); `90 6z 41 FF` (e.g. recall of an empty
+      preset) and `90 60 02 FF` end the request as failed.
+- [ ] Inquiries are answered with `90 50 … FF` without a socket and without an ACK.
+- [ ] After Stop (`8x 01 06 01 vv ww 03 03 FF`) or a drive with an axis set to stop,
+      no axis keeps moving.
+
+### ONVIF
+
+- [ ] `ContinuousMove`: an **omitted** axis keeps its current movement (PTZ Service
+      Specification, ContinuousMove: "If the pan/tilt element is omitted, the current
+      pan/tilt movement shall not be affected … The same holds for the zoom element");
+      only velocity 0 stops an axis. Send PanTilt in every ContinuousMove, and Zoom too
+      when the PTZ node has a continuous zoom velocity space, with 0 for the axes that
+      should stand still. A client that drops Zoom when its zoom speed is 0 keeps the
+      zoom running after switching to pan.
+- [ ] `Stop` with `PanTilt` and `Zoom` both `true` (or both omitted) after every
+      jog; check that the camera reports `MoveStatus` IDLE afterwards.
+- [ ] `Timeout` within PT0.1S…PT60S (outside → `ter:TimeoutNotSupported`); a client
+      that jogs for longer repeats ContinuousMove before the timeout ends the move.
+- [ ] Parse the SOAP fault (subcode chain), not only the HTTP status; retry a 401 with
+      the digest challenge, and do not retry with the same wrong credentials.
+- [ ] Preset tokens are opaque strings (ptzsim uses decimal numbers): pass them back
+      unchanged, do not parse them.
 
 ## Known deliberate deviations of the ptzsim reference
 

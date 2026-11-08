@@ -137,6 +137,12 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
         header = SONY_HEADER.pack(payload_type, len(payload), sequence)
         self.transport.sendto(header + payload, addr)
 
+    def _control_error(self, addr, sequence: int, error: bytes, reason: str) -> None:
+        """Answer with control reply ERROR (no ACK, no completion follow) and log it,
+        so a client that ignores the control reply shows up in the command log."""
+        self.sim.camera.record("VISCA-IP", f"control error {hexdump(error)}: {reason}", ok=False)
+        self._reply(addr, SONY_CONTROL_REPLY, sequence, error)
+
     def datagram_received(self, data: bytes, addr) -> None:
         if len(data) < SONY_HEADER.size:
             log.warning("short Sony VISCA-IP datagram from %s: %s", addr, hexdump(data))
@@ -153,17 +159,20 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
             return
         if payload_type not in (SONY_VISCA_COMMAND, SONY_VISCA_INQUIRY, SONY_VISCA_DEVICE_SETTING):
             log.warning("unknown Sony VISCA-IP payload type %04X from %s", payload_type, addr)
-            self._reply(addr, SONY_CONTROL_REPLY, sequence, ERROR_MESSAGE_TYPE)
+            self._control_error(addr, sequence, ERROR_MESSAGE_TYPE,
+                                f"unknown payload type {payload_type:04X}")
             return
         # The message type must match the VISCA packet: 8x 01 .. command, 8x 09 .. inquiry.
         kind = payload[1:2]
         if (payload_type == SONY_VISCA_COMMAND and kind == b"\x09") or (
                 payload_type == SONY_VISCA_INQUIRY and kind != b"\x09"):
-            self._reply(addr, SONY_CONTROL_REPLY, sequence, ERROR_MESSAGE_TYPE)
+            self._control_error(addr, sequence, ERROR_MESSAGE_TYPE,
+                                f"payload type {payload_type:04X} does not match {hexdump(payload)}")
             return
         # A retransmission with the same sequence number is not executed again.
         if self._last_sequence.get(addr) == sequence:
-            self._reply(addr, SONY_CONTROL_REPLY, sequence, ERROR_SEQUENCE)
+            self._control_error(addr, sequence, ERROR_SEQUENCE,
+                                f"repeated sequence number {sequence}, not executed")
             return
         self._last_sequence[addr] = sequence
 
