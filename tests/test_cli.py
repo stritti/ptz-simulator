@@ -175,13 +175,13 @@ def test_serve_view_only_uses_the_dashboard(monkeypatch):
 def test_serve_interactive_terminal_uses_the_tui(monkeypatch):
     seen = {}
 
-    async def fake_interactive(camera, title):
-        seen["title"] = title
+    async def fake_interactive(camera, title, bind_address):
+        seen["title"], seen["bind_address"] = title, bind_address
 
     monkeypatch.setattr(cli, "_interactive_terminal", lambda: True)
     monkeypatch.setattr("ptzsim.tui.interactive", fake_interactive)
     asyncio.run(cli._serve(serve_args("--tcp", "0")))
-    assert "VISCA" in seen["title"]
+    assert "VISCA" in seen["title"] and seen["bind_address"] == "127.0.0.1"
 
 
 def test_serve_reraises_errors_from_the_view(monkeypatch):
@@ -210,7 +210,9 @@ def test_main_serve_reports_binding_errors(monkeypatch, capsys, tmp_path):
     finally:
         blocker.close()
     assert rc == 1
-    assert "ptzsim:" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert f"cannot listen on port {port}" in err and "already in use" in err
+    assert "--tcp <PORT>" in err
 
 
 def test_main_serve_ignores_keyboard_interrupt(monkeypatch, tmp_path):
@@ -252,6 +254,29 @@ def test_interactive_terminal_false_without_curses(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", no_curses)
     assert cli._interactive_terminal() is False
+
+
+def test_curses_hint_names_windows_curses_on_windows(monkeypatch):
+    monkeypatch.setattr(cli, "_has_curses", lambda: False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert "pip install windows-curses" in cli._curses_hint()
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert "windows-curses" not in cli._curses_hint()
+    monkeypatch.setattr(cli, "_has_curses", lambda: True)
+    assert cli._curses_hint() is None  # curses there, only no terminal: nothing to install
+
+
+@pytest.mark.parametrize("extra, expected", [((), True), (("--view-only",), False)])
+def test_dashboard_says_why_keyboard_control_is_missing(monkeypatch, extra, expected):
+    seen = {}
+
+    async def fake_dashboard(camera, title, **kwargs):
+        seen.update(kwargs)
+
+    monkeypatch.setattr(cli, "dashboard", fake_dashboard)
+    monkeypatch.setattr(cli, "_has_curses", lambda: False)
+    asyncio.run(cli._serve(serve_args("--tcp", "0", *extra)))
+    assert bool(seen["notice"] and "curses" in seen["notice"]) is expected
 
 
 # ------------------------------------------------------------- module entry

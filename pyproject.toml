@@ -23,6 +23,8 @@ Changelog = "https://github.com/stritti/ptz-simulator/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 ndi = ["ndi-python", "numpy"]
+# The keyboard UI uses curses, which the Windows Python does not ship.
+tui = ["windows-curses; sys_platform == 'win32'"]
 
 [dependency-groups]
 dev = [

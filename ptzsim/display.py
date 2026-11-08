@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 
 from . import state as st
 from .visca import ViscaCamera
-from .network import get_all_interfaces_detailed, get_hostname_and_fqdn, interface_sort_key
+from .network import format_client_address, get_all_interfaces_detailed, get_hostname_and_fqdn, interface_sort_key
 
 log = logging.getLogger("ptzsim")
 
@@ -94,7 +94,7 @@ def _ipv4_with_prefix(address: str, netmask: str) -> str:
         return address
 
 
-def render_network(title: str, color: bool = True) -> str:
+def render_network(title: str, color: bool = True, bind_address: str = "0.0.0.0") -> str:
     """Render the network information view: hostname plus a table of all interfaces."""
     g, r, b, d, x = (GREEN, RED, BOLD, DIM, RESET) if color else ("",) * 5
     hostname, fqdn = get_hostname_and_fqdn()
@@ -107,6 +107,7 @@ def render_network(title: str, color: bool = True) -> str:
     lines: List[str] = [
         f"{b}Network Information{x}  {d}{title}{x}",
         "",
+        f"{b}Address for clients:{x} {format_client_address(hostname, bind_address)}",
         f"{b}Hostname:{x} {hostname}",
         f"{b}FQDN:{x}     {fqdn}",
         "",
@@ -158,13 +159,13 @@ def render_shortcuts(color: bool = True, current_view: str = "camera") -> str:
 
 def render(camera: ViscaCamera, title: str, color: bool = True, log_lines: int = 10,
           bind_address: str = "0.0.0.0", ports: Optional[Dict[str, int]] = None,
-          view: str = "camera") -> str:
+          view: str = "camera", notice: Optional[str] = None) -> str:
     """Render the appropriate view based on the current view mode."""
     b, d, x = (BOLD, DIM, RESET) if color else ("",) * 3
 
     # Render the main content
     if view == "network":
-        content = render_network(title, color)
+        content = render_network(title, color, bind_address)
     else:
         content = render_camera(camera, title, color, log_lines)
 
@@ -175,6 +176,8 @@ def render(camera: ViscaCamera, title: str, color: bool = True, log_lines: int =
     lines.append("")
     lines.append("─" * 120)
     lines.append(shortcuts)
+    if notice:  # e.g. why the keyboard UI is not available
+        lines.append(f"{b}Note:{x} {notice}")
 
     return "\n".join(lines)
 
@@ -267,7 +270,8 @@ async def read_keyboard_input(state: DashboardState, loop) -> None:
 
 
 async def dashboard(camera: ViscaCamera, title: str, interval: float = 0.1,
-                  bind_address: str = "0.0.0.0", ports: Optional[Dict[str, int]] = None) -> None:
+                  bind_address: str = "0.0.0.0", ports: Optional[Dict[str, int]] = None,
+                  notice: Optional[str] = None) -> None:
     out = sys.stdout
     out.write(HIDE_CURSOR)
     state = DashboardState()
@@ -278,7 +282,8 @@ async def dashboard(camera: ViscaCamera, title: str, interval: float = 0.1,
 
     try:
         while not state.should_quit:
-            output = render(camera, title, bind_address=bind_address, ports=ports, view=state.current_view)
+            output = render(camera, title, bind_address=bind_address, ports=ports, view=state.current_view,
+                            notice=notice)
             out.write(CLEAR + output + "\n")
             out.flush()
             await asyncio.sleep(interval)

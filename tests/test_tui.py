@@ -815,3 +815,13 @@ def test_draw_ignores_curses_write_errors(monkeypatch):
     lines = ["H" * 20, "T" * 20, "body", "body2", "status", "foot [q]"]
     tui_mod._draw(mod._screen, lines, (2, 2, 3, 6), colors, [["red"]], footer_rows=2)
     assert ("refresh",) in mod._screen.calls
+
+
+@pytest.mark.parametrize("platform, resized", [("win32", [(0, 0)]), ("linux", [])])
+def test_resize_is_adopted_on_windows_curses(monkeypatch, platform, resized):
+    calls = []
+    mod = fake_curses(keys=["KEY_RESIZE", "q"], resize_term=lambda rows, cols: calls.append((rows, cols)))
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    monkeypatch.setattr(tui_mod.sys, "platform", platform)
+    asyncio.run(tui_mod.interactive(ViscaCamera(), "t", interval=0.01))
+    assert calls == resized

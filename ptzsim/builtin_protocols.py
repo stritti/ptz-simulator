@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import List
 
-from .protocol import Endpoint, PortPlugin, ProtocolPlugin, ServeContext, register
+from .protocol import BindError, Endpoint, PortPlugin, ProtocolPlugin, ServeContext, register
 from .transports import PtyPort, serve_tcp, serve_udp
 
 
@@ -128,7 +128,7 @@ class Onvif(PortPlugin):
                            help="address announced in WS-Discovery (default: detected per request)")
 
     async def start(self, ctx: ServeContext) -> List[Endpoint]:
-        from .onvif import OnvifCamera, serve_discovery, serve_onvif
+        from .onvif import DISCOVERY_PORT, OnvifCamera, serve_discovery, serve_onvif
 
         args, port = ctx.args, self.port(ctx.args)
         onvif = OnvifCamera(ctx.camera, name=ctx.name, username=args.onvif_user,
@@ -137,7 +137,11 @@ class Onvif(PortPlugin):
         self.servers.append(await serve_onvif(onvif, ctx.host, port))
         endpoints = [Endpoint("ONVIF", f"http://{ctx.host}:{port}/onvif/device_service", port)]
         if not args.no_discovery:
-            self.discovery = await serve_discovery(onvif, port, advertise_host=args.advertise_host)
+            try:
+                self.discovery = await serve_discovery(onvif, port, advertise_host=args.advertise_host)
+            except OSError as err:
+                raise BindError.for_port("WS-Discovery", DISCOVERY_PORT, err,
+                                         "start without it with --no-discovery") from err
             self.servers.append(self.discovery)
             endpoints.append(Endpoint("WS-Discovery", "udp/3702"))
         return endpoints

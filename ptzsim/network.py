@@ -252,17 +252,48 @@ def _get_network_addresses_fallback(
     return addresses
 
 
-def format_network_info_for_startup() -> str:
+# Bridges of container and VM hosts: their addresses are not reachable from the LAN.
+VIRTUAL_PREFIXES = ("docker", "br-", "veth", "virbr", "cni", "flannel", "podman", "lxc", "vmnet", "vboxnet")
+
+
+def client_addresses(bind_address: str = "0.0.0.0") -> List[str]:
+    """IPv4 addresses a client on the LAN can use, main interfaces first.
+
+    Leaves out loopback, link-local and container/VM bridges (unless nothing else is left).
+    A specific ``bind_address`` (``--host``) is the only address that answers.
+    """
+    if bind_address != "0.0.0.0":
+        return [bind_address]
+    by_iface = get_network_addresses("0.0.0.0", include_ipv6=False)
+    lan = [addr for name, addrs in by_iface.items() if not name.startswith(VIRTUAL_PREFIXES) for addr in addrs]
+    return list(dict.fromkeys(lan or [addr for addrs in by_iface.values() for addr in addrs]))
+
+
+def format_client_address(hostname: str, bind_address: str = "0.0.0.0") -> str:
+    """The values to enter in a camera client: LAN IPv4 addresses, then the plain hostname.
+
+    The FQDN is left out on purpose: a company DNS name often does not resolve on another network.
+    The hostname is left out too when ptzsim listens on one address only (``--host``).
+    """
+    addresses = client_addresses(bind_address)
+    if bind_address != "0.0.0.0":
+        return addresses[0]
+    return f"{', '.join(addresses)} or {hostname}" if addresses else hostname
+
+
+def format_network_info_for_startup(bind_address: str = "0.0.0.0") -> str:
     """
     Format network information for display at simulator startup.
 
-    Returns a multi-line string with hostname, FQDN, and all interfaces with addresses.
+    Returns a multi-line string with the address to enter in a client first, then
+    hostname, FQDN, and all interfaces with addresses.
     """
     hostname, fqdn = get_hostname_and_fqdn()
     interfaces = get_all_interfaces_detailed()
 
     lines = [
         "=" * 80,
+        f"Address for clients: {format_client_address(hostname, bind_address)}",
         f"Hostname: {hostname}",
         f"FQDN: {fqdn}",
         "=" * 80,

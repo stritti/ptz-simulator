@@ -51,7 +51,9 @@ python3 -m ptzsim send "81 09 06 12 FF"                     # query pan/tilt pos
 - ONVIF client: let it discover via WS-Discovery (`dn:NetworkVideoTransmitter`, XAddr
   `http://<ip>:8080/onvif/device_service`, scope `onvif://www.onvif.org/name/<name>`), or
   enter the address directly; use the `--onvif-user`/`--onvif-password` credentials.
-  In Docker/WSL where multicast fails, enter the address directly.
+  In Docker/WSL where multicast fails, enter the address directly. With WSL 2 NAT
+  networking, unicast UDP (VISCA/IP 52381, raw UDP 1259, WS-Discovery 3702) is not
+  reachable from the LAN either: use `networkingMode=mirrored` or the Windows Python.
 - With the real client library `onvif-zeep(-async)` (same WSDLs as onvif-zeep):
   in the ptzsim repo, `PTZSIM_ONVIF_CLIENT=1 uv run --group onvif-client pytest` runs the
   suite against it; in your own project, point onvif-zeep at
