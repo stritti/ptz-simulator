@@ -100,8 +100,11 @@ def assert_stopped(state: CameraState, axes: Iterable[str] = AXES) -> None:
 
 def rejected(camera: ViscaCamera) -> List[LogEntry]:
     """Command log entries the camera rejected: VISCA errors, VISCA over IP control
-    errors (``0F 01`` / ``0F 02``), ONVIF faults, invalid Pelco-D frames."""
-    return [entry for entry in camera.log if not entry.ok]
+    errors (``0F 01`` / ``0F 02``), ONVIF faults, invalid Pelco-D frames.
+
+    Kept apart from the bounded command log, so successful commands after a
+    rejection do not push it out (the last 200 rejections are kept)."""
+    return list(camera.errors)
 
 
 def assert_no_errors(camera: ViscaCamera) -> None:

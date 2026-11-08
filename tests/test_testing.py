@@ -93,3 +93,28 @@ def test_visca_ip_client_pitfalls_are_reported():
     assert [r for r in replies if r[0][2] == 3][-1] == ((SONY_CONTROL_REPLY, 2, 3), b"\x0f\x01")
     assert len([r for r in replies if r[0][2] == 3]) == 3  # ACK + completion of the stop, then 0F 01
     assert len(errors) == 2 and errors[1].startswith("control error 0F 01: repeated sequence number 3")
+
+
+def test_rejection_survives_later_successful_traffic():
+    async def run():
+        port = free_port(socket.SOCK_DGRAM)
+        async with serve("--sony", str(port)) as ctx:
+            loop = asyncio.get_running_loop()
+            messages = [(1, "81 01 06 01 18 18 03 01 FF")]
+            messages += [(n, "81 09 06 12 FF") for n in range(2, 250)]
+            await loop.run_in_executor(None, visca_ip_fast, port, messages)
+            return [e.description for e in rejected(ctx.camera)], len(ctx.camera.log)
+
+    errors, logged = asyncio.run(run())
+    assert logged == 200 and errors == ["error: speed out of range"]
+
+
+def visca_ip_fast(port, messages):
+    """Like visca_ip, but waits only for the first reply of each message."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.settimeout(2)
+        for sequence, packet in messages:
+            data = parse_hex(packet)
+            s.sendto(SONY_HEADER.pack(SONY_VISCA_COMMAND if packet[3:5] == "01" else 0x0110,
+                                      len(data), sequence) + data, ("127.0.0.1", port))
+            s.recv(1024)
