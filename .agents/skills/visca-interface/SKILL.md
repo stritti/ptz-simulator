@@ -73,4 +73,7 @@ python3 scripts/visca_conformance.py --host <camera-ip> --transport sony        
 
 To validate a *client*, point it at the reference simulator instead (skill
 `ptz-conformance-testing`): `ptzsim serve --sony --tcp --udp` and connect the client to
-52381 / 5678 / 1259.
+52381 / 5678 / 1259. A client must treat the control replies `0F 01` / `0F 02` as a
+failed request (no ACK or completion follows) and must use separate pan and tilt speed
+maximums (max-speed inquiry `81 09 06 11 FF`; fallback pan `0x18`, tilt `0x17`); see the
+checklist section "Client side".

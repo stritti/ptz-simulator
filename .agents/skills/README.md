@@ -30,6 +30,14 @@ npx skills add stritti/ptz-simulator --skill visca-interface  # install one skil
 npx skills add stritti/ptz-simulator --all -y                 # all skills into every agent
 ```
 
+Use `-g` to install into your personal skill directories (e.g. `~/.claude/skills/`)
+instead of the project, when the project should not commit the skill files:
+`npx skills add stritti/ptz-simulator --skill visca-interface -a claude-code -g -y`.
+`npx` needs Node on the `PATH` of the shell that runs it: when Node comes from nvm
+(or fnm, asdf, …) and an agent runs the command in a non-interactive shell such as
+`bash -lc`, the shell profile that loads nvm is not read and `npx` is not found; run it
+in your interactive shell, or load nvm first (`. ~/.nvm/nvm.sh && npx skills add …`).
+
 Choose the agents with `-a` (e.g. `-a claude-code -a copilot --yes`). The skills are
 listed at [skills.sh/stritti/ptz-simulator](https://skills.sh/stritti/ptz-simulator).
 
