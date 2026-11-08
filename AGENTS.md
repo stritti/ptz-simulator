@@ -121,7 +121,9 @@ the PR is merged; a renamed PR title re-runs the check automatically.
 - `ptzsim/builtin_protocols.py` — the plugins for VISCA (Sony IP, TCP, UDP, pty), ONVIF
   and NDI; registration order is the order in `--help` and the dashboard title.
 - `ptzsim/testing.py` — `serve(*argv)` starts plugins like `ptzsim serve` for
-  end-to-end tests; `free_port()`.
+  end-to-end tests; `free_port()`; client-side assertions `assert_stopped` /
+  `moving_axes` (no axis still moving) and `assert_no_errors` / `rejected` (rejected
+  commands from the command log).
 - `ptzsim/visca.py` — `ViscaCamera`: VISCA command parser on top of `CameraState`; the
   other protocols drive the same `ViscaCamera` instance.
 - `ptzsim/pelco.py` — `PelcoCamera`: Pelco-D parser (7-byte frames with checksum, ACK
