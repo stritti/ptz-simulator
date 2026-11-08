@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.7.0](https://github.com/stritti/ptz-simulator/compare/v0.6.0...v0.7.0) (2026-11-08)
+
+
+### Features
+
+* **cli:** name the port and the fix when a port cannot be bound ([2086e34](https://github.com/stritti/ptz-simulator/commit/2086e34bf4e175354f6bed37ed75e76c338954e9))
+* **network:** list LAN IPv4 addresses and hostname first for clients ([95780d4](https://github.com/stritti/ptz-simulator/commit/95780d4cf2929fe56d2b42987ae5e23b0e1daef0))
+* **testing:** add client-side assertions and log VISCA/IP control errors ([86c29bd](https://github.com/stritti/ptz-simulator/commit/86c29bd0e463274000871a5d62406351831eb951))
+* **tui:** explain the read-only dashboard when curses is missing ([f83f68d](https://github.com/stritti/ptz-simulator/commit/f83f68d67f1e124f876f5134f7a77d680ff93e45))
+
+
+### Bug Fixes
+
+* **network:** show only the --host address as client address ([4a0b026](https://github.com/stritti/ptz-simulator/commit/4a0b02621830cbd638c92f17af652b541ce9953b))
+* **testing:** keep rejected commands apart from the bounded command log ([85bd278](https://github.com/stritti/ptz-simulator/commit/85bd278c77951e39d98883eaadcdc4bf077c7df8))
+
+
+### Documentation
+
+* document running on windows and testing from another device ([0942fd4](https://github.com/stritti/ptz-simulator/commit/0942fd429f902ffd4e283a661879689d5927f287))
+* **skills:** add client-side conformance checklist and install notes ([1d423fa](https://github.com/stritti/ptz-simulator/commit/1d423fae7a6a72dff00cc660d3b521e20a35ef4c))
+
 ## [0.6.0](https://github.com/stritti/ptz-simulator/compare/v0.5.0...v0.6.0) (2026-11-07)
 
 
