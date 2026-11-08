@@ -48,6 +48,7 @@ References:
 # reference camera on localhost: VISCA/IP 52381, raw TCP 5678, raw UDP 1259, ONVIF 8080
 python3 -m ptzsim serve --sony --tcp --udp --onvif --onvif-user admin --onvif-password secret --no-tui
 python3 -m ptzsim serve --pelco-d /tmp/ttyPelcoD           # Pelco-D serial (ptzsim >= 0.4.0)
+uv run --extra ndi ptzsim serve --ndi --name "Camera 1"    # NDI source with PTZ metadata
 
 # quick VISCA checks against it
 python3 -m ptzsim send "81 09 06 12 FF"                 # pan/tilt position inquiry

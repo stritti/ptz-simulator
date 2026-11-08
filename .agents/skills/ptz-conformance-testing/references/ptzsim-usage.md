@@ -23,6 +23,7 @@ python3 ptzsim.pyz serve …
 python3 -m ptzsim serve --sony --tcp --udp --no-tui        # VISCA: UDP 52381, TCP 5678, UDP 1259
 python3 -m ptzsim serve --pty /tmp/ttyPTZ                  # VISCA serial via pseudo terminal
 python3 -m ptzsim serve --pelco-d /tmp/ttyPelcoD           # Pelco-D serial (0.4.0+); --pelco-d-address 1..255
+uv run --extra ndi ptzsim serve --ndi --name "Camera 1"   # NDI source with PTZ metadata (needs the ndi extra)
 python3 -m ptzsim serve --onvif --onvif-user admin --onvif-password secret --name "Camera 1"
 python3 -m ptzsim serve --onvif 8081 --name "Camera 2"    # several instances = several cameras
 python3 -m ptzsim serve --sony --onvif --instant --no-tui  # moves complete at once
@@ -54,6 +55,9 @@ python3 -m ptzsim send "81 09 06 12 FF"                     # query pan/tilt pos
   In Docker/WSL where multicast fails, enter the address directly. With WSL 2 NAT
   networking, unicast UDP (VISCA/IP 52381, raw UDP 1259, WS-Discovery 3702) is not
   reachable from the LAN either: use `networkingMode=mirrored` or the Windows Python.
+- NDI: `uv run --extra ndi pytest -k ndi` in the ptzsim repo runs a real NDI round
+  trip (a receiver calls the SDK PTZ functions against `ptzsim serve --ndi`); drive
+  the source from NDI Studio Monitor, vMix or OBS (DistroAV).
 - With the real client library `onvif-zeep(-async)` (same WSDLs as onvif-zeep):
   in the ptzsim repo, `PTZSIM_ONVIF_CLIENT=1 uv run --group onvif-client pytest` runs the
   suite against it; in your own project, point onvif-zeep at

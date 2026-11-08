@@ -6,8 +6,9 @@ SPDX-License-Identifier: MIT
 # Choosing a PTZ control protocol
 
 Comparison of the common PTZ camera control protocols. The ptzsim reference simulator
-implements VISCA (all transports), ONVIF and Pelco-D (since ptzsim 0.4.0); Pelco-P,
-Panasonic AW, Axis VAPIX and the vendor CGI protocols are common but *not* simulated.
+implements VISCA (all transports), ONVIF, Pelco-D (since ptzsim 0.4.0) and NDI PTZ
+(optional `ndi` extra); Pelco-P, Panasonic AW, Axis VAPIX and the vendor CGI protocols
+are common but *not* simulated.
 
 | Protocol | Type | Transport / physical | Default port / baud | Multi-cam | Framing |
 |---|---|---|---|---|---|

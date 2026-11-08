@@ -22,8 +22,8 @@ here means: byte-exact framing and reply codes (VISCA) or SOAP operations, coord
 spaces, fault chains and discovery/auth behaviour (ONVIF), validated against a reference
 implementation — the [ptzsim](https://github.com/stritti/ptz-simulator) simulator, which
 implements VISCA (serial, TCP, UDP, Sony VISCA over IP), ONVIF (Device/Media/PTZ,
-WS-Discovery, WS-Security) and Pelco-D (serial RS-485, since ptzsim 0.4.0) strictly per
-the standards.
+WS-Discovery, WS-Security), Pelco-D (serial RS-485, since ptzsim 0.4.0) and NDI PTZ
+(XML metadata on the NDI stream, optional `ndi` extra) strictly per the standards.
 
 ## Workflow
 
@@ -32,6 +32,7 @@ the standards.
    - VISCA (Sony) for broadcast/hardware controllers → skill `visca-interface`
    - ONVIF Profile S/T for VMS/surveillance integrations → skill `onvif-ptz-interface`
    - Pelco-D over RS-485 for legacy surveillance cabling → skill `pelco-d-interface`
+   - NDI PTZ metadata for pure NDI workflows (Studio Monitor, vMix, OBS) → skill `ndi-ptz-interface`
 2. **Implement** the interface with the matching protocol skill. Keep parsing strictly
    separated from I/O so every message handler is unit-testable without sockets.
    Be strict where the standard is strict (framing, checksums, error codes, ranges);
@@ -50,6 +51,7 @@ the standards.
 | `visca-interface` | Implement/validate a VISCA endpoint or client (RS-232/422, VISCA over IP UDP 52381) |
 | `onvif-ptz-interface` | Implement/validate an ONVIF Profile S/T PTZ service (SOAP, WS-Discovery, WS-Security) |
 | `pelco-d-interface` | Implement/validate a Pelco-D serial endpoint or client (RS-485, 7-byte frames + checksum) |
+| `ndi-ptz-interface` | Implement/validate NDI PTZ (ndi_capabilities + ntk_ptz_* XML metadata on the NDI stream) |
 | `ptz-conformance-testing` | Test any camera interface against the ptzsim reference simulator + checklists |
 
 ## Ground rules

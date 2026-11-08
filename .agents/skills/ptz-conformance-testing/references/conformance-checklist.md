@@ -126,6 +126,18 @@ camera model after each step (`assert_stopped`, `assert_no_errors` from
 - [ ] Preset tokens are opaque strings (ptzsim uses decimal numbers): pass them back
       unchanged, do not parse them.
 
+## NDI PTZ (XML metadata on the NDI stream, needs the `ndi` extra)
+
+- [ ] Source announces `<ndi_capabilities ntk_ptz="true" ntk_pan_tilt="true" ntk_zoom="true" ntk_focus="true" ntk_autofocus="true" ntk_white_balance="true" ntk_preset_speed="true"/>`.
+- [ ] Executes the `ntk_ptz_*` elements receivers send as metadata: `pan_tilt`,
+      `pan_tilt_speed` (+1 pan_speed = moving left), `zoom` (0 = in, 1 = out),
+      `zoom_speed` (+1 = inwards), `focus` (mode auto/manual+distance 0..1),
+      `focus_speed`, `store_preset`/`recall_preset` (index 0..99, speed 0..1),
+      `white_balance` (auto/indoor/outdoor/one_shot/manual red blue 0..1, 0.5 neutral).
+- [ ] Unknown `ntk_ptz*` tags and missing/invalid attributes are ignored (not executed).
+- [ ] Out-of-range values are clamped; speed 0 stops the axis; no per-command ACK.
+- [ ] Metadata XML validates with `../ndi-ptz-interface/scripts/ndi_metadata_check.py`.
+
 ## Known deliberate deviations of the ptzsim reference
 
 - ONVIF: checked against the ONVIF Core Specification; PTZ fault subcodes are **not**
