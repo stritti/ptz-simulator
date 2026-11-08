@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import importlib
 import logging
 from dataclasses import dataclass
@@ -50,6 +51,29 @@ class Endpoint:
         return f"{self.label} {self.address}" if self.address else self.label
 
 
+# Errors of bind(); Windows reports its own WSAE* numbers (10048, 10013).
+_IN_USE = {errno.EADDRINUSE, 10048}
+_NO_PERMISSION = {errno.EACCES, errno.EPERM, 10013}
+
+
+class BindError(OSError):
+    """A plugin could not listen on its port; the message names port and fix."""
+
+    @classmethod
+    def for_port(cls, service: str, port: int, err: OSError, hint: str) -> "BindError":
+        code = getattr(err, "winerror", None) or err.errno
+        reason = err.strerror or str(err)
+        if code in _IN_USE:
+            reason = "the port is already in use by another program"
+        elif code in _NO_PERMISSION:
+            reason = ("permission denied (ports below 1024 need root; on Windows the port may be "
+                      "reserved, see `netsh interface ipv4 show excludedportrange protocol=tcp`)")
+        return cls(err.errno, f"{service}: cannot listen on port {port}: {reason}; {hint}")
+
+    def __str__(self) -> str:
+        return self.strerror or super().__str__()
+
+
 class ServeContext:
     """What a plugin gets when it is started.
 
@@ -75,7 +99,15 @@ class ServeContext:
             plugin = plugin_class()
             # Registered before start() so a plugin that fails halfway is stopped too.
             self.plugins.append(plugin)
-            self.endpoints += await plugin.start(self)
+            try:
+                self.endpoints += await plugin.start(self)
+            except BindError:
+                raise
+            except OSError as err:
+                if isinstance(plugin, PortPlugin):
+                    hint = f"choose another port with {plugin.option_name()} <PORT>"
+                    raise BindError.for_port(plugin.title, plugin.port(self.args), err, hint) from err
+                raise
 
     def ports(self) -> Dict[str, int]:
         """Network ports of the started endpoints, by service name (for the dashboard)."""

@@ -267,3 +267,75 @@ def test_onvif_plugin_announces_ws_discovery_and_says_bye_on_stop(monkeypatch):
     assert any(t.startswith("ONVIF http://127.0.0.1:") for t in titles)
     assert "WS-Discovery udp/3702" in titles  # discovery endpoint added
     assert any(b"<d:Bye>" in data for data in multicast_sent)  # stop() said Bye
+
+
+@pytest.mark.parametrize("code, attr, expected", [
+    (98, "errno", "already in use"), (10048, "winerror", "already in use"),
+    (13, "errno", "permission denied"), (10013, "winerror", "excludedportrange"),
+    (99, "errno", "Cannot assign"),
+])
+def test_bind_error_names_port_reason_and_fix(code, attr, expected):
+    err = OSError(code if attr == "errno" else None, "Cannot assign requested address")
+    if attr == "winerror":
+        err.winerror = code
+    message = str(protocol.BindError.for_port("ONVIF", 8080, err, "choose another port with --onvif <PORT>"))
+    assert message.startswith("ONVIF: cannot listen on port 8080: ")
+    assert expected in message and message.endswith("--onvif <PORT>")
+
+
+def test_port_in_use_is_reported_with_port_and_option():
+    blocker = socket.socket()
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen()
+    port = blocker.getsockname()[1]
+
+    async def run():
+        async with serve("--onvif", str(port), "--no-discovery"):
+            pass
+
+    try:
+        with pytest.raises(protocol.BindError, match=f"ONVIF: cannot listen on port {port}.*--onvif <PORT>"):
+            asyncio.run(run())
+    finally:
+        blocker.close()
+
+
+def test_ws_discovery_bind_failure_points_to_no_discovery(monkeypatch):
+    from ptzsim import onvif as onvif_module
+
+    async def taken(*args, **kwargs):
+        raise OSError(98, "Address already in use")
+
+    monkeypatch.setattr(onvif_module, "serve_discovery", taken)
+
+    async def run():
+        async with serve("--onvif", str(free_port())):
+            pass
+
+    with pytest.raises(protocol.BindError, match="WS-Discovery: cannot listen on port 3702.*--no-discovery"):
+        asyncio.run(run())
+
+
+def test_os_errors_of_plugins_without_port_are_passed_on(isolated_registry):
+    class Serial(protocol.ProtocolPlugin):
+        name, title = "serial-x", "serial"
+
+        @classmethod
+        def add_arguments(cls, group):
+            group.add_argument("--serial-x", action="store_true")
+
+        @classmethod
+        def enabled(cls, args):
+            return args.serial_x
+
+        async def start(self, ctx):
+            raise OSError("no pty")
+
+    protocol.register(Serial)
+
+    async def run():
+        async with serve("--serial-x"):
+            pass
+
+    with pytest.raises(OSError, match="^no pty$"):
+        asyncio.run(run())

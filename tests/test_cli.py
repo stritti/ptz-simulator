@@ -210,7 +210,9 @@ def test_main_serve_reports_binding_errors(monkeypatch, capsys, tmp_path):
     finally:
         blocker.close()
     assert rc == 1
-    assert "ptzsim:" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert f"cannot listen on port {port}" in err and "already in use" in err
+    assert "--tcp <PORT>" in err
 
 
 def test_main_serve_ignores_keyboard_interrupt(monkeypatch, tmp_path):
