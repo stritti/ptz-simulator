@@ -352,3 +352,9 @@ def test_log_printer_prints_only_new_commands(capsys):
     assert "first command" in out and "second command" in out
     assert "pan=0" in out and "zoom=0x0000" in out
     assert out.count("first command") == 1  # printed once, not repeated
+
+
+def test_render_shows_a_notice_below_the_shortcuts():
+    text = display.render(ViscaCamera(), "t", color=False, notice="needs curses")
+    assert text.splitlines()[-1] == "Note: needs curses"
+    assert "Note:" not in display.render(ViscaCamera(), "t", color=False)

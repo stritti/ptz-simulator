@@ -76,7 +76,10 @@ async def _serve(args: argparse.Namespace) -> None:
         if args.no_tui:
             view = log_printer(camera, bind_address=args.host, ports=ports)
         elif args.view_only or not _interactive_terminal():
-            view = dashboard(camera, title, bind_address=args.host, ports=ports)
+            notice = None if args.view_only else _curses_hint()
+            if notice:
+                logging.getLogger("ptzsim").warning(notice)
+            view = dashboard(camera, title, bind_address=args.host, ports=ports, notice=notice)
         else:
             from .tui import interactive
 
@@ -91,13 +94,26 @@ async def _serve(args: argparse.Namespace) -> None:
         ctx.stop_plugins()
 
 
-def _interactive_terminal() -> bool:
-    """The keyboard UI needs curses (not on Windows) and a terminal on stdin and stdout."""
+def _has_curses() -> bool:
     try:
         import curses  # noqa: F401
     except ImportError:
         return False
-    return sys.stdin.isatty() and sys.stdout.isatty()
+    return True
+
+
+def _interactive_terminal() -> bool:
+    """The keyboard UI needs curses (on Windows: windows-curses) and a terminal on stdin and stdout."""
+    return _has_curses() and sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _curses_hint() -> Optional[str]:
+    """Why the keyboard UI is not shown although it was not switched off, or None."""
+    if _has_curses():
+        return None  # no terminal (e.g. output piped): nothing the user has to install
+    install = "pip install windows-curses" if sys.platform == "win32" else "a Python built with curses"
+    return (f"Keyboard control needs the curses module ({install}); "
+            "showing the read-only dashboard instead.")
 
 
 def send_packets(packets: List[bytes], host: str, port: int, proto: str, timeout: float) -> List[bytes]:

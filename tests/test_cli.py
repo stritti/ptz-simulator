@@ -256,6 +256,29 @@ def test_interactive_terminal_false_without_curses(monkeypatch):
     assert cli._interactive_terminal() is False
 
 
+def test_curses_hint_names_windows_curses_on_windows(monkeypatch):
+    monkeypatch.setattr(cli, "_has_curses", lambda: False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert "pip install windows-curses" in cli._curses_hint()
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert "windows-curses" not in cli._curses_hint()
+    monkeypatch.setattr(cli, "_has_curses", lambda: True)
+    assert cli._curses_hint() is None  # curses there, only no terminal: nothing to install
+
+
+@pytest.mark.parametrize("extra, expected", [((), True), (("--view-only",), False)])
+def test_dashboard_says_why_keyboard_control_is_missing(monkeypatch, extra, expected):
+    seen = {}
+
+    async def fake_dashboard(camera, title, **kwargs):
+        seen.update(kwargs)
+
+    monkeypatch.setattr(cli, "dashboard", fake_dashboard)
+    monkeypatch.setattr(cli, "_has_curses", lambda: False)
+    asyncio.run(cli._serve(serve_args("--tcp", "0", *extra)))
+    assert bool(seen["notice"] and "curses" in seen["notice"]) is expected
+
+
 # ------------------------------------------------------------- module entry
 def test_main_module_entry_point_runs_cli(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["ptzsim", "--help"])

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import sys
 import textwrap
 import time
 from typing import Callable, List, Optional, Tuple
@@ -370,6 +371,8 @@ async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05) -
                     break
                 if key == "\x1b":
                     key = _escape_sequence(screen)
+                elif key == "KEY_RESIZE" and sys.platform == "win32":
+                    curses.resize_term(0, 0)  # PDCurses (windows-curses) only adopts the new size on request
                 controller.handle_key(CURSES_KEYS.get(key, key))
             controller.tick()
             height, width = screen.getmaxyx()
