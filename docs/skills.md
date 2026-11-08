@@ -26,6 +26,7 @@ Mistral Vibe, …) pick them up in this repo directly.
 | [`visca-interface`](https://github.com/stritti/ptz-simulator/tree/main/.agents/skills/visca-interface) | VISCA over RS-232/422 and VISCA over IP (UDP 52381): framing, command/inquiry set, ACK/completion/error replies, the two command sockets, sequence numbers, value ranges | `references/visca-transports.md`, `references/visca-commands.md`, `scripts/visca_conformance.py` |
 | [`onvif-ptz-interface`](https://github.com/stritti/ptz-simulator/tree/main/.agents/skills/onvif-ptz-interface) | ONVIF Profile S/T PTZ service: Device/Media/PTZ operations, generic coordinate spaces, SOAP 1.2 fault chains, WS-Discovery (UDP 3702), WS-Security UsernameToken PasswordDigest and HTTP digest auth | `references/onvif-services.md`, `references/onvif-spaces-faults-auth.md`, `references/soap-examples.md`, `scripts/onvif_conformance.py` |
 | [`pelco-d-interface`](https://github.com/stritti/ptz-simulator/tree/main/.agents/skills/pelco-d-interface) | Pelco-D serial over RS-485/RS-422: 7-byte frames + checksum, 4-byte general response, command-2 motion bitmask, extended preset opcodes, speed fields 0x00..0x3F / 0x40 turbo, position set/query, addressing 1..255 | `references/pelco-d-frames.md`, `scripts/pelco_conformance.py` |
+| [`ndi-ptz-interface`](https://github.com/stritti/ptz-simulator/tree/main/.agents/skills/ndi-ptz-interface) | NDI PTZ (Vizrt): `ndi_capabilities` announcement and the `ntk_ptz_*` XML metadata commands on the NDI stream (pan/tilt + speed with sign flip, zoom, focus, presets 0..99, white balance) with NDI value ranges | `references/ndi-ptz-metadata.md`, `scripts/ndi_metadata_check.py` |
 | [`ptz-conformance-testing`](https://github.com/stritti/ptz-simulator/tree/main/.agents/skills/ptz-conformance-testing) | Validate any camera interface against the ptzsim reference: run it as the camera for your client, or smoke-test your own camera-side endpoint; conformance checklists incl. client-side pitfalls and known deviations, `ptzsim.testing` client assertions | `references/ptzsim-usage.md`, `references/conformance-checklist.md` |
 
 ## Install into your project
@@ -72,6 +73,7 @@ when every wire-level check passes. Point them at your camera-side endpoint:
 python3 visca_conformance.py --host 192.168.1.50 --transport sony           # VISCA over IP, UDP 52381
 python3 visca_conformance.py --host 192.168.1.50 --transport tcp --port 5678
 python3 pelco_conformance.py --port /dev/ttyUSB0 --address 1               # Pelco-D over serial
+python3 ndi_metadata_check.py messages.xml                                 # NDI PTZ metadata XML (offline)
 python3 onvif_conformance.py --host 192.168.1.50 --port 8080 --user admin --password secret --discovery
 ```
 

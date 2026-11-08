@@ -753,6 +753,7 @@ validate it against this simulator (details on the [agent skills](docs/skills.md
 | `visca-interface` | VISCA over RS-232/422 and VISCA over IP (UDP 52381): framing, command/inquiry set, ACK/completion/error replies, command sockets, value ranges, plus a `visca_conformance.py` smoke test |
 | `onvif-ptz-interface` | ONVIF Profile S/T PTZ service: SOAP operations, coordinate spaces, fault chains, WS-Discovery, WS-Security/digest auth, plus an `onvif_conformance.py` smoke test |
 | `pelco-d-interface` | Pelco-D serial (RS-485, 7-byte frames + checksum): frame layout, general and extended response, motion bitmask, preset opcodes, position set/query, speeds/turbo, addressing, plus a `pelco_conformance.py` smoke test |
+| `ndi-ptz-interface` | NDI PTZ (Vizrt): `ndi_capabilities` announcement and the `ntk_ptz_*` XML metadata commands (pan/tilt + speed, zoom, focus, presets, white balance) with NDI value ranges, plus an `ndi_metadata_check.py` validator |
 | `ptz-conformance-testing` | Run ptzsim as the reference camera (or smoke-test your own camera-side endpoint) and follow the conformance checklists |
 
 Install the skills into your project with the [skills CLI](https://skills.sh) — no clone
