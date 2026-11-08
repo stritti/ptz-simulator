@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 
 from . import state as st
 from .visca import ViscaCamera
-from .network import get_all_interfaces_detailed, get_hostname_and_fqdn, interface_sort_key
+from .network import format_client_address, get_all_interfaces_detailed, get_hostname_and_fqdn, interface_sort_key
 
 log = logging.getLogger("ptzsim")
 
@@ -107,6 +107,7 @@ def render_network(title: str, color: bool = True) -> str:
     lines: List[str] = [
         f"{b}Network Information{x}  {d}{title}{x}",
         "",
+        f"{b}Address for clients:{x} {format_client_address(hostname)}",
         f"{b}Hostname:{x} {hostname}",
         f"{b}FQDN:{x}     {fqdn}",
         "",

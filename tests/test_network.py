@@ -416,3 +416,27 @@ def test_format_addresses_for_display_on_a_specific_bind():
 
 def test_get_resolved_addresses_for_a_specific_bind():
     assert network.get_resolved_addresses("127.0.0.1") == ["127.0.0.1"]
+
+
+def test_client_addresses_list_lan_ipv4_before_hostname_and_skip_bridges(monkeypatch):
+    interfaces = {
+        "docker0": make_interface("docker0", ipv4=[("172.17.0.1", "255.255.0.0")]),
+        "wlan0": make_interface("wlan0", ipv4=[("192.168.1.20", "255.255.255.0")], ipv6=["fe80::1"]),
+        "eth0": make_interface("eth0", ipv4=[("10.0.0.5", "255.0.0.0")]),
+    }
+    monkeypatch.setattr(network, "_getifaddrs", lambda: interfaces)
+    assert network.client_addresses() == ["10.0.0.5", "192.168.1.20"]
+    assert network.format_client_address("laptop") == "10.0.0.5, 192.168.1.20 or laptop"
+    monkeypatch.setattr(network.socket, "gethostname", lambda: "laptop")
+    monkeypatch.setattr(network.socket, "getfqdn", lambda: "laptop.corp.example")
+    lines = network.format_network_info_for_startup().splitlines()
+    assert lines[1] == "Address for clients: 10.0.0.5, 192.168.1.20 or laptop"
+    assert "Address for clients:" in display.render_network("t", color=False)
+
+
+def test_client_addresses_fall_back_to_bridges_and_hostname(monkeypatch):
+    bridge = {"docker0": make_interface("docker0", ipv4=[("172.17.0.1", "255.255.0.0")])}
+    monkeypatch.setattr(network, "_getifaddrs", lambda: bridge)
+    assert network.client_addresses() == ["172.17.0.1"]
+    monkeypatch.setattr(network, "_getifaddrs", lambda: {})
+    assert network.format_client_address("laptop") == "laptop"
