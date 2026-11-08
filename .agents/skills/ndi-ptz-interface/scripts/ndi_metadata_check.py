@@ -64,7 +64,10 @@ def check_element(elem, results):
         if mode in ("auto", "indoor", "outdoor", "one_shot"):
             results.append(("PASS", tag, "mode=%s" % mode))
             return
-        if mode == "manual" and "red" in elem.attrib and "blue" in elem.attrib:
+        if mode == "manual":
+            if "red" not in elem.attrib or "blue" not in elem.attrib:
+                results.append(("FAIL", tag, 'mode="manual" needs both red and blue (the reference rejects it)'))
+                return
             levels = [check_numeric(n, elem.get(n), 0.0, 1.0) for n in ("red", "blue")]
             worst = "FAIL" if any(l == "FAIL" for l, _ in levels) else ("WARN" if any(l == "WARN" for l, _ in levels) else "PASS")
             results.append((worst, tag, "; ".join(d for _, d in levels)))
@@ -88,9 +91,13 @@ def check_numeric(name, raw, low, high, is_int=False):
     """Return (level, detail) for one numeric attribute; the reference clamps floats
     but rejects an out-of-range preset index."""
     try:
-        value = float(raw)
-        if is_int and not value.is_integer():
-            raise ValueError
+        if is_int:
+            # the reference parses preset indices with int(): "3.0"/"3e0" are rejected
+            value = int(raw)
+            if not isinstance(value, int):
+                raise ValueError
+        else:
+            value = float(raw)
     except (TypeError, ValueError):
         return "FAIL", "attribute %r=%r is not a%s number" % (name, raw, "n integer" if is_int else "")
     if not low <= value <= high:
@@ -102,13 +109,20 @@ def check_numeric(name, raw, low, high, is_int=False):
 
 def main() -> int:
     text = open(sys.argv[1]).read() if len(sys.argv) > 1 else sys.stdin.read()
+    # a standalone document (possibly with an XML declaration) parses directly;
+    # multiple sibling elements are parsed via a wrapper root
     try:
-        root = ET.fromstring("<root>%s</root>" % text)
-    except ET.ParseError as err:
-        print("FAIL parse — not well-formed XML: %s" % err)
-        return 1
+        root = ET.fromstring(text)
+        elements = [root]
+    except ET.ParseError:
+        try:
+            root = ET.fromstring("<root>%s</root>" % text)
+            elements = list(root)
+        except ET.ParseError as err:
+            print("FAIL parse — not well-formed XML: %s" % err)
+            return 1
     results = []
-    for elem in list(root):
+    for elem in elements:
         check_element(elem, results)
     for level, tag, detail in results:
         print("%s <%s> — %s" % (level, tag, detail))
