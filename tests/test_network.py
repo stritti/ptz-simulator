@@ -14,6 +14,8 @@ import threading
 import pytest
 
 from ptzsim import builtin_protocols, cli, display, network
+from ptzsim.tui import TuiController
+from ptzsim.visca import ViscaCamera
 from ptzsim.network import (InterfaceInfo, format_addresses_for_display, get_all_interfaces_detailed,
                             get_network_addresses, get_resolved_addresses)
 
@@ -440,3 +442,15 @@ def test_client_addresses_fall_back_to_bridges_and_hostname(monkeypatch):
     assert network.client_addresses() == ["172.17.0.1"]
     monkeypatch.setattr(network, "_getifaddrs", lambda: {})
     assert network.format_client_address("laptop") == "laptop"
+
+
+def test_client_address_is_the_listening_address_with_host(monkeypatch):
+    lan = {"eth0": make_interface("eth0", ipv4=[("10.0.0.5", "255.0.0.0")])}
+    monkeypatch.setattr(network, "_getifaddrs", lambda: lan)
+    monkeypatch.setattr(network.socket, "gethostname", lambda: "laptop")
+    assert network.format_client_address("laptop", "127.0.0.1") == "127.0.0.1"
+    assert network.format_network_info_for_startup("127.0.0.1").splitlines()[1] == "Address for clients: 127.0.0.1"
+    assert "Address for clients: 127.0.0.1" in display.render_network("t", color=False, bind_address="127.0.0.1")
+    tui = TuiController(ViscaCamera(), bind_address="127.0.0.1")
+    tui.handle_key("n")
+    assert any("Address for clients: 127.0.0.1" in line for line in tui.layout("t", 120, 40)[0])

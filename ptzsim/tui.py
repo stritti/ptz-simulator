@@ -58,8 +58,10 @@ COMMANDS = [
 class TuiController:
     """Turns key presses into camera actions. Independent of curses, so it is testable."""
 
-    def __init__(self, camera: ViscaCamera, clock: Callable[[], float] = time.monotonic):
+    def __init__(self, camera: ViscaCamera, clock: Callable[[], float] = time.monotonic,
+                 bind_address: str = "0.0.0.0"):
         self.camera = camera
+        self.bind_address = bind_address  # --host, for the network view's client address
         self.clock = clock
         self.speed = SPEED_LEVELS // 2
         self.pending: Optional[str] = None  # "save" or "clear" while waiting for a digit
@@ -216,7 +218,7 @@ class TuiController:
     def frame(self, title: str, log_lines: int = 10) -> List[str]:
         """Render view content without the fixed interactive chrome."""
         if self.current_view == "network":
-            return render_network(title, color=False).splitlines()
+            return render_network(title, color=False, bind_address=self.bind_address).splitlines()
         return render_camera(self.camera, title, color=False, log_lines=log_lines).splitlines()
 
     def layout(self, title: str, width: int, height: int) -> Tuple[List[str], Optional[ViewBox]]:
@@ -346,11 +348,12 @@ CURSES_KEYS = {"KEY_UP": "UP", "KEY_DOWN": "DOWN", "KEY_LEFT": "LEFT", "KEY_RIGH
                "KEY_PPAGE": "PAGEUP", "KEY_NPAGE": "PAGEDOWN"}
 
 
-async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05) -> None:
+async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05,
+                      bind_address: str = "0.0.0.0") -> None:
     """Run the interactive UI until the user presses q (needs a terminal with curses)."""
     import curses
 
-    controller = TuiController(camera)
+    controller = TuiController(camera, bind_address=bind_address)
     os.environ.setdefault("ESCDELAY", "100")
     screen = curses.initscr()
     try:

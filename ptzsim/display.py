@@ -94,7 +94,7 @@ def _ipv4_with_prefix(address: str, netmask: str) -> str:
         return address
 
 
-def render_network(title: str, color: bool = True) -> str:
+def render_network(title: str, color: bool = True, bind_address: str = "0.0.0.0") -> str:
     """Render the network information view: hostname plus a table of all interfaces."""
     g, r, b, d, x = (GREEN, RED, BOLD, DIM, RESET) if color else ("",) * 5
     hostname, fqdn = get_hostname_and_fqdn()
@@ -107,7 +107,7 @@ def render_network(title: str, color: bool = True) -> str:
     lines: List[str] = [
         f"{b}Network Information{x}  {d}{title}{x}",
         "",
-        f"{b}Address for clients:{x} {format_client_address(hostname)}",
+        f"{b}Address for clients:{x} {format_client_address(hostname, bind_address)}",
         f"{b}Hostname:{x} {hostname}",
         f"{b}FQDN:{x}     {fqdn}",
         "",
@@ -165,7 +165,7 @@ def render(camera: ViscaCamera, title: str, color: bool = True, log_lines: int =
 
     # Render the main content
     if view == "network":
-        content = render_network(title, color)
+        content = render_network(title, color, bind_address)
     else:
         content = render_camera(camera, title, color, log_lines)
 

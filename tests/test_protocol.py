@@ -5,6 +5,7 @@
 example plugin from docs/adding-a-protocol.md."""
 
 import argparse
+import errno
 import os
 import asyncio
 import re
@@ -270,9 +271,9 @@ def test_onvif_plugin_announces_ws_discovery_and_says_bye_on_stop(monkeypatch):
 
 
 @pytest.mark.parametrize("code, attr, expected", [
-    (98, "errno", "already in use"), (10048, "winerror", "already in use"),
-    (13, "errno", "permission denied"), (10013, "winerror", "excludedportrange"),
-    (99, "errno", "Cannot assign"),
+    (errno.EADDRINUSE, "errno", "already in use"), (10048, "winerror", "already in use"),
+    (errno.EACCES, "errno", "permission denied"), (10013, "winerror", "excludedportrange"),
+    (errno.EADDRNOTAVAIL, "errno", "Cannot assign"),
 ])
 def test_bind_error_names_port_reason_and_fix(code, attr, expected):
     err = OSError(code if attr == "errno" else None, "Cannot assign requested address")

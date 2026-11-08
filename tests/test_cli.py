@@ -175,13 +175,13 @@ def test_serve_view_only_uses_the_dashboard(monkeypatch):
 def test_serve_interactive_terminal_uses_the_tui(monkeypatch):
     seen = {}
 
-    async def fake_interactive(camera, title):
-        seen["title"] = title
+    async def fake_interactive(camera, title, bind_address):
+        seen["title"], seen["bind_address"] = title, bind_address
 
     monkeypatch.setattr(cli, "_interactive_terminal", lambda: True)
     monkeypatch.setattr("ptzsim.tui.interactive", fake_interactive)
     asyncio.run(cli._serve(serve_args("--tcp", "0")))
-    assert "VISCA" in seen["title"]
+    assert "VISCA" in seen["title"] and seen["bind_address"] == "127.0.0.1"
 
 
 def test_serve_reraises_errors_from_the_view(monkeypatch):

@@ -68,7 +68,7 @@ async def _serve(args: argparse.Namespace) -> None:
                 logging.getLogger("ptzsim").info("Available on: %s", addr_str)
 
         # Show full network info on startup
-        network_info = await loop.run_in_executor(None, format_network_info_for_startup)
+        network_info = await loop.run_in_executor(None, format_network_info_for_startup, args.host)
         for line in network_info.split("\n"):
             if line:
                 logging.getLogger("ptzsim").info(line)
@@ -83,7 +83,7 @@ async def _serve(args: argparse.Namespace) -> None:
         else:
             from .tui import interactive
 
-            view = interactive(camera, title)
+            view = interactive(camera, title, bind_address=args.host)
         tasks = [asyncio.ensure_future(sim.run()), asyncio.ensure_future(view)]
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
