@@ -1,0 +1,100 @@
+# SPDX-FileCopyrightText: 2026 Stephan Strittmatter
+# SPDX-License-Identifier: MIT
+
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      dev-tools:
+        patterns:
+          - "pytest*"
+          - "coverage"
+          - "iniconfig"
+          - "packaging"
+          - "pluggy"
+          - "pygments"
+          - "tomli"
+          - "exceptiongroup"
+          - "typing-extensions"
+          - "platformdirs"
+      onvif-client:
+        patterns:
+          - "onvif-zeep-async"
+          - "zeep"
+          - "lxml"
+          - "isodate"
+          - "pytz"
+          - "attrs"
+          - "ciso8601"
+          - "requests*"
+          - "urllib3"
+          - "certifi"
+          - "charset-normalizer"
+          - "idna"
+      async-http:
+        patterns:
+          - "httpx"
+          - "httpcore"
+          - "h11"
+          - "anyio"
+          - "sniffio"
+          - "aiohttp"
+          - "aiohappyeyeballs"
+          - "aiosignal"
+          - "async-timeout"
+          - "frozenlist"
+          - "multidict"
+          - "propcache"
+          - "yarl"
+      ndi:
+        patterns:
+          - "ndi-python"
+          - "numpy"
+      windows-tui:
+        patterns:
+          - "windows-curses"
+          - "colorama"
+
+  - package-ecosystem: "npm"
+    directory: "/docs"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      docs-dependencies:
+        patterns:
+          - "vitepress"
+          - "vite"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      official-actions:
+        patterns:
+          - "actions/*"
+      third-party-actions:
+        patterns:
+          - "astral-sh/*"
+          - "googleapis/*"
