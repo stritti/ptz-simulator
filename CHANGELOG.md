@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/stritti/ptz-simulator/compare/v0.7.0...v0.8.0) (2026-11-09)
+
+
+### Features
+
+* **skills:** add ndi-ptz-interface skill ([7883975](https://github.com/stritti/ptz-simulator/commit/78839754bc67ca362c1e9292ea2983f55f1b54b7))
+
+
+### Bug Fixes
+
+* **skills:** address ndi review round ([cae5d12](https://github.com/stritti/ptz-simulator/commit/cae5d128758414d56de8bfb06e99b865f3f4db70))
+
 ## [0.7.0](https://github.com/stritti/ptz-simulator/compare/v0.6.0...v0.7.0) (2026-11-08)
 
 
