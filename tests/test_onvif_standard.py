@@ -398,6 +398,36 @@ def test_imaging_focus_relative_and_continuous_move(onvif):
     assert onvif.state.focus_velocity == 0
 
 
+def test_imaging_focus_relative_starts_from_the_current_lens_position():
+    onvif = OnvifCamera(ViscaCamera())  # not instant: the absolute move is still running
+    onvif.state.focus = st.FOCUS_MIN + 0.5 * (st.FOCUS_MAX - st.FOCUS_MIN)
+    call(onvif, f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Absolute>"
+                "<tt:Position>1</tt:Position></tt:Absolute></timg:Focus></timg:Move>")
+    assert onvif.state.focus_target is not None  # absolute move still pending
+    call(onvif, f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Relative>"
+                "<tt:Distance>-0.1</tt:Distance></tt:Relative></timg:Focus></timg:Move>")
+    # spec 5.3.1 "from its current position": base is s.focus, not the pending target
+    assert onvif.state.focus_target[0] == pytest.approx(
+        st.FOCUS_MIN + 0.5 * (st.FOCUS_MAX - st.FOCUS_MIN) - 0.1 * (st.FOCUS_MAX - st.FOCUS_MIN))
+
+
+def test_imaging_focus_fault_does_not_disable_autofocus(onvif):
+    assert onvif.state.autofocus is True
+    status, _ = call(onvif, f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Absolute>"
+                            "<tt:Position>1.5</tt:Position></tt:Absolute></timg:Focus></timg:Move>")
+    assert status == 400
+    assert onvif.state.autofocus is True  # rejected request must not change the focus mode
+
+
+def test_imaging_move_in_standby_fails():
+    onvif = OnvifCamera(ViscaCamera())
+    onvif.state.power = False
+    status, root = call(onvif, f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Continuous>"
+                               "<tt:Speed>0.5</tt:Speed></tt:Continuous></timg:Focus></timg:Move>")
+    assert status == 500 and subcodes(root) == ["ter:Action"]
+    assert onvif.state.focus_velocity == 0 and onvif.state.autofocus is True
+
+
 @pytest.mark.parametrize("body, chain", [
     (f"<timg:Move {IMG_NS}><timg:VideoSourceToken>x</timg:VideoSourceToken><timg:Focus>"
      "<tt:Continuous><tt:Speed>0.5</tt:Speed></tt:Continuous></timg:Focus></timg:Move>",

@@ -1254,12 +1254,13 @@ class OnvifCamera:
     def imaging_move(self, request, host) -> str:
         """Imaging spec 5.3.1: move the focus lens absolutely, relatively or continuously."""
         self._check_source(request)
+        self._require_power()
         kind, elem = self._focus_operation(request)
         s = self.state
-        s.autofocus = False  # 5.3.1: focus adjustments through Move turn off the autofocus
         if kind == "Continuous":
             speed = self._focus_value(elem, "Speed")
             self._check_focus_range(speed, *FOCUS_CONTINUOUS_SPEED_RANGE, "speed")
+            s.autofocus = False  # 5.3.1: focus adjustments through Move turn off the autofocus
             if speed == 0:
                 s.focus_velocity = 0.0
                 s.focus_target = None
@@ -1278,13 +1279,14 @@ class OnvifCamera:
             else:
                 distance = self._focus_value(elem, "Distance")
                 self._check_focus_range(distance, *FOCUS_DISTANCE_RANGE, "distance")
-                current = s.focus_target[0] if s.focus_target else s.focus
-                target = st.clamp(current + distance * (st.FOCUS_MAX - st.FOCUS_MIN),
+                # 5.3.1: a relative move starts from the current lens position
+                target = st.clamp(s.focus + distance * (st.FOCUS_MAX - st.FOCUS_MIN),
                                   st.FOCUS_MIN, st.FOCUS_MAX)
                 what = f"relative {distance:+.3f}"
             speed = self._focus_value(elem, "Speed", required=False)
             if speed is not None:
                 self._check_focus_range(speed, *FOCUS_SPEED_RANGE, "speed")
+            s.autofocus = False  # everything validated: the request is executed now
             s.focus_to(target)
             if speed is not None and s.focus_target is not None:
                 s.focus_target = (s.focus_target[0], s.focus_target[1] * st.clamp(speed, 0.05, 1.0))
