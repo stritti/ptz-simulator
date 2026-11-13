@@ -34,12 +34,44 @@ ERROR_MESSAGE_TYPE = b"\x0f\x02"
 class Simulator:
     """Runs the camera physics and routes replies back to the senders."""
 
-    def __init__(self, camera: ViscaCamera, tick_interval: float = 0.02):
+    def __init__(self, camera: ViscaCamera, tick_interval: float = 0.02,
+                 faults=None, capture=None):
         self.camera = camera
         self.tick_interval = tick_interval
+        # Fault injection (--latency/--loss/...) and traffic capture (--capture), if enabled.
+        self.faults = faults
+        self.capture = capture
         # Completions waiting for motion: (sender, reply, socket).
         self._pending: List[Tuple[Send, bytes, Optional[int]]] = []
         self.clients = 0
+
+    def wrap_out(self, transport: str, peer: Optional[str], send: Send,
+                 on_disconnect: Optional[Callable[[], None]] = None) -> Send:
+        """Wrap a per-connection ``send`` with capture and fault injection.
+
+        Returns ``send`` unchanged when neither is enabled. Transports call this
+        once per connection and pass the result to :meth:`process`.
+        """
+        if self.capture is not None:
+            capture, label = self.capture, transport
+
+            def send(data: bytes, _raw: Send = send, _cap: object = capture,
+                     _label: str = label, _peer: Optional[str] = peer) -> None:
+                _cap.log("tx", _label, _peer, data)  # type: ignore[attr-defined]
+                _raw(data)
+        if self.faults is not None:
+            send = self.faults.wrap(transport, peer, send, on_disconnect)
+        return send
+
+    def capture_rx(self, transport: str, peer: Optional[str], data: bytes,
+                   note: Optional[str] = None, replay: bool = True) -> None:
+        """Log a received packet when a --capture file is active.
+
+        ``replay=False`` marks wire traffic that must not be replayed (e.g. Sony
+        control commands or duplicate sequence numbers).
+        """
+        if self.capture is not None:
+            self.capture.log("rx", transport, peer, data, note=note, replay=replay)
 
     def process(self, packet: bytes, send: Send) -> None:
         log.debug("rx %s", hexdump(packet))
@@ -87,19 +119,24 @@ class Simulator:
 async def serve_tcp(sim: Simulator, host: str, port: int) -> asyncio.AbstractServer:
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
+        peer_name = f"{peer[0]}:{peer[1]}"
         log.info("TCP client connected: %s", peer)
         sim.clients += 1
+        send = sim.wrap_out("VISCA/TCP", peer_name, writer.write, on_disconnect=writer.close)
         buffer = bytearray()
         try:
             while data := await reader.read(1024):
                 buffer.extend(data)
                 for packet in split_packets(buffer):
-                    sim.process(packet, writer.write)
+                    sim.capture_rx("VISCA/TCP", peer_name, packet)
+                    sim.process(packet, send)
         except ConnectionError:
             pass
         finally:
             sim.clients -= 1
             log.info("TCP client disconnected: %s", peer)
+            if sim.faults is not None:
+                sim.faults.release("VISCA/TCP", peer_name)  # a reconnect gets a fresh allowance
             writer.close()
 
     return await asyncio.start_server(handle, host, port)
@@ -110,14 +147,29 @@ class RawUdpProtocol(asyncio.DatagramProtocol):
     def __init__(self, sim: Simulator):
         self.sim = sim
         self.transport: Optional[asyncio.DatagramTransport] = None
+        # One wrapped sender per controller, so --disconnect-after counts per peer.
+        self._sends = {}
+        self._ignored = set()  # peers "disconnected" by --disconnect-after
 
     def connection_made(self, transport) -> None:
         self.transport = transport
 
+    def _send_for(self, addr) -> Send:
+        if addr not in self._sends:
+            peer = f"{addr[0]}:{addr[1]}"
+            self._sends[addr] = self.sim.wrap_out(
+                "VISCA/UDP", peer, lambda reply, a=addr: self.transport.sendto(reply, a),
+                on_disconnect=lambda a=addr: self._ignored.add(a))
+        return self._sends[addr]
+
     def datagram_received(self, data: bytes, addr) -> None:
+        if addr in self._ignored:
+            return
+        peer = f"{addr[0]}:{addr[1]}"
         buffer = bytearray(data)
         for packet in split_packets(buffer):
-            self.sim.process(packet, lambda reply, a=addr: self.transport.sendto(reply, a))
+            self.sim.capture_rx("VISCA/UDP", peer, packet)
+            self.sim.process(packet, self._send_for(addr))
 
 
 # ------------------------------------------------------- Sony VISCA over IP
@@ -129,13 +181,24 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
         self.transport: Optional[asyncio.DatagramTransport] = None
         # Last sequence number per controller; a repeat is not executed again.
         self._last_sequence = {}
+        # One wrapped datagram sender per controller, so faults count per peer.
+        self._sends = {}
+        self._ignored = set()  # peers "disconnected" by --disconnect-after
 
     def connection_made(self, transport) -> None:
         self.transport = transport
 
+    def _send_for(self, addr) -> Send:
+        if addr not in self._sends:
+            peer = f"{addr[0]}:{addr[1]}"
+            self._sends[addr] = self.sim.wrap_out(
+                "Sony VISCA/IP", peer, lambda data, a=addr: self.transport.sendto(data, a),
+                on_disconnect=lambda a=addr: self._ignored.add(a))
+        return self._sends[addr]
+
     def _reply(self, addr, payload_type: int, sequence: int, payload: bytes) -> None:
         header = SONY_HEADER.pack(payload_type, len(payload), sequence)
-        self.transport.sendto(header + payload, addr)
+        self._send_for(addr)(header + payload)
 
     def _control_error(self, addr, sequence: int, error: bytes, reason: str) -> None:
         """Answer with control reply ERROR (no ACK, no completion follow) and log it,
@@ -144,8 +207,12 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
         self._reply(addr, SONY_CONTROL_REPLY, sequence, error)
 
     def datagram_received(self, data: bytes, addr) -> None:
+        if addr in self._ignored:
+            return
+        peer = f"{addr[0]}:{addr[1]}"
         if len(data) < SONY_HEADER.size:
             log.warning("short Sony VISCA-IP datagram from %s: %s", addr, hexdump(data))
+            self.sim.capture_rx("Sony VISCA/IP", peer, data, note="short datagram", replay=False)
             return
         payload_type, length, sequence = SONY_HEADER.unpack_from(data)
         payload = data[SONY_HEADER.size:SONY_HEADER.size + length]
@@ -153,12 +220,14 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
         if payload_type == SONY_CONTROL_COMMAND:
             # 0x01 = RESET of the sequence number; answer with an ACK.
             log.info("Sony VISCA-IP control command %s from %s", hexdump(payload), addr)
+            self.sim.capture_rx("Sony VISCA/IP", peer, data, note="control command", replay=False)
             if payload[:1] == b"\x01":
                 self._last_sequence.pop(addr, None)
             self._reply(addr, SONY_CONTROL_REPLY, sequence, b"\x01")
             return
         if payload_type not in (SONY_VISCA_COMMAND, SONY_VISCA_INQUIRY, SONY_VISCA_DEVICE_SETTING):
             log.warning("unknown Sony VISCA-IP payload type %04X from %s", payload_type, addr)
+            self.sim.capture_rx("Sony VISCA/IP", peer, data, note="unknown payload type", replay=False)
             self._control_error(addr, sequence, ERROR_MESSAGE_TYPE,
                                 f"unknown payload type {payload_type:04X}")
             return
@@ -166,11 +235,14 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
         kind = payload[1:2]
         if (payload_type == SONY_VISCA_COMMAND and kind == b"\x09") or (
                 payload_type == SONY_VISCA_INQUIRY and kind != b"\x09"):
+            self.sim.capture_rx("Sony VISCA/IP", peer, data, note="message type mismatch", replay=False)
             self._control_error(addr, sequence, ERROR_MESSAGE_TYPE,
                                 f"payload type {payload_type:04X} does not match {hexdump(payload)}")
             return
         # A retransmission with the same sequence number is not executed again.
         if self._last_sequence.get(addr) == sequence:
+            self.sim.capture_rx("Sony VISCA/IP", peer, data, note=f"duplicate sequence {sequence}",
+                                replay=False)
             self._control_error(addr, sequence, ERROR_SEQUENCE,
                                 f"repeated sequence number {sequence}, not executed")
             return
@@ -190,6 +262,7 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
             # any address is accepted and every reply comes from 90.
             if packet[0] & 0xF0 == 0x80 and packet[0] != 0x88:
                 packet = bytes([0x80 | self.sim.camera.address]) + packet[1:]
+            self.sim.capture_rx("Sony VISCA/IP", peer, packet)
             self.sim.process(packet, send)
         # Sony "Delivery confirmation": a message that was answered with an error was
         # not performed, so a retransmission with the same number is executed again.
@@ -236,6 +309,17 @@ class PtyPort:
         self.split = split
         self._buffer = bytearray()
         self._loop = asyncio.get_running_loop()
+        wrap_out = getattr(sim, "wrap_out", None)
+        if wrap_out is not None:
+            # --disconnect-after closes the endpoint shortly after the allowed replies
+            # went out (closing the master at once would discard them from the queue),
+            # so the client reads the replies and then sees EOF like on a pulled cable
+            def hangup() -> None:
+                self._loop.call_later(0.1, self.close)
+            self._send: Send = wrap_out("VISCA/serial", None, lambda reply: os.write(self.master, reply),
+                                        on_disconnect=hangup)
+        else:  # e.g. a PelcoCamera without fault injection
+            self._send = lambda reply: os.write(self.master, reply)
         self._loop.add_reader(master, self._readable)
 
     def _readable(self) -> None:
@@ -244,8 +328,11 @@ class PtyPort:
         except (BlockingIOError, OSError):
             return
         self._buffer.extend(data)
+        capture_rx = getattr(self.sim, "capture_rx", None)
         for packet in self.split(self._buffer):
-            self.sim.process(packet, lambda reply: os.write(self.master, reply))
+            if capture_rx is not None:
+                capture_rx("VISCA/serial", None, packet)
+            self.sim.process(packet, self._send)
 
     def close(self) -> None:
         """Stop reading, close both ends and remove the symlink."""
