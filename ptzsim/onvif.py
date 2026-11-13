@@ -1229,8 +1229,14 @@ class OnvifCamera:
 
 
 # ------------------------------------------------------------ HTTP server
-async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.AbstractServer:
-    """Minimal HTTP/1.1 server (keep-alive capable) carrying the SOAP services."""
+async def serve_onvif(onvif: OnvifCamera, host: str, port: int, faults=None, capture=None
+                       ) -> asyncio.AbstractServer:
+    """Minimal HTTP/1.1 server (keep-alive capable) carrying the SOAP services.
+
+    ``faults`` (a :class:`ptzsim.faults.FaultInjector`) mangles the HTTP responses
+    like the VISCA transports; ``capture`` (a :class:`ptzsim.faults.TrafficCapture`)
+    logs every request/response.
+    """
 
     def detailed_health(local_ip: str, local_port: int) -> str:
         hostname, fqdn = get_hostname_and_fqdn()
@@ -1256,6 +1262,11 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         local_ip, local_port = writer.get_extra_info("sockname")[:2]
+        peer = writer.get_extra_info("peername")
+        peer_name = f"{peer[0]}:{peer[1]}"
+        send = writer.write
+        if faults is not None:
+            send = faults.wrap("ONVIF", peer_name, writer.write, on_disconnect=writer.close)
         try:
             while True:
                 request_line = await reader.readline()
@@ -1267,6 +1278,8 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
                     key, _, value = line.decode("latin-1").partition(":")
                     headers[key.strip().lower()] = value.strip()
                 body = await reader.readexactly(int(headers.get("content-length", 0) or 0))
+                if capture is not None:
+                    capture.log("rx", "ONVIF", peer_name, body, note=f"{method} {path}")
                 host_header = headers.get("host") or f"{local_ip}:{local_port}"
 
                 extra = ""
@@ -1324,12 +1337,18 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
                 reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
                           405: "Method Not Allowed", 500: "Internal Server Error"}[status]
                 close = headers.get("connection", "").lower() == "close"
-                writer.write(
+                if capture is not None:
+                    capture.log("tx", "ONVIF", peer_name, data, note=f"HTTP {status}")
+                send(
                     f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{extra}"
                     f"Content-Length: {len(data)}\r\nConnection: {'close' if close else 'keep-alive'}"
                     f"\r\n\r\n".encode() + data)
                 await writer.drain()
                 if close:
+                    if faults is not None:
+                        await faults.wait_pending()  # delayed replies leave before we close
+                        if faults.last_dropped("ONVIF", peer_name):
+                            continue  # simulated loss: no answer, connection stays open
                     break
         except (ConnectionError, asyncio.IncompleteReadError, ValueError):
             pass

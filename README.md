@@ -153,6 +153,31 @@ default both), `--onvif-no-absolute` (camera without `AbsoluteMove`, presets onl
 positions instead of moving at motor speed), `--host` (bind address). In
 dashboard mode, log messages go to `ptzsim.log`.
 
+## Fault injection, capture and replay
+
+To test how a PTZ client copes with real network problems, `ptzsim serve` can mangle
+its replies on every VISCA transport (Sony VISCA/IP, TCP, UDP, serial pty) and on ONVIF
+HTTP answers (all off by default):
+
+| Option | Effect |
+|---|---|
+| `--latency MS` | delay every reply by MS milliseconds |
+| `--loss PCT` | drop PCT % of all replies (the client times out) |
+| `--duplicate PCT` | send PCT % of all replies twice |
+| `--reorder PCT` | delay PCT % of replies so that later replies overtake them |
+| `--disconnect-after N` | close every client connection after N replies |
+| `--capture FILE` | write all received/sent traffic to FILE as JSONL (`t`, `dir` rx/tx, `transport`, `peer`, hex `data`) |
+| `--script FILE` | replay a session into the simulator: `<seconds> <hex packet>` per line, or a `--capture` JSONL file (its `rx` entries with their timestamps) |
+
+```bash
+uv run ptzsim serve --sony --latency 120 --loss 10 --reorder 5  # flaky network
+uv run ptzsim serve --onvif --capture traffic.jsonl             # record a session
+uv run ptzsim serve --sony --script traffic.jsonl               # replay it (the rx entries)
+uv run ptzsim serve --tcp --disconnect-after 3                  # clients get cut off
+```
+
+The same options work in `ptzsim.testing.serve(...)` inside your own test suite.
+
 ## Dashboard and Network Discovery
 
 ### TUI Dashboard Views

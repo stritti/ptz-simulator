@@ -12,7 +12,7 @@ import socket
 import sys
 from typing import List, Optional
 
-from . import protocol
+from . import faults, protocol
 from .display import dashboard, log_printer
 from .transports import SONY_HEADER, SONY_VISCA_COMMAND, SONY_VISCA_INQUIRY, Simulator
 from .visca import ViscaCamera, hexdump, parse_hex
@@ -37,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="show the dashboard without keyboard control")
     serve.add_argument("-v", "--verbose", action="store_true", help="log every packet sent and received")
     protocol.add_arguments(serve)  # one option group per protocol plugin
+    faults.add_arguments(serve)  # fault injection, capture and replay (test tooling)
 
     send = sub.add_parser("send", help="send VISCA hex packets to a camera and print the replies")
     send.add_argument("packets", nargs="+", help='VISCA packets as hex, e.g. "81 01 06 04 FF"')
@@ -48,9 +49,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _serve(args: argparse.Namespace) -> None:
+    injector, capture = faults.from_args(args)
     camera = ViscaCamera(address=args.address, instant=args.instant)
-    sim = Simulator(camera)
-    ctx = protocol.ServeContext(camera, sim, args)
+    sim = Simulator(camera, faults=injector, capture=capture)
+    ctx = protocol.ServeContext(camera, sim, args, faults=injector, capture=capture)
     try:
         await ctx.start_plugins()
         title = " | ".join(str(e) for e in ctx.endpoints)
@@ -85,6 +87,8 @@ async def _serve(args: argparse.Namespace) -> None:
 
             view = interactive(camera, title, bind_address=args.host)
         tasks = [asyncio.ensure_future(sim.run()), asyncio.ensure_future(view)]
+        if args.script:
+            tasks.append(asyncio.ensure_future(faults.replay(sim, args.script, capture)))
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
@@ -92,6 +96,8 @@ async def _serve(args: argparse.Namespace) -> None:
             task.result()  # re-raise errors from the simulator or the view
     finally:
         ctx.stop_plugins()
+        if capture is not None:
+            capture.close()
 
 
 def _has_curses() -> bool:
@@ -178,7 +184,15 @@ def _is_final(reply: bytes) -> bool:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "serve":
+        try:  # validate the test-tooling options before starting anything
+            faults.config_from_args(args)
+            if args.script:
+                faults.parse_script(args.script)
+        except (ValueError, OSError) as err:
+            parser.error(str(err))
     if args.command == "send":
         port = args.port or DEFAULT_PORTS[args.proto]
         packets = [parse_hex(p) for p in args.packets]
