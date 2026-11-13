@@ -67,6 +67,21 @@ def test_collect_stream_timeout_ack_final_and_eof():
         b.close()
 
 
+def test_collect_stream_treats_connection_reset_like_eof():
+    import struct
+    a, b = socket.socketpair()
+    try:
+        a.settimeout(0.2)
+        b.sendall(parse_hex("90 41 FF"))  # ACK is not final
+        # close with SO_LINGER 0: the peer gets RST instead of EOF (e.g. --disconnect-after)
+        b.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        b.close()
+        assert cli._collect_stream(a, 0.2) == [parse_hex("90 41 FF")]
+    finally:
+        a.close()
+        b.close()
+
+
 def test_collect_stream_splits_multiple_replies_in_one_chunk():
     a, b = socket.socketpair()
     try:

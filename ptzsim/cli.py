@@ -134,7 +134,10 @@ def send_packets(packets: List[bytes], host: str, port: int, proto: str, timeout
     if proto == "tcp":
         with socket.create_connection((host, port), timeout=timeout) as sock:
             for packet in packets:
-                sock.sendall(packet)
+                try:
+                    sock.sendall(packet)
+                except ConnectionError:  # camera hung up (e.g. --disconnect-after)
+                    break
                 replies += _collect_stream(sock, timeout)
         return replies
 
@@ -156,6 +159,8 @@ def _collect_stream(sock: socket.socket, timeout: float) -> List[bytes]:
         try:
             data = sock.recv(1024)
         except socket.timeout:
+            break
+        except ConnectionError:  # reset by the peer: same as EOF here
             break
         if not data:
             break
