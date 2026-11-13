@@ -167,7 +167,7 @@ HTTP answers (all off by default):
 | `--reorder PCT` | delay PCT % of replies so that later replies overtake them |
 | `--disconnect-after N` | close every client connection after N replies |
 | `--capture FILE` | write all received/sent traffic to FILE as JSONL (`t`, `dir` rx/tx, `transport`, `peer`, hex `data`) |
-| `--script FILE` | replay a session into the simulator: `<seconds> <hex packet>` per line, or a `--capture` JSONL file (its `rx` entries with their timestamps) |
+| `--script FILE` | replay a session into the simulator: `<seconds> <hex packet>` per line, or a `--capture` JSONL file (its `rx` entries with their timestamps; ONVIF entries need `--onvif` and are replayed through the SOAP handler) |
 
 ```bash
 uv run ptzsim serve --sony --latency 120 --loss 10 --reorder 5  # flaky network

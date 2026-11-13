@@ -87,9 +87,15 @@ async def _serve(args: argparse.Namespace) -> None:
 
             view = interactive(camera, title, bind_address=args.host)
         tasks = [asyncio.ensure_future(sim.run()), asyncio.ensure_future(view)]
+        # The replay runs alongside; only the simulator and the view decide when to stop.
+        replay_task = None
         if args.script:
-            tasks.append(asyncio.ensure_future(faults.replay(sim, args.script, capture)))
+            onvif_cam = next((getattr(p, "onvif", None) for p in ctx.plugins), None)
+            replay_task = asyncio.ensure_future(
+                faults.replay(sim, args.script, capture, onvif=onvif_cam))
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        if replay_task is not None:
+            replay_task.cancel()
         for task in pending:
             task.cancel()
         for task in done:
@@ -190,7 +196,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:  # validate the test-tooling options before starting anything
             faults.config_from_args(args)
             if args.script:
-                faults.parse_script(args.script)
+                entries = faults.parse_script(args.script)
+                if faults.script_needs_onvif(entries) and args.onvif is None:
+                    raise ValueError("--script contains ONVIF requests, but --onvif is not enabled")
         except (ValueError, OSError) as err:
             parser.error(str(err))
     if args.command == "send":

@@ -90,7 +90,7 @@ class FaultInjector:
         self.reordered = 0
         self.disconnected = 0
         self._links: dict = {}
-        self._pending: set = set()  # scheduled but not yet sent replies
+        self._pending_sends = 0  # scheduled but not yet delivered replies
 
     def _roll(self, pct: float) -> bool:
         return pct > 0 and self.rng.uniform(0, 100) < pct
@@ -113,9 +113,34 @@ class FaultInjector:
         return link is not None and link.last_dropped
 
     async def wait_pending(self) -> None:
-        """Wait until every scheduled (delayed) reply has left."""
-        while self._pending:
+        """Wait until every scheduled (delayed) reply has been delivered."""
+        while self._pending_sends > 0:
             await asyncio.sleep(0.005)
+
+    def _deliver(self, link: _Link, transport: str, peer: Optional[str],
+                 send: Send, data: bytes) -> None:
+        """Send one scheduled reply, then count it for --disconnect-after.
+
+        The disconnect fires only after the allowed replies were actually
+        written, so a scheduled ACK is not cut off by a hook that runs early.
+        """
+        try:
+            if link.dead:
+                return
+            _safe_send(send, data)
+            link.sent += 1
+            if self.config.disconnect_after and link.sent >= self.config.disconnect_after:
+                link.dead = True
+                self.disconnected += 1
+                log.info("%s: disconnecting client %s after %d replies (simulated)",
+                         transport, peer, link.sent)
+                if link.on_disconnect is not None:
+                    try:
+                        link.on_disconnect()
+                    except Exception as err:
+                        log.debug("disconnect hook failed: %s", err)
+        finally:
+            self._pending_sends -= 1
 
     def wrap(self, transport: str, peer: Optional[str], send: Send,
              on_disconnect: Optional[Callable[[], None]] = None) -> Send:
@@ -128,18 +153,6 @@ class FaultInjector:
             if link.dead:
                 return
             cfg = self.config
-            if cfg.disconnect_after and link.sent >= cfg.disconnect_after:
-                link.dead = True
-                self.disconnected += 1
-                log.info("%s: disconnecting client %s after %d replies (simulated)",
-                         transport, peer, link.sent)
-                if link.on_disconnect is not None:
-                    try:
-                        link.on_disconnect()
-                    except Exception as err:
-                        log.debug("disconnect hook failed: %s", err)
-                return
-            link.sent += 1
             if self._roll(cfg.loss_pct):
                 link.last_dropped = True
                 self.dropped += 1
@@ -156,11 +169,8 @@ class FaultInjector:
                 self.duplicated += 1
             loop = asyncio.get_running_loop()
             for _ in range(count):
-                def deliver(_send: Send = send, _data: bytes = data) -> None:
-                    _safe_send(_send, _data)
-                    self._pending.discard(handle)
-                handle = loop.call_later(delay, deliver)
-                self._pending.add(handle)
+                self._pending_sends += 1
+                loop.call_later(delay, self._deliver, link, transport, peer, send, data)
 
         return wrapped
 
@@ -223,14 +233,15 @@ def from_args(args: argparse.Namespace) -> Tuple[Optional[FaultInjector], Option
     return injector, capture
 
 
-def parse_script(path: str) -> List[Tuple[float, bytes]]:
-    """Read a replay script into (seconds since start, packet) entries.
+def parse_script(path: str) -> List[Tuple[float, str, bytes]]:
+    """Read a replay script into (seconds since start, transport, packet) entries.
 
-    Text format: one ``<seconds> <hex packet>`` per line (``#`` starts a comment).
-    A ``--capture`` JSONL file works too: its ``rx`` entries are replayed with
-    their recorded timestamps.
+    Text format: one ``<seconds> <hex packet>`` per line (``#`` starts a comment);
+    those are VISCA packets. A ``--capture`` JSONL file works too: its ``rx``
+    entries are replayed with their recorded timestamps and transport (ONVIF
+    entries are dispatched to the SOAP handler during replay).
     """
-    entries: List[Tuple[float, bytes]] = []
+    entries: List[Tuple[float, str, bytes]] = []
     with open(path, "r", encoding="utf-8") as handle:
         for lineno, line in enumerate(handle, 1):
             line = line.strip()
@@ -242,7 +253,8 @@ def parse_script(path: str) -> List[Tuple[float, bytes]]:
                 except ValueError as err:
                     raise ValueError(f"{path}:{lineno}: bad JSONL line: {err}")
                 if record.get("dir") == "rx" and record.get("data"):
-                    entries.append((float(record["t"]), bytes.fromhex(record["data"])))
+                    transport = record.get("transport", "VISCA")
+                    entries.append((float(record["t"]), transport, bytes.fromhex(record["data"])))
                 continue
             parts = line.split(None, 1)
             if len(parts) != 2:
@@ -255,17 +267,25 @@ def parse_script(path: str) -> List[Tuple[float, bytes]]:
                 packet = parse_hex(parts[1])
             except ValueError as err:
                 raise ValueError(f"{path}:{lineno}: bad packet: {err}")
-            entries.append((at, packet))
+            entries.append((at, "script", packet))
     return entries
 
 
-async def replay(sim, path: str, capture: Optional[TrafficCapture] = None) -> None:
+def script_needs_onvif(entries: List[Tuple[float, str, bytes]]) -> bool:
+    """True when the script/capture contains ONVIF requests (replay needs the service)."""
+    return any(transport == "ONVIF" for _, transport, _ in entries)
+
+
+async def replay(sim, path: str, capture: Optional[TrafficCapture] = None, onvif=None) -> None:
     """Feed a scripted session into the simulator with its original timing.
 
-    The packets enter through ``sim.process`` like a controller's would; the
+    VISCA packets enter through ``sim.process`` like a controller's would; ONVIF
+    requests (from a capture) go through the ONVIF SOAP handler ``onvif``. The
     replies go to the capture log (if any) and the command log.
     """
     entries = parse_script(path)
+    if script_needs_onvif(entries) and onvif is None:
+        raise ValueError(f"{path} contains ONVIF requests, but no ONVIF service is running")
     log.info("replaying %d scripted packets from %s", len(entries), path)
 
     def send(data: bytes) -> None:
@@ -273,10 +293,15 @@ async def replay(sim, path: str, capture: Optional[TrafficCapture] = None) -> No
             capture.log("tx", "script", None, data)
 
     start = time.monotonic()
-    for at, packet in entries:
+    for at, transport, packet in entries:
         wait = at - (time.monotonic() - start)
         if wait > 0:
             await asyncio.sleep(wait)
         if capture is not None:
-            capture.log("rx", "script", None, packet)
-        sim.process(packet, send)
+            capture.log("rx", transport, None, packet)
+        if transport == "ONVIF":
+            status, payload = onvif.handle(packet, "127.0.0.1:8080")
+            if capture is not None:
+                capture.log("tx", "ONVIF", None, payload.encode(), note=f"HTTP {status}")
+        else:
+            sim.process(packet, send)

@@ -1264,9 +1264,6 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int, faults=None, cap
         local_ip, local_port = writer.get_extra_info("sockname")[:2]
         peer = writer.get_extra_info("peername")
         peer_name = f"{peer[0]}:{peer[1]}"
-        send = writer.write
-        if faults is not None:
-            send = faults.wrap("ONVIF", peer_name, writer.write, on_disconnect=writer.close)
         try:
             while True:
                 request_line = await reader.readline()
@@ -1337,12 +1334,21 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int, faults=None, cap
                 reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
                           405: "Method Not Allowed", 500: "Internal Server Error"}[status]
                 close = headers.get("connection", "").lower() == "close"
-                if capture is not None:
-                    capture.log("tx", "ONVIF", peer_name, data, note=f"HTTP {status}")
-                send(
-                    f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{extra}"
-                    f"Content-Length: {len(data)}\r\nConnection: {'close' if close else 'keep-alive'}"
-                    f"\r\n\r\n".encode() + data)
+                response = (f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{extra}"
+                            f"Content-Length: {len(data)}\r\nConnection: {'close' if close else 'keep-alive'}"
+                            f"\r\n\r\n".encode() + data)
+
+                def send_response(_resp: bytes = response, _status: int = status) -> None:
+                    # logged when the reply actually leaves (after loss/delay/duplicate)
+                    if capture is not None:
+                        capture.log("tx", "ONVIF", peer_name, _resp, note=f"HTTP {_status}")
+                    writer.write(_resp)
+
+                if faults is not None:
+                    faults.wrap("ONVIF", peer_name, send_response,
+                                on_disconnect=writer.close)(response)
+                else:
+                    send_response()
                 await writer.drain()
                 if close:
                     if faults is not None:

@@ -98,6 +98,34 @@ def test_disconnect_after_n_calls_the_hook_and_drops_the_rest():
     assert calls == ["bye"] and injector.disconnected == 1
 
 
+def test_disconnect_fires_only_after_the_allowed_replies_were_delivered():
+    async def run():
+        events = []
+        injector = FaultInjector(FaultConfig(disconnect_after=1, latency_ms=20), rng=random.Random(1))
+        send = injector.wrap("test", "peer", lambda d: events.append(("tx", d)),
+                             on_disconnect=lambda: events.append(("disconnect",)))
+        send(b"\x01")  # scheduled at +20 ms
+        send(b"\x02")  # must not fire the hook before the first reply left
+        await asyncio.sleep(0.2)
+        return events, injector
+
+    events, injector = asyncio.run(run())
+    assert events == [("tx", b"\x01"), ("disconnect",)]
+    assert injector.disconnected == 1
+
+
+def test_wait_pending_completes_when_replies_are_duplicated():
+    async def run():
+        injector = FaultInjector(FaultConfig(duplicate_pct=100), rng=random.Random(1))
+        received = []
+        send = injector.wrap("test", "peer", received.append)
+        send(b"\x01")
+        await asyncio.wait_for(injector.wait_pending(), timeout=1.0)  # hung before the fix
+        return received
+
+    assert asyncio.run(run()) == [b"\x01", b"\x01"]
+
+
 # ------------------------------------------------- end to end: VISCA
 def talk(port, proto, packets, timeout=1.0):
     loop = asyncio.get_running_loop()
@@ -224,14 +252,16 @@ def test_capture_file_can_be_replayed(tmp_path):
 def test_parse_script_formats_and_errors(tmp_path):
     script = tmp_path / "s.txt"
     script.write_text("# comment\n\n0.5 81 09 04 38 FF\n1.25 0x8101040702FF\n")
-    assert parse_script(str(script)) == [(0.5, parse_hex(FOCUS_MODE_INQUIRY)),
-                                         (1.25, parse_hex(ZOOM_IN))]
+    assert parse_script(str(script)) == [(0.5, "script", parse_hex(FOCUS_MODE_INQUIRY)),
+                                         (1.25, "script", parse_hex(ZOOM_IN))]
     bad = tmp_path / "bad.txt"
     bad.write_text("no timestamp here\n")
     with pytest.raises(ValueError):
         parse_script(str(bad))
-    bad.write_text('{"t": 0.1, "dir": "rx", "data": "810904 38ff"}\n{"t": 0.2, "dir": "tx", "data": "9050ff"}\n')
-    assert parse_script(str(bad)) == [(0.1, parse_hex(FOCUS_MODE_INQUIRY))]  # only rx is replayed
+    bad.write_text('{"t": 0.1, "dir": "rx", "transport": "Sony VISCA/IP", "data": "81090438ff"}\n'
+                   '{"t": 0.2, "dir": "tx", "transport": "Sony VISCA/IP", "data": "9050ff"}\n')
+    # only rx is replayed, with its recorded transport
+    assert parse_script(str(bad)) == [(0.1, "Sony VISCA/IP", parse_hex(FOCUS_MODE_INQUIRY))]
 
 
 def test_replay_logs_to_the_capture(tmp_path):
@@ -257,14 +287,14 @@ SOAP = ('<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
         '<s:Body><tds:GetSystemDateAndTime/></s:Body></s:Envelope>')
 
 
-def post(port, timeout=2.0):
+def post(port, body=SOAP, timeout=2.0):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
-    conn.request("POST", "/onvif/device_service", body=SOAP.encode(),
+    conn.request("POST", "/onvif/device_service", body=body.encode() if isinstance(body, str) else body,
                  headers={"Content-Type": "application/soap+xml", "Connection": "close"})
     response = conn.getresponse()
-    body = response.read()
+    payload = response.read()
     conn.close()
-    return response.status, body
+    return response.status, payload
 
 
 def test_onvif_http_latency_and_capture(tmp_path):
@@ -284,19 +314,72 @@ def test_onvif_http_latency_and_capture(tmp_path):
     assert {e["dir"] for e in entries} == {"rx", "tx"}
     assert all(e["transport"] == "ONVIF" for e in entries)
     assert entries[0]["note"] == "POST /onvif/device_service" and entries[1]["note"] == "HTTP 200"
+    # the tx entry is written when the reply actually leaves, not when it was built
+    assert bytes.fromhex(entries[1]["data"]).startswith(b"HTTP/1.1 200")
+    assert entries[1]["t"] - entries[0]["t"] >= 0.04
 
 
-def test_onvif_http_loss_times_out():
+def test_onvif_http_loss_times_out_and_captures_no_tx(tmp_path):
+    cap = tmp_path / "http.jsonl"
+
     async def run():
-        async with serve("--onvif", str(free_port()), "--no-discovery", "--loss", "100") as ctx:
+        async with serve("--onvif", str(free_port()), "--no-discovery", "--loss", "100",
+                         "--capture", str(cap)) as ctx:
             loop = asyncio.get_running_loop()
             try:
                 await loop.run_in_executor(None, lambda: post(ctx.args.onvif, timeout=0.4))
             except (socket.timeout, TimeoutError):
-                return True
-            return False
+                pass
+            await asyncio.sleep(0.1)
 
-    assert asyncio.run(run()) is True
+    asyncio.run(run())
+    entries = read_capture(cap)
+    assert [e["dir"] for e in entries] == ["rx"]  # a dropped reply is never "sent"
+
+
+ONVIF_MOVE = ('<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
+              'xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl" xmlns:tt="http://www.onvif.org/ver10/schema">'
+              '<s:Body><tptz:ContinuousMove><tptz:ProfileToken>Profile_1</tptz:ProfileToken>'
+              '<tptz:Velocity><tt:PanTilt x="0.5" y="0"/></tptz:Velocity></tptz:ContinuousMove>'
+              '</s:Body></s:Envelope>')
+
+
+def test_onvif_capture_can_be_replayed(tmp_path):
+    cap = tmp_path / "onvif.jsonl"
+
+    async def record():
+        async with serve("--onvif", str(free_port()), "--no-discovery", "--capture", str(cap),
+                         instant=False) as ctx:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, lambda: post(ctx.args.onvif, body=ONVIF_MOVE))
+            await asyncio.sleep(0.1)
+
+    asyncio.run(record())
+    entries = read_capture(cap)
+    assert any(e["dir"] == "rx" and e["transport"] == "ONVIF" for e in entries)
+
+    async def replay_it():
+        async with serve("--onvif", str(free_port()), "--no-discovery", "--script", str(cap),
+                         instant=False) as ctx:
+            await asyncio.sleep(0.3)
+            return ctx
+
+    ctx = asyncio.run(replay_it())
+    assert ctx.state.pan_velocity != 0  # the recorded ContinuousMove went through the SOAP handler
+
+
+def test_script_with_onvif_entries_requires_the_onvif_service(tmp_path):
+    cap = tmp_path / "c.jsonl"
+    cap.write_text('{"t": 0.0, "dir": "rx", "transport": "ONVIF", "data": "3c783e"}\n')
+
+    async def run():
+        async with serve("--sony", str(free_port(socket.SOCK_DGRAM)), "--script", str(cap)):
+            pass
+
+    with pytest.raises(ValueError):
+        asyncio.run(run())
+    with pytest.raises(SystemExit):  # the CLI rejects it at parse time
+        main(["serve", "--script", str(cap)])
 
 
 def test_traffic_capture_writes_jsonl(tmp_path):

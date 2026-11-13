@@ -112,6 +112,7 @@ class Onvif(PortPlugin):
     def __init__(self) -> None:
         super().__init__()
         self.discovery = None
+        self.onvif = None  # the OnvifCamera, for --script replay of ONVIF captures
 
     @classmethod
     def add_options(cls, group) -> None:
@@ -134,6 +135,7 @@ class Onvif(PortPlugin):
         onvif = OnvifCamera(ctx.camera, name=ctx.name, username=args.onvif_user,
                             password=args.onvif_password, rtsp_uri=args.rtsp_uri,
                             absolute=not args.onvif_no_absolute, auth=args.onvif_auth)
+        self.onvif = onvif
         self.servers.append(await serve_onvif(onvif, ctx.host, port,
                                                faults=ctx.faults, capture=ctx.capture))
         endpoints = [Endpoint("ONVIF", f"http://{ctx.host}:{port}/onvif/device_service", port)]
