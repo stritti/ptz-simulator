@@ -83,6 +83,11 @@ PRE_AUTH = {"GetSystemDateAndTime", "GetCapabilities", "GetServices", "GetServic
 
 DEFAULT_CONTINUOUS_TIMEOUT = 5.0  # seconds, used when ContinuousMove has no Timeout
 TIMEOUT_RANGE = (0.1, 60.0)  # seconds, advertised in GetConfigurationOptions
+# Focus move ranges of the imaging service (spec 5.3, advertised in GetMoveOptions).
+FOCUS_POSITION_RANGE = (0.0, 1.0)  # unitless absolute position
+FOCUS_DISTANCE_RANGE = (-1.0, 1.0)  # unitless relative distance, sign = direction
+FOCUS_SPEED_RANGE = (0.0, 1.0)  # absolute/relative move speed
+FOCUS_CONTINUOUS_SPEED_RANGE = (-1.0, 1.0)  # continuous speed, sign = direction
 AUTH_MODES = ("both", "digest", "wsse")
 DIGEST_REALM = "ptzsim"
 
@@ -118,6 +123,16 @@ def zoom_to_onvif(zoom: float) -> float:
 
 def zoom_from_onvif(z: float) -> float:
     return st.ZOOM_MIN + st.clamp(z, 0.0, 1.0) * (st.ZOOM_MAX - st.ZOOM_MIN)
+
+
+# Focus is unitless 0..1 in the imaging service: 0 is infinity (VISCA FOCUS_MIN),
+# 1 the closest distance (FOCUS_MAX).
+def focus_to_onvif(focus: float) -> float:
+    return (focus - st.FOCUS_MIN) / (st.FOCUS_MAX - st.FOCUS_MIN)
+
+
+def focus_from_onvif(x: float) -> float:
+    return st.FOCUS_MIN + st.clamp(x, 0.0, 1.0) * (st.FOCUS_MAX - st.FOCUS_MIN)
 
 
 def parse_duration(text: str) -> float:
@@ -301,6 +316,8 @@ class OnvifCamera:
             "GetOptions": self.get_options,
             "GetMoveOptions": self.get_move_options,
             "GetStatus": self.get_imaging_status,
+            "Move": self.imaging_move,
+            "Stop": self.imaging_stop,
         }
 
     @property
@@ -1203,14 +1220,112 @@ class OnvifCamera:
         self.camera.record("ONVIF", f"SetImagingSettings white balance {s.white_balance}")
         return "<timg:SetImagingSettingsResponse/>"
 
-    def get_move_options(self, request, host) -> str:
-        """No remote focus: the imaging spec (5.3.2) requires an empty answer."""
+    # ------------------------------------------- imaging: focus (spec 5.3)
+    @staticmethod
+    def _focus_operation(request: ET.Element) -> Tuple[str, ET.Element]:
+        """The one move kind inside <Focus>: ("Absolute"|"Relative"|"Continuous", element)."""
+        focus = find(request, "Focus")
+        if focus is None:
+            raise OnvifFault("ter:InvalidArgVal", "Move without a Focus element")
+        kinds = [(kind, elem) for kind in ("Absolute", "Relative", "Continuous")
+                 if (elem := find(focus, kind)) is not None]
+        if len(kinds) != 1:
+            raise OnvifFault("ter:InvalidArgVal",
+                             "Focus must hold exactly one of Absolute, Relative, Continuous")
+        return kinds[0]
+
+    @staticmethod
+    def _focus_value(elem: ET.Element, tag: str, required: bool = True) -> Optional[float]:
+        text = text_of(elem, tag)
+        if text is None:
+            if required:
+                raise OnvifFault("ter:InvalidArgVal", f"missing focus {tag}")
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            raise OnvifFault("ter:InvalidArgVal", f"bad focus {tag} {text!r}")
+
+    @staticmethod
+    def _check_focus_range(value: float, low: float, high: float, what: str) -> None:
+        if not low <= value <= high:
+            raise OnvifFault("ter:InvalidArgVal", f"focus {what} {value:g} outside {low:g}..{high:g}")
+
+    def imaging_move(self, request, host) -> str:
+        """Imaging spec 5.3.1: move the focus lens absolutely, relatively or continuously."""
         self._check_source(request)
-        return "<timg:GetMoveOptionsResponse><timg:MoveOptions/></timg:GetMoveOptionsResponse>"
+        kind, elem = self._focus_operation(request)
+        s = self.state
+        s.autofocus = False  # 5.3.1: focus adjustments through Move turn off the autofocus
+        if kind == "Continuous":
+            speed = self._focus_value(elem, "Speed")
+            self._check_focus_range(speed, *FOCUS_CONTINUOUS_SPEED_RANGE, "speed")
+            if speed == 0:
+                s.focus_velocity = 0.0
+                s.focus_target = None
+                what = "stop"
+            else:
+                # ONVIF speed 0..1 (sign = direction) onto the VISCA focus speed steps 0..7
+                step = max(0, round(abs(speed) * 8) - 1)
+                s.drive_focus(1 if speed > 0 else -1, step)
+                what = f"continuous {speed:+.2f}"
+        else:
+            if kind == "Absolute":
+                value = self._focus_value(elem, "Position")
+                self._check_focus_range(value, *FOCUS_POSITION_RANGE, "position")
+                target = focus_from_onvif(value)
+                what = f"absolute {value:.3f}"
+            else:
+                distance = self._focus_value(elem, "Distance")
+                self._check_focus_range(distance, *FOCUS_DISTANCE_RANGE, "distance")
+                current = s.focus_target[0] if s.focus_target else s.focus
+                target = st.clamp(current + distance * (st.FOCUS_MAX - st.FOCUS_MIN),
+                                  st.FOCUS_MIN, st.FOCUS_MAX)
+                what = f"relative {distance:+.3f}"
+            speed = self._focus_value(elem, "Speed", required=False)
+            if speed is not None:
+                self._check_focus_range(speed, *FOCUS_SPEED_RANGE, "speed")
+            s.focus_to(target)
+            if speed is not None and s.focus_target is not None:
+                s.focus_target = (s.focus_target[0], s.focus_target[1] * st.clamp(speed, 0.05, 1.0))
+            if self.camera.instant:
+                s.finish_moves()
+        self.camera.record("ONVIF", f"imaging Move {what}")
+        return "<timg:MoveResponse/>"
+
+    def imaging_stop(self, request, host) -> str:
+        """Imaging spec 5.3.3: stop ongoing focus movements; autofocus is not affected."""
+        self._check_source(request)
+        s = self.state
+        s.focus_velocity = 0.0
+        s.focus_target = None
+        self.camera.record("ONVIF", "imaging Stop focus")
+        return "<timg:StopResponse/>"
+
+    def get_move_options(self, request, host) -> str:
+        """Imaging spec 5.3.2: all three focus move kinds are supported."""
+        self._check_source(request)
+
+        def rng(low: float, high: float) -> str:
+            return f"<tt:Min>{_f(low)}</tt:Min><tt:Max>{_f(high)}</tt:Max>"
+
+        return ("<timg:GetMoveOptionsResponse><timg:MoveOptions>"
+                f"<tt:Absolute><tt:Position>{rng(*FOCUS_POSITION_RANGE)}</tt:Position>"
+                f"<tt:Speed>{rng(*FOCUS_SPEED_RANGE)}</tt:Speed></tt:Absolute>"
+                f"<tt:Relative><tt:Distance>{rng(*FOCUS_DISTANCE_RANGE)}</tt:Distance>"
+                f"<tt:Speed>{rng(*FOCUS_SPEED_RANGE)}</tt:Speed></tt:Relative>"
+                f"<tt:Continuous><tt:Speed>{rng(*FOCUS_CONTINUOUS_SPEED_RANGE)}</tt:Speed></tt:Continuous>"
+                "</timg:MoveOptions></timg:GetMoveOptionsResponse>")
 
     def get_imaging_status(self, request, host) -> str:
+        """Imaging spec 5.3.4: focus position (unitless 0..1) and move status."""
         self._check_source(request)
-        return "<timg:GetStatusResponse><timg:Status/></timg:GetStatusResponse>"
+        s = self.state
+        moving = s.focus_target is not None or s.focus_velocity != 0.0
+        return ("<timg:GetStatusResponse><timg:Status><tt:FocusStatus20>"
+                f"<tt:Position>{_f(focus_to_onvif(s.focus))}</tt:Position>"
+                f"<tt:MoveStatus>{'MOVING' if moving else 'IDLE'}</tt:MoveStatus>"
+                "</tt:FocusStatus20></timg:Status></timg:GetStatusResponse>")
 
     def get_video_sources(self, request, host) -> str:
         return ("<trt:GetVideoSourcesResponse>"

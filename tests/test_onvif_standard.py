@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
+from ptzsim import state as st
 from ptzsim.onvif import DiscoveryProtocol, OnvifCamera, Unauthorized, find, scope_matches, serve_onvif, text_of
 from ptzsim.visca import ViscaCamera
 
@@ -339,21 +340,83 @@ def test_broken_datagram_is_ignored():
 
 
 # ------------------------------------------------ review fixes (Core 26.06, Imaging 18.12)
-def test_imaging_requests_do_not_reach_ptz():
+def test_imaging_stop_stops_only_focus_not_the_ptz_unit():
     onvif = OnvifCamera(ViscaCamera())
     call(onvif, f'<tptz:ContinuousMove>{P}<tptz:Velocity><tt:PanTilt x="0.5" y="0"/></tptz:Velocity>'
                 "</tptz:ContinuousMove>")
+    call(onvif, f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Continuous><tt:Speed>0.5</tt:Speed>"
+                "</tt:Continuous></timg:Focus></timg:Move>")
+    assert onvif.state.focus_velocity != 0
     status, root = call(onvif, f"<timg:Stop {IMG_NS}>{SOURCE}</timg:Stop>")
-    assert status == 500 and subcodes(root) == ["ter:ActionNotSupported"]
+    assert status == 200 and find(root, "Body", "StopResponse") is not None
+    assert onvif.state.focus_velocity == 0 and onvif.state.focus_target is None
     assert onvif.state.pan_velocity != 0  # imaging Stop (focus) must not stop the PTZ unit
     status, root = call(onvif, f"<timg:GetStatus {IMG_NS}>{SOURCE}</timg:GetStatus>")
     response = find(root, "Body")[0]
     assert status == 200 and response.tag == "{http://www.onvif.org/ver20/imaging/wsdl}GetStatusResponse"
 
 
-def test_imaging_move_options_are_empty(onvif):
+def test_imaging_move_options_advertise_all_focus_moves(onvif):
     status, root = call(onvif, f"<timg:GetMoveOptions {IMG_NS}>{SOURCE}</timg:GetMoveOptions>")
-    assert status == 200 and find(root, "MoveOptions") is not None and len(find(root, "MoveOptions")) == 0
+    assert status == 200
+    options = find(root, "MoveOptions")
+    assert options is not None
+    for kind, value_tag, low, high in (("Absolute", "Position", "0", "1"),
+                                       ("Relative", "Distance", "-1", "1"),
+                                       ("Continuous", "Speed", "-1", "1")):
+        elem = find(options, kind)
+        assert elem is not None, kind
+        assert text_of(elem, value_tag, "Min") == low and text_of(elem, value_tag, "Max") == high
+    assert find(options, "Absolute", "Speed", "Max") is not None
+
+
+def test_imaging_focus_absolute_move(onvif):
+    # 0 = infinity (VISCA FOCUS_MIN), 1 = closest (FOCUS_MAX); the fixture is instant
+    status, _ = call(onvif, f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Absolute>"
+                            "<tt:Position>1</tt:Position></tt:Absolute></timg:Focus></timg:Move>")
+    assert status == 200 and onvif.state.focus == st.FOCUS_MAX
+    assert onvif.state.autofocus is False  # imaging spec 5.3.1: Move turns autofocus off
+    _, root = call(onvif, f"<timg:GetStatus {IMG_NS}>{SOURCE}</timg:GetStatus>")
+    assert text_of(root, "FocusStatus20", "Position") == "1"
+    assert text_of(root, "FocusStatus20", "MoveStatus") == "IDLE"
+
+
+def test_imaging_focus_relative_and_continuous_move(onvif):
+    call(onvif, f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Absolute>"
+                "<tt:Position>0.5</tt:Position></tt:Absolute></timg:Focus></timg:Move>")
+    base = onvif.state.focus
+    call(onvif, f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Relative>"
+                "<tt:Distance>0.1</tt:Distance></tt:Relative></timg:Focus></timg:Move>")
+    assert onvif.state.focus == pytest.approx(base + 0.1 * (st.FOCUS_MAX - st.FOCUS_MIN))
+    call(onvif, f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Continuous>"
+                "<tt:Speed>-0.5</tt:Speed></tt:Continuous></timg:Focus></timg:Move>")
+    assert onvif.state.focus_velocity < 0 and onvif.state.focus_target is None
+    _, root = call(onvif, f"<timg:GetStatus {IMG_NS}>{SOURCE}</timg:GetStatus>")
+    assert text_of(root, "FocusStatus20", "MoveStatus") == "MOVING"
+    call(onvif, f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Continuous>"
+                "<tt:Speed>0</tt:Speed></tt:Continuous></timg:Focus></timg:Move>")
+    assert onvif.state.focus_velocity == 0
+
+
+@pytest.mark.parametrize("body, chain", [
+    (f"<timg:Move {IMG_NS}><timg:VideoSourceToken>x</timg:VideoSourceToken><timg:Focus>"
+     "<tt:Continuous><tt:Speed>0.5</tt:Speed></tt:Continuous></timg:Focus></timg:Move>",
+     ["ter:InvalidArgVal", "ter:NoSource"]),
+    (f"<timg:Stop {IMG_NS}><timg:VideoSourceToken>x</timg:VideoSourceToken></timg:Stop>",
+     ["ter:InvalidArgVal", "ter:NoSource"]),
+    (f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Absolute><tt:Position>1.5</tt:Position>"
+     "</tt:Absolute></timg:Focus></timg:Move>", ["ter:InvalidArgVal"]),
+    (f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Relative><tt:Distance>-2</tt:Distance>"
+     "</tt:Relative></timg:Focus></timg:Move>", ["ter:InvalidArgVal"]),
+    (f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Continuous><tt:Speed>2</tt:Speed>"
+     "</tt:Continuous></timg:Focus></timg:Move>", ["ter:InvalidArgVal"]),
+    (f"<timg:Move {IMG_NS}>{SOURCE}</timg:Move>", ["ter:InvalidArgVal"]),
+    (f"<timg:Move {IMG_NS}>{SOURCE}<timg:Focus><tt:Absolute><tt:Position>0.5</tt:Position>"
+     "<tt:Speed>3</tt:Speed></tt:Absolute></timg:Focus></timg:Move>", ["ter:InvalidArgVal"]),
+])
+def test_imaging_focus_faults(onvif, body, chain):
+    status, root = call(onvif, body)
+    assert status == 400 and subcodes(root) == chain
 
 
 def test_get_wsdl_url_without_login():
