@@ -127,6 +127,66 @@ def test_wait_pending_completes_when_replies_are_duplicated():
     assert asyncio.run(run()) == [b"\x01", b"\x01"]
 
 
+def test_release_resets_the_link_for_a_reconnecting_peer():
+    async def run():
+        injector = FaultInjector(FaultConfig(disconnect_after=1), rng=random.Random(1))
+        received, calls = [], []
+        send = injector.wrap("VISCA/TCP", "peer", received.append, on_disconnect=lambda: calls.append(1))
+        send(b"\x01")
+        await asyncio.sleep(0.05)
+        assert calls == [1] and injector._links[("VISCA/TCP", "peer")].dead
+        send(b"\x02")  # dead: suppressed
+        injector.release("VISCA/TCP", "peer")  # the connection closed
+        send2 = injector.wrap("VISCA/TCP", "peer", received.append)
+        send2(b"\x03")  # a reconnecting peer gets a fresh allowance
+        await asyncio.sleep(0.05)
+        return received
+
+    assert asyncio.run(run()) == [b"\x01", b"\x03"]
+
+
+def test_wait_link_waits_only_for_its_own_connection():
+    async def run():
+        injector = FaultInjector(FaultConfig(latency_ms=200), rng=random.Random(1))
+        send_a = injector.wrap("t", "a", lambda d: None)
+        injector.wrap("t", "b", lambda d: None)
+        send_a(b"\x01")  # pending for 200 ms on link a only
+        start = time.monotonic()
+        await asyncio.wait_for(injector.wait_link("t", "b"), timeout=0.1)  # b has nothing pending
+        own = time.monotonic() - start
+        await injector.wait_pending()  # still waits for a
+        return own
+
+    assert asyncio.run(run()) < 0.1
+
+
+def test_sony_capture_records_retries_as_non_replayable(tmp_path):
+    from ptzsim.transports import SONY_HEADER, SONY_VISCA_COMMAND
+    cap = tmp_path / "sony.jsonl"
+
+    async def run():
+        async with serve("--sony", str(free_port(socket.SOCK_DGRAM)), "--capture", str(cap)) as ctx:
+            def raw():
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                    s.settimeout(0.5)
+                    packet = parse_hex(ZOOM_IN)
+                    datagram = SONY_HEADER.pack(SONY_VISCA_COMMAND, len(packet), 9) + packet
+                    s.sendto(datagram, ("127.0.0.1", ctx.args.sony))
+                    s.recv(64)
+                    s.sendto(datagram, ("127.0.0.1", ctx.args.sony))  # retransmission, same sequence
+                    s.recv(64)
+            await asyncio.get_running_loop().run_in_executor(None, raw)
+            await asyncio.sleep(0.1)
+
+    asyncio.run(run())
+    rx = [e for e in read_capture(cap) if e["dir"] == "rx"]
+    assert len(rx) == 2
+    assert rx[0]["data"] == parse_hex(ZOOM_IN).hex() and rx[0].get("replay", True)
+    assert rx[1].get("replay") is False and "duplicate" in rx[1].get("note", "")
+    entries = parse_script(str(cap))  # the retry is logged but not replayed
+    assert len(entries) == 1 and entries[0][2] == parse_hex(ZOOM_IN)
+
+
 # ------------------------------------------------- end to end: VISCA
 def talk(port, proto, packets, timeout=1.0):
     loop = asyncio.get_running_loop()

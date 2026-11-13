@@ -76,6 +76,7 @@ class _Link:
         self.dead = False
         self.last_dropped = False
         self.on_disconnect: Optional[Callable[[], None]] = None
+        self.handles: set = set()  # this connection's scheduled but undelivered replies
 
 
 class FaultInjector:
@@ -89,8 +90,7 @@ class FaultInjector:
         self.duplicated = 0
         self.reordered = 0
         self.disconnected = 0
-        self._links: dict = {}
-        self._pending_handles: set = set()  # scheduled but not yet delivered replies
+        self._links: dict = {}  # (transport, peer) -> _Link; released when a connection closes
 
     def _roll(self, pct: float) -> bool:
         return pct > 0 and self.rng.uniform(0, 100) < pct
@@ -113,15 +113,31 @@ class FaultInjector:
         return link is not None and link.last_dropped
 
     async def wait_pending(self) -> None:
-        """Wait until every scheduled (delayed) reply has been delivered."""
-        while self._pending_handles:
+        """Wait until every scheduled (delayed) reply of all connections has been delivered."""
+        while any(link.handles for link in self._links.values()):
             await asyncio.sleep(0.005)
+
+    async def wait_link(self, transport: str, peer: Optional[str]) -> None:
+        """Wait only for this connection's scheduled replies (used before closing it)."""
+        link = self._links.get((transport, peer))
+        while link is not None and link.handles:
+            await asyncio.sleep(0.005)
+
+    def _cancel(self, link: _Link) -> None:
+        for handle in link.handles:
+            handle.cancel()
+        link.handles.clear()
+
+    def release(self, transport: str, peer: Optional[str]) -> None:
+        """Forget a closed connection, so a reconnecting peer gets a fresh allowance."""
+        link = self._links.pop((transport, peer), None)
+        if link is not None:
+            self._cancel(link)
 
     def shutdown(self) -> None:
         """Cancel every scheduled reply (called before the capture is closed)."""
-        for handle in self._pending_handles:
-            handle.cancel()
-        self._pending_handles.clear()
+        for link in self._links.values():
+            self._cancel(link)
 
     def _schedule(self, delay: float, link: _Link, transport: str, peer: Optional[str],
                   send: Send, data: bytes) -> None:
@@ -134,11 +150,11 @@ class FaultInjector:
                 self._deliver(link, transport, peer, send, data)
             finally:
                 if holder:
-                    self._pending_handles.discard(holder[0])
+                    link.handles.discard(holder[0])
 
         handle = loop.call_later(delay, run)
         holder.append(handle)
-        self._pending_handles.add(handle)
+        link.handles.add(handle)
 
     def _deliver(self, link: _Link, transport: str, peer: Optional[str],
                  send: Send, data: bytes) -> None:
@@ -226,13 +242,15 @@ class TrafficCapture:
         return 0.0
 
     def log(self, direction: str, transport: str, peer: Optional[str], data: bytes,
-            note: Optional[str] = None) -> None:
+            note: Optional[str] = None, replay: bool = True) -> None:
         if self._file.closed:
             return
         entry = {"t": round(time.monotonic() - self.started, 6), "dir": direction,
                  "transport": transport, "peer": peer, "data": data.hex()}
         if note is not None:
             entry["note"] = note
+        if not replay:
+            entry["replay"] = False
         try:
             self._file.write(json.dumps(entry) + "\n")
             self._file.flush()
@@ -291,7 +309,7 @@ def parse_script(path: str) -> List[Tuple[float, str, bytes]]:
                     record = json.loads(line)
                 except ValueError as err:
                     raise ValueError(f"{path}:{lineno}: bad JSONL line: {err}")
-                if record.get("dir") == "rx" and record.get("data"):
+                if record.get("dir") == "rx" and record.get("data") and record.get("replay", True):
                     transport = record.get("transport", "VISCA")
                     entries.append((float(record["t"]), transport, bytes.fromhex(record["data"])))
                 continue

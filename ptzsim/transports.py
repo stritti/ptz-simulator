@@ -63,10 +63,15 @@ class Simulator:
             send = self.faults.wrap(transport, peer, send, on_disconnect)
         return send
 
-    def capture_rx(self, transport: str, peer: Optional[str], data: bytes) -> None:
-        """Log a received packet when a --capture file is active."""
+    def capture_rx(self, transport: str, peer: Optional[str], data: bytes,
+                   note: Optional[str] = None, replay: bool = True) -> None:
+        """Log a received packet when a --capture file is active.
+
+        ``replay=False`` marks wire traffic that must not be replayed (e.g. Sony
+        control commands or duplicate sequence numbers).
+        """
         if self.capture is not None:
-            self.capture.log("rx", transport, peer, data)
+            self.capture.log("rx", transport, peer, data, note=note, replay=replay)
 
     def process(self, packet: bytes, send: Send) -> None:
         log.debug("rx %s", hexdump(packet))
@@ -130,6 +135,8 @@ async def serve_tcp(sim: Simulator, host: str, port: int) -> asyncio.AbstractSer
         finally:
             sim.clients -= 1
             log.info("TCP client disconnected: %s", peer)
+            if sim.faults is not None:
+                sim.faults.release("VISCA/TCP", peer_name)  # a reconnect gets a fresh allowance
             writer.close()
 
     return await asyncio.start_server(handle, host, port)
@@ -202,22 +209,25 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr) -> None:
         if addr in self._ignored:
             return
+        peer = f"{addr[0]}:{addr[1]}"
         if len(data) < SONY_HEADER.size:
             log.warning("short Sony VISCA-IP datagram from %s: %s", addr, hexdump(data))
+            self.sim.capture_rx("Sony VISCA/IP", peer, data, note="short datagram", replay=False)
             return
-        peer = f"{addr[0]}:{addr[1]}"
         payload_type, length, sequence = SONY_HEADER.unpack_from(data)
         payload = data[SONY_HEADER.size:SONY_HEADER.size + length]
 
         if payload_type == SONY_CONTROL_COMMAND:
             # 0x01 = RESET of the sequence number; answer with an ACK.
             log.info("Sony VISCA-IP control command %s from %s", hexdump(payload), addr)
+            self.sim.capture_rx("Sony VISCA/IP", peer, data, note="control command", replay=False)
             if payload[:1] == b"\x01":
                 self._last_sequence.pop(addr, None)
             self._reply(addr, SONY_CONTROL_REPLY, sequence, b"\x01")
             return
         if payload_type not in (SONY_VISCA_COMMAND, SONY_VISCA_INQUIRY, SONY_VISCA_DEVICE_SETTING):
             log.warning("unknown Sony VISCA-IP payload type %04X from %s", payload_type, addr)
+            self.sim.capture_rx("Sony VISCA/IP", peer, data, note="unknown payload type", replay=False)
             self._control_error(addr, sequence, ERROR_MESSAGE_TYPE,
                                 f"unknown payload type {payload_type:04X}")
             return
@@ -225,11 +235,14 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
         kind = payload[1:2]
         if (payload_type == SONY_VISCA_COMMAND and kind == b"\x09") or (
                 payload_type == SONY_VISCA_INQUIRY and kind != b"\x09"):
+            self.sim.capture_rx("Sony VISCA/IP", peer, data, note="message type mismatch", replay=False)
             self._control_error(addr, sequence, ERROR_MESSAGE_TYPE,
                                 f"payload type {payload_type:04X} does not match {hexdump(payload)}")
             return
         # A retransmission with the same sequence number is not executed again.
         if self._last_sequence.get(addr) == sequence:
+            self.sim.capture_rx("Sony VISCA/IP", peer, data, note=f"duplicate sequence {sequence}",
+                                replay=False)
             self._control_error(addr, sequence, ERROR_SEQUENCE,
                                 f"repeated sequence number {sequence}, not executed")
             return

@@ -1352,13 +1352,16 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int, faults=None, cap
                 await writer.drain()
                 if close:
                     if faults is not None:
-                        await faults.wait_pending()  # delayed replies leave before we close
+                        # wait only for this connection's delayed replies before closing
+                        await faults.wait_link("ONVIF", peer_name)
                         if faults.last_dropped("ONVIF", peer_name):
                             continue  # simulated loss: no answer, connection stays open
                     break
         except (ConnectionError, asyncio.IncompleteReadError, ValueError):
             pass
         finally:
+            if faults is not None:
+                faults.release("ONVIF", peer_name)  # a reconnect gets a fresh allowance
             writer.close()
 
     return await asyncio.start_server(handle, host, port)
