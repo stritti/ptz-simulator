@@ -484,11 +484,15 @@ default) needs root privileges, so 8080 is the default.
   get HTTP 401 with a new challenge. `GetCapabilities`, `GetServices`, `GetServiceCapabilities`,
   `GetWsdlUrl`, `GetHostname`, `GetEndpointReference` and `GetSystemDateAndTime` work without
   login, as on real cameras.
-- **Imaging** (white balance only): `GetImagingSettings`, `SetImagingSettings` and `GetOptions`
-  for video source `VideoSource_1`, mode `AUTO`/`MANUAL`, gains 0…255/128 (1.0 = VISCA 0x80). Media
-  `GetVideoSources` lists `VideoSource_1` (640×360, 25 fps). `GetMoveOptions` and `GetStatus`
-  answer empty (no remote focus); imaging `Move`/`Stop` return `ter:ActionNotSupported` and
-  never touch the PTZ unit. ONVIF has no
+- **Imaging**: `GetImagingSettings`, `SetImagingSettings` and `GetOptions`
+  for video source `VideoSource_1` (white balance: mode `AUTO`/`MANUAL`, gains 0…255/128,
+  1.0 = VISCA 0x80), plus focus control (Imaging spec 5.3): `Move` with `Absolute`
+  (position 0…1), `Relative` (distance −1…1) or `Continuous` (speed −1…1; 0 stops) turns
+  autofocus off and drives the focus axis, `Stop` halts it, `GetStatus` returns the focus
+  position 0…1 with `IDLE`/`MOVING`, and `GetMoveOptions` advertises all three move kinds
+  (0 = infinity, 1 = closest = VISCA `0x1000`…`0xF000`). Media
+  `GetVideoSources` lists `VideoSource_1` (640×360, 25 fps). Imaging `Move`/`Stop` only
+  touch the focus axis, never the PTZ unit. ONVIF has no
   one-push trigger, so one push is only available via VISCA, NDI and the `b` key.
 - Not supported: Events, Media2. These calls return a SOAP fault
   (`ter:ActionNotSupported`); Events are also missing from `GetCapabilities`.
