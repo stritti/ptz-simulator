@@ -5,6 +5,7 @@
 import asyncio
 import http.client
 import json
+import os
 import random
 import socket
 import time
@@ -382,6 +383,111 @@ def test_script_with_onvif_entries_requires_the_onvif_service(tmp_path):
         main(["serve", "--script", str(cap)])
 
 
+def test_onvif_replay_works_when_other_plugins_run_too(tmp_path):
+    cap = tmp_path / "onvif.jsonl"
+
+    async def record():
+        async with serve("--onvif", str(free_port()), "--no-discovery", "--capture", str(cap),
+                         instant=False) as ctx:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, lambda: post(ctx.args.onvif, body=ONVIF_MOVE))
+            await asyncio.sleep(0.1)
+
+    asyncio.run(record())
+
+    async def replay_it():
+        # --sony comes first in ctx.plugins; the replay must still find the ONVIF camera
+        async with serve("--sony", str(free_port(socket.SOCK_DGRAM)), "--onvif", str(free_port()),
+                         "--no-discovery", "--script", str(cap), instant=False) as ctx:
+            await asyncio.sleep(0.3)
+            return ctx
+
+    ctx = asyncio.run(replay_it())
+    assert ctx.state.pan_velocity != 0
+
+
+def test_onvif_capture_with_digest_auth_is_rejected(tmp_path):
+    cap = tmp_path / "c.jsonl"
+    cap.write_text('{"t": 0.0, "dir": "rx", "transport": "ONVIF", "data": "3c783e"}\n')
+
+    async def run():
+        async with serve("--onvif", str(free_port()), "--no-discovery", "--onvif-user", "admin",
+                         "--script", str(cap)):  # default --onvif-auth both: digest cannot replay
+            pass
+
+    with pytest.raises(ValueError):
+        asyncio.run(run())
+    with pytest.raises(SystemExit):
+        main(["serve", "--onvif", "18080", "--onvif-user", "admin", "--script", str(cap)])
+
+
+def test_onvif_capture_with_wsse_auth_can_be_replayed(tmp_path):
+    from test_onvif import SOAP as ONVIF_SOAP, username_token
+    cap = tmp_path / "onvif-wsse.jsonl"
+    # the WS-Security token is part of the captured SOAP body, so replay can authenticate
+    move = ONVIF_SOAP.format(header=username_token("admin", "secret"),
+                             body='<tptz:ContinuousMove><tptz:ProfileToken>Profile_1</tptz:ProfileToken>'
+                                  '<tptz:Velocity><tt:PanTilt x="0.5" y="0"/></tptz:Velocity>'
+                                  '</tptz:ContinuousMove>')
+
+    async def record():
+        async with serve("--onvif", str(free_port()), "--no-discovery", "--onvif-user", "admin",
+                         "--onvif-password", "secret", "--onvif-auth", "wsse", "--capture", str(cap),
+                         instant=False) as ctx:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, lambda: post(ctx.args.onvif, body=move))
+            await asyncio.sleep(0.1)
+
+    asyncio.run(record())
+    assert any(e["dir"] == "rx" and e["transport"] == "ONVIF" for e in read_capture(cap))
+
+    async def replay_it():
+        async with serve("--onvif", str(free_port()), "--no-discovery", "--onvif-user", "admin",
+                         "--onvif-password", "secret", "--onvif-auth", "wsse",
+                         "--script", str(cap), instant=False) as ctx:
+            await asyncio.sleep(0.3)
+            return ctx
+
+    ctx = asyncio.run(replay_it())
+    assert ctx.state.pan_velocity != 0
+
+
+@pytest.mark.skipif(os.name != "posix", reason="pty needs POSIX")
+def test_pty_disconnect_after_delivers_then_closes_the_endpoint():
+    async def run():
+        async with serve("--pty", "--disconnect-after", "1", instant=False) as ctx:
+            path = next(e.address.split("serial ", 1)[1] for e in ctx.endpoints)
+            fd = os.open(path, os.O_RDWR | os.O_NOCTTY)
+            try:
+                os.set_blocking(fd, False)
+                os.write(fd, parse_hex(FOCUS_MODE_INQUIRY))
+                data = b""
+                deadline = time.monotonic() + 1.0
+                while parse_hex("90 50 02 FF") not in data and time.monotonic() < deadline:
+                    await asyncio.sleep(0.02)
+                    try:
+                        data += os.read(fd, 64)
+                    except OSError:
+                        break
+                assert parse_hex("90 50 02 FF") in data  # the allowed reply was delivered
+                assert ctx.simulator.faults.disconnected == 1
+                await asyncio.sleep(0.3)  # the hook has closed the endpoint by now
+                try:  # the client sees EOF/EIO on the closed endpoint, not EAGAIN
+                    assert os.read(fd, 64) == b""
+                except OSError:
+                    pass
+                try:
+                    os.write(fd, parse_hex("81 01 04 00 03 FF"))  # power off after the "cable" is pulled
+                except OSError:
+                    pass
+                await asyncio.sleep(0.1)
+                assert ctx.state.power is True  # nothing is processed after the disconnect
+            finally:
+                os.close(fd)
+
+    asyncio.run(run())
+
+
 def test_traffic_capture_writes_jsonl(tmp_path):
     cap = TrafficCapture(str(tmp_path / "c.jsonl"))
     cap.log("rx", "VISCA/TCP", "127.0.0.1:1", parse_hex(ZOOM_IN), note="demo")
@@ -389,6 +495,32 @@ def test_traffic_capture_writes_jsonl(tmp_path):
     (entry,) = read_capture(tmp_path / "c.jsonl")
     assert entry["dir"] == "rx" and entry["data"] == parse_hex(ZOOM_IN).hex()
     assert entry["transport"] == "VISCA/TCP" and entry["note"] == "demo"
+
+
+def test_capture_appends_with_a_continuous_timeline(tmp_path):
+    path = tmp_path / "c.jsonl"
+    path.write_text('{"t": 10.0, "dir": "rx", "transport": "VISCA", "peer": null, "data": "ff"}\n')
+    cap = TrafficCapture(str(path))  # appends: the timeline continues at 10 s
+    cap.log("tx", "VISCA", None, parse_hex("90 50 FF"))
+    cap.close()
+    entries = read_capture(path)
+    assert entries[0]["t"] == 10.0
+    assert entries[1]["t"] >= 10.0 and entries[1]["data"] == parse_hex("90 50 FF").hex()
+
+
+def test_delayed_replies_do_not_escape_a_closed_capture(tmp_path):
+    cap = tmp_path / "c.jsonl"
+
+    async def run():
+        errors = []
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(lambda l, ctx: errors.append(ctx))
+        async with serve("--tcp", str(free_port()), "--latency", "150", "--capture", str(cap)) as ctx:
+            await talk(ctx.args.tcp, "tcp", [FOCUS_MODE_INQUIRY], timeout=0.05)  # reply still pending
+        await asyncio.sleep(0.3)  # the delayed delivery would fire after the context closed
+        return errors
+
+    assert asyncio.run(run()) == []  # no "I/O operation on closed file" escapes the loop
 
 
 def test_replay_uses_the_script_timing(tmp_path):

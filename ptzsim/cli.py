@@ -90,9 +90,8 @@ async def _serve(args: argparse.Namespace) -> None:
         # The replay runs alongside; only the simulator and the view decide when to stop.
         replay_task = None
         if args.script:
-            onvif_cam = next((getattr(p, "onvif", None) for p in ctx.plugins), None)
             replay_task = asyncio.ensure_future(
-                faults.replay(sim, args.script, capture, onvif=onvif_cam))
+                faults.replay(sim, args.script, capture, onvif=faults.onvif_camera(ctx)))
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         if replay_task is not None:
             replay_task.cancel()
@@ -102,6 +101,8 @@ async def _serve(args: argparse.Namespace) -> None:
             task.result()  # re-raise errors from the simulator or the view
     finally:
         ctx.stop_plugins()
+        if injector is not None:
+            injector.shutdown()  # cancel delayed replies before closing the capture
         if capture is not None:
             capture.close()
 
@@ -201,9 +202,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:  # validate the test-tooling options before starting anything
             faults.config_from_args(args)
             if args.script:
-                entries = faults.parse_script(args.script)
-                if faults.script_needs_onvif(entries) and args.onvif is None:
-                    raise ValueError("--script contains ONVIF requests, but --onvif is not enabled")
+                faults.check_script(args)
         except (ValueError, OSError) as err:
             parser.error(str(err))
     if args.command == "send":

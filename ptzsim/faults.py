@@ -90,7 +90,7 @@ class FaultInjector:
         self.reordered = 0
         self.disconnected = 0
         self._links: dict = {}
-        self._pending_sends = 0  # scheduled but not yet delivered replies
+        self._pending_handles: set = set()  # scheduled but not yet delivered replies
 
     def _roll(self, pct: float) -> bool:
         return pct > 0 and self.rng.uniform(0, 100) < pct
@@ -114,8 +114,31 @@ class FaultInjector:
 
     async def wait_pending(self) -> None:
         """Wait until every scheduled (delayed) reply has been delivered."""
-        while self._pending_sends > 0:
+        while self._pending_handles:
             await asyncio.sleep(0.005)
+
+    def shutdown(self) -> None:
+        """Cancel every scheduled reply (called before the capture is closed)."""
+        for handle in self._pending_handles:
+            handle.cancel()
+        self._pending_handles.clear()
+
+    def _schedule(self, delay: float, link: _Link, transport: str, peer: Optional[str],
+                  send: Send, data: bytes) -> None:
+        """Deliver one reply after ``delay``; each timer removes only itself."""
+        loop = asyncio.get_running_loop()
+        holder: List = []
+
+        def run() -> None:
+            try:
+                self._deliver(link, transport, peer, send, data)
+            finally:
+                if holder:
+                    self._pending_handles.discard(holder[0])
+
+        handle = loop.call_later(delay, run)
+        holder.append(handle)
+        self._pending_handles.add(handle)
 
     def _deliver(self, link: _Link, transport: str, peer: Optional[str],
                  send: Send, data: bytes) -> None:
@@ -124,23 +147,20 @@ class FaultInjector:
         The disconnect fires only after the allowed replies were actually
         written, so a scheduled ACK is not cut off by a hook that runs early.
         """
-        try:
-            if link.dead:
-                return
-            _safe_send(send, data)
-            link.sent += 1
-            if self.config.disconnect_after and link.sent >= self.config.disconnect_after:
-                link.dead = True
-                self.disconnected += 1
-                log.info("%s: disconnecting client %s after %d replies (simulated)",
-                         transport, peer, link.sent)
-                if link.on_disconnect is not None:
-                    try:
-                        link.on_disconnect()
-                    except Exception as err:
-                        log.debug("disconnect hook failed: %s", err)
-        finally:
-            self._pending_sends -= 1
+        if link.dead:
+            return
+        _safe_send(send, data)
+        link.sent += 1
+        if self.config.disconnect_after and link.sent >= self.config.disconnect_after:
+            link.dead = True
+            self.disconnected += 1
+            log.info("%s: disconnecting client %s after %d replies (simulated)",
+                     transport, peer, link.sent)
+            if link.on_disconnect is not None:
+                try:
+                    link.on_disconnect()
+                except Exception as err:
+                    log.debug("disconnect hook failed: %s", err)
 
     def wrap(self, transport: str, peer: Optional[str], send: Send,
              on_disconnect: Optional[Callable[[], None]] = None) -> Send:
@@ -167,10 +187,8 @@ class FaultInjector:
             count = 2 if self._roll(cfg.duplicate_pct) else 1
             if count == 2:
                 self.duplicated += 1
-            loop = asyncio.get_running_loop()
             for _ in range(count):
-                self._pending_sends += 1
-                loop.call_later(delay, self._deliver, link, transport, peer, send, data)
+                self._schedule(delay, link, transport, peer, send, data)
 
         return wrapped
 
@@ -183,22 +201,43 @@ def _safe_send(send: Send, data: bytes) -> None:
 
 
 class TrafficCapture:
-    """JSONL log of the traffic: one object per line with ``t`` (seconds since
-    start), ``dir`` (rx/tx), ``transport``, ``peer``, ``data`` (hex) and ``note``."""
+    """JSONL log of the traffic: one object per line with ``t`` (seconds since the
+    first capture), ``dir`` (rx/tx), ``transport``, ``peer``, ``data`` (hex) and
+    ``note``. Appending to an existing file continues its timeline."""
 
     def __init__(self, path: str):
         self.path = path
-        self.started = time.monotonic()
+        self.started = time.monotonic() - self._last_timestamp(path)
         self._file = open(path, "a", encoding="utf-8")
+
+    @staticmethod
+    def _last_timestamp(path: str) -> float:
+        """The last ``t`` of an existing capture, so appended entries keep the timeline."""
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                last = ""
+                for line in handle:
+                    if line.strip():
+                        last = line
+                if last:
+                    return float(json.loads(last)["t"])
+        except (OSError, ValueError, KeyError):
+            pass
+        return 0.0
 
     def log(self, direction: str, transport: str, peer: Optional[str], data: bytes,
             note: Optional[str] = None) -> None:
+        if self._file.closed:
+            return
         entry = {"t": round(time.monotonic() - self.started, 6), "dir": direction,
                  "transport": transport, "peer": peer, "data": data.hex()}
         if note is not None:
             entry["note"] = note
-        self._file.write(json.dumps(entry) + "\n")
-        self._file.flush()
+        try:
+            self._file.write(json.dumps(entry) + "\n")
+            self._file.flush()
+        except ValueError:  # closed meanwhile (injector shutdown races)
+            pass
 
     def close(self) -> None:
         if not self._file.closed:
@@ -276,6 +315,26 @@ def script_needs_onvif(entries: List[Tuple[float, str, bytes]]) -> bool:
     return any(transport == "ONVIF" for _, transport, _ in entries)
 
 
+def onvif_camera(ctx) -> Optional[object]:
+    """The running :class:`~ptzsim.onvif.OnvifCamera` of the ONVIF plugin, if any."""
+    return next((p.onvif for p in ctx.plugins if getattr(p, "onvif", None) is not None), None)
+
+
+def check_script(args: argparse.Namespace) -> None:
+    """Validate ``--script`` against the enabled services; raises ValueError."""
+    entries = parse_script(args.script)
+    if not script_needs_onvif(entries):
+        return
+    if getattr(args, "onvif", None) is None:
+        raise ValueError("--script contains ONVIF requests, but --onvif is not enabled")
+    # WS-Security tokens travel inside the captured SOAP body and replay fine;
+    # HTTP digest nonces are server-side and cannot be replayed after a restart.
+    if getattr(args, "onvif_user", None) and getattr(args, "onvif_auth", "both") != "wsse":
+        raise ValueError("--script contains ONVIF requests, but HTTP digest captures cannot be "
+                         "replayed (nonces are not recorded); use --onvif-auth wsse or record "
+                         "without --onvif-user")
+
+
 async def replay(sim, path: str, capture: Optional[TrafficCapture] = None, onvif=None) -> None:
     """Feed a scripted session into the simulator with its original timing.
 
@@ -300,7 +359,13 @@ async def replay(sim, path: str, capture: Optional[TrafficCapture] = None, onvif
         if capture is not None:
             capture.log("rx", transport, None, packet)
         if transport == "ONVIF":
-            status, payload = onvif.handle(packet, "127.0.0.1:8080")
+            from .onvif import Unauthorized
+            try:
+                status, payload = onvif.handle(packet, "127.0.0.1:8080")
+            except Unauthorized as err:
+                raise ValueError("replaying an ONVIF request needs authentication that cannot be "
+                                 "reconstructed from the capture (use --onvif-auth wsse or record "
+                                 "without --onvif-user)") from err
             if capture is not None:
                 capture.log("tx", "ONVIF", None, payload.encode(), note=f"HTTP {status}")
         else:

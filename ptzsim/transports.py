@@ -298,7 +298,13 @@ class PtyPort:
         self._loop = asyncio.get_running_loop()
         wrap_out = getattr(sim, "wrap_out", None)
         if wrap_out is not None:
-            self._send: Send = wrap_out("VISCA/serial", None, lambda reply: os.write(self.master, reply))
+            # --disconnect-after closes the endpoint shortly after the allowed replies
+            # went out (closing the master at once would discard them from the queue),
+            # so the client reads the replies and then sees EOF like on a pulled cable
+            def hangup() -> None:
+                self._loop.call_later(0.1, self.close)
+            self._send: Send = wrap_out("VISCA/serial", None, lambda reply: os.write(self.master, reply),
+                                        on_disconnect=hangup)
         else:  # e.g. a PelcoCamera without fault injection
             self._send = lambda reply: os.write(self.master, reply)
         self._loop.add_reader(master, self._readable)
