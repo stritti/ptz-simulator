@@ -51,45 +51,45 @@ def test_is_final(reply, final):
     assert _is_final(reply) is final
 
 
-def test_collect_stream_timeout_ack_final_and_eof():
+def test_collect_replies_timeout_ack_final_and_eof():
     a, b = socket.socketpair()
     try:
         a.settimeout(0.05)
-        assert cli._collect_stream(a, 0.05) == []  # nothing arrives: timeout
+        assert cli._collect_replies(a, datagram=False, sony=False) == []  # nothing arrives: timeout
         b.sendall(parse_hex("90 41 FF"))  # ACK is not final
-        assert cli._collect_stream(a, 0.05) == [parse_hex("90 41 FF")]
+        assert cli._collect_replies(a, datagram=False, sony=False) == [parse_hex("90 41 FF")]
         b.sendall(parse_hex("90 50 00 FF"))
-        assert cli._collect_stream(a, 0.05) == [parse_hex("90 50 00 FF")]  # final reply stops
+        assert cli._collect_replies(a, datagram=False, sony=False) == [parse_hex("90 50 00 FF")]  # final stops
         b.close()
-        assert cli._collect_stream(a, 0.05) == []  # EOF ends the stream
+        assert cli._collect_replies(a, datagram=False, sony=False) == []  # EOF ends the stream
     finally:
         a.close()
         b.close()
 
 
-def test_collect_stream_splits_multiple_replies_in_one_chunk():
+def test_collect_replies_splits_multiple_replies_in_one_chunk():
     a, b = socket.socketpair()
     try:
         a.settimeout(0.05)
         b.sendall(parse_hex("90 41 FF 90 50 FF"))
-        assert cli._collect_stream(a, 0.05) == [parse_hex("90 41 FF"), parse_hex("90 50 FF")]
+        assert cli._collect_replies(a, datagram=False, sony=False) == [parse_hex("90 41 FF"), parse_hex("90 50 FF")]
     finally:
         a.close()
         b.close()
 
 
-def test_collect_datagrams_strips_sony_header_and_times_out():
+def test_collect_replies_datagram_strips_sony_header_and_times_out():
     a, b = socket.socketpair()
     try:
         a.settimeout(0.05)
         payload = parse_hex("90 50 FF")
         b.sendall(cli.SONY_HEADER.pack(0x0111, len(payload), 1) + payload)
-        assert cli._collect_datagrams(a, sony=True) == [payload]
+        assert cli._collect_replies(a, datagram=True, sony=True) == [payload]
         ack = parse_hex("90 41 FF")
         b.sendall(cli.SONY_HEADER.pack(0x0111, len(ack), 2) + ack)
-        assert cli._collect_datagrams(a, sony=True) == [ack]  # ACK: wait for more, then timeout
+        assert cli._collect_replies(a, datagram=True, sony=True) == [ack]  # ACK: wait for more, then timeout
         b.sendall(parse_hex("90 50 FF"))
-        assert cli._collect_datagrams(a, sony=False) == [parse_hex("90 50 FF")]  # raw VISCA
+        assert cli._collect_replies(a, datagram=True, sony=False) == [parse_hex("90 50 FF")]  # raw VISCA
     finally:
         a.close()
         b.close()
