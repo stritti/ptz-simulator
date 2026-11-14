@@ -85,10 +85,14 @@ class ServeContext:
     and accepts raw VISCA packets via ``simulator.process(packet, send)``.
     """
 
-    def __init__(self, camera, simulator, args: argparse.Namespace):
+    def __init__(self, camera, simulator, args: argparse.Namespace, faults=None, capture=None):
         self.camera = camera
         self.simulator = simulator
         self.args = args
+        #: Fault injector (``--latency``/``--loss``/...) and traffic capture (``--capture``),
+        #: shared by all plugins; None when the test-tooling options are off.
+        self.faults = faults
+        self.capture = capture
         #: Plugins started by :meth:`start_plugins`, and the endpoints they returned.
         self.plugins: List[ProtocolPlugin] = []
         self.endpoints: List[Endpoint] = []
