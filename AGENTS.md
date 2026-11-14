@@ -134,6 +134,10 @@ the PR is merged; a renamed PR title re-runs the check automatically.
 - `ptzsim/transports.py` — Sony VISCA over IP (UDP 52381), raw VISCA over TCP/UDP, serial
   via pseudo terminal (`PtyPort` takes any `process(packet, send)` handler plus a frame
   `split`, e.g. VISCA packets or Pelco-D frames).
+- `ptzsim/faults.py` — test tooling: fault injection (`--latency`/`--loss`/`--duplicate`/
+  `--reorder`/`--disconnect-after`), traffic capture (`--capture`, JSONL) and replay
+  (`--script`); `Simulator.wrap_out`/`capture_rx` wire it into every transport, the ONVIF
+  HTTP server takes the same injector/capture.
 - `ptzsim/ndi.py` — optional NDI source with PTZ control and a rendered test picture.
 - `ptzsim/display.py` — renders the dashboard (`render`), read-only view and `--no-tui` log.
 - `ptzsim/tui.py` — interactive keyboard UI. `TuiController` maps keys to `CameraState`
