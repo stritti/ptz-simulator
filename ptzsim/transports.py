@@ -31,6 +31,13 @@ ERROR_SEQUENCE = b"\x0f\x01"
 ERROR_MESSAGE_TYPE = b"\x0f\x02"
 
 
+def feed(sim, buffer: bytearray, data: bytes, send: Send, split=split_packets) -> None:
+    """Append received bytes to ``buffer``, split them into packets and process each."""
+    buffer.extend(data)
+    for packet in split(buffer):
+        sim.process(packet, send)
+
+
 class Simulator:
     """Runs the camera physics and routes replies back to the senders."""
 
@@ -92,9 +99,7 @@ async def serve_tcp(sim: Simulator, host: str, port: int) -> asyncio.AbstractSer
         buffer = bytearray()
         try:
             while data := await reader.read(1024):
-                buffer.extend(data)
-                for packet in split_packets(buffer):
-                    sim.process(packet, writer.write)
+                feed(sim, buffer, data, writer.write)
         except ConnectionError:
             pass
         finally:
@@ -115,9 +120,7 @@ class RawUdpProtocol(asyncio.DatagramProtocol):
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr) -> None:
-        buffer = bytearray(data)
-        for packet in split_packets(buffer):
-            self.sim.process(packet, lambda reply, a=addr: self.transport.sendto(reply, a))
+        feed(self.sim, bytearray(), data, lambda reply, a=addr: self.transport.sendto(reply, a))
 
 
 # ------------------------------------------------------- Sony VISCA over IP
@@ -243,9 +246,7 @@ class PtyPort:
             data = os.read(self.master, 1024)
         except (BlockingIOError, OSError):
             return
-        self._buffer.extend(data)
-        for packet in self.split(self._buffer):
-            self.sim.process(packet, lambda reply: os.write(self.master, reply))
+        feed(self.sim, self._buffer, data, lambda reply: os.write(self.master, reply), split=self.split)
 
     def close(self) -> None:
         """Stop reading, close both ends and remove the symlink."""
