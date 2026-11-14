@@ -36,6 +36,11 @@ WB_AUTO_MODES = ("auto", "auto_outdoor")
 WB_GAIN_NEUTRAL, WB_GAIN_MAX = 0x80, 0xFF
 WB_GAIN_STEP = 8  # simulator choice: the doc does not give the relative step
 
+# The four motion axes and their position limits, for generic axis loops.
+AXES = ("pan", "tilt", "zoom", "focus")
+LIMITS = {"pan": (PAN_MIN, PAN_MAX), "tilt": (TILT_MIN, TILT_MAX),
+          "zoom": (ZOOM_MIN, ZOOM_MAX), "focus": (FOCUS_MIN, FOCUS_MAX)}
+
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
@@ -93,10 +98,7 @@ class CameraState:
     @property
     def busy(self) -> bool:
         """True while an absolute move (with a pending completion) is running."""
-        return any(
-            t is not None
-            for t in (self.pan_target, self.tilt_target, self.zoom_target, self.focus_target)
-        )
+        return any(getattr(self, f"{axis}_target") is not None for axis in AXES)
 
     def axes_busy(self, axes) -> bool:
         """True while one of ``axes`` ("pan", "tilt", "zoom", "focus") has a target."""
@@ -104,10 +106,7 @@ class CameraState:
 
     @property
     def moving(self) -> bool:
-        return self.busy or any(
-            v != 0.0
-            for v in (self.pan_velocity, self.tilt_velocity, self.zoom_velocity, self.focus_velocity)
-        )
+        return self.busy or any(getattr(self, f"{axis}_velocity") != 0.0 for axis in AXES)
 
     @property
     def pan_degrees(self) -> float:
@@ -223,25 +222,24 @@ class CameraState:
         self.pan_target = self.tilt_target = self.zoom_target = self.focus_target = None
 
     def stop_all(self) -> None:
-        self.stop_pan_tilt()
-        self.zoom_velocity = self.focus_velocity = 0.0
-        self.zoom_target = self.focus_target = None
+        for axis in AXES:
+            setattr(self, f"{axis}_velocity", 0.0)
+            setattr(self, f"{axis}_target", None)
 
     def finish_moves(self) -> None:
         """Jump straight to all targets (used in --instant mode and tests)."""
-        for name in ("pan", "tilt", "zoom", "focus"):
-            target = getattr(self, f"{name}_target")
+        for axis in AXES:
+            target = getattr(self, f"{axis}_target")
             if target is not None:
-                setattr(self, name, target[0])
-                setattr(self, f"{name}_target", None)
+                setattr(self, axis, target[0])
+                setattr(self, f"{axis}_target", None)
 
     # ---------------------------------------------------------------- physics
     def tick(self, dt: float) -> None:
         """Advance the simulation by dt seconds."""
-        self.pan = self._step("pan", self.pan_velocity, dt, PAN_MIN, PAN_MAX)
-        self.tilt = self._step("tilt", self.tilt_velocity, dt, TILT_MIN, TILT_MAX)
-        self.zoom = self._step("zoom", self.zoom_velocity, dt, ZOOM_MIN, ZOOM_MAX)
-        self.focus = self._step("focus", self.focus_velocity, dt, FOCUS_MIN, FOCUS_MAX)
+        for axis in AXES:
+            low, high = LIMITS[axis]
+            setattr(self, axis, self._step(axis, getattr(self, f"{axis}_velocity"), dt, low, high))
 
     def _step(self, name: str, velocity: float, dt: float, low: float, high: float) -> float:
         current = getattr(self, name)
