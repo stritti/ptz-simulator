@@ -16,7 +16,8 @@ from ptzsim.cli import main, send_packets
 from ptzsim.faults import (FaultConfig, FaultInjector, TrafficCapture, config_from_args,
                            from_args, parse_script, replay)
 from ptzsim.testing import assert_no_errors, free_port, moving_axes, serve
-from ptzsim.visca import parse_hex
+from ptzsim.transports import Simulator, serve_udp
+from ptzsim.visca import ViscaCamera, parse_hex
 
 ZOOM_IN = "81 01 04 07 02 FF"
 FOCUS_MODE_INQUIRY = "81 09 04 38 FF"
@@ -228,6 +229,73 @@ def test_tcp_disconnect_after_first_reply():
     ctx, replies = asyncio.run(run())
     assert replies == [parse_hex("90 50 02 FF")]  # the second reply is cut off
     assert ctx.simulator.faults.disconnected == 1
+
+
+def test_tcp_half_closed_client_still_gets_delayed_replies():
+    async def run():
+        async with serve("--tcp", str(free_port()), "--latency", "50") as ctx:
+            def raw():
+                with socket.create_connection(("127.0.0.1", ctx.args.tcp), timeout=2) as s:
+                    s.sendall(parse_hex(FOCUS_MODE_INQUIRY))
+                    s.shutdown(socket.SHUT_WR)  # half-close: keep reading until EOF
+                    s.settimeout(2)
+                    data = b""
+                    while chunk := s.recv(64):
+                        data += chunk
+                    return data
+            return await asyncio.get_running_loop().run_in_executor(None, raw)
+
+    assert asyncio.run(run()) == parse_hex("90 50 02 FF")  # not just EOF
+
+
+def test_udp_senders_are_not_cached_without_fault_injection():
+    async def run():
+        sim = Simulator(ViscaCamera(instant=True), tick_interval=0.01)  # no faults, no capture
+        port = free_port(socket.SOCK_DGRAM)
+        transport = await serve_udp(sim, "127.0.0.1", port, sony=False)
+        task = asyncio.ensure_future(sim.run())
+        try:
+            def burst():
+                for _ in range(50):  # every inquiry from its own short-lived socket
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                        s.settimeout(0.2)
+                        s.sendto(parse_hex(FOCUS_MODE_INQUIRY), ("127.0.0.1", port))
+                        s.recv(64)
+            await asyncio.get_running_loop().run_in_executor(None, burst)
+            await asyncio.sleep(0.1)
+            return transport.get_protocol()._sends
+        finally:
+            task.cancel()
+            transport.close()
+
+    assert asyncio.run(run()) == {}  # nothing retained per client socket
+
+
+def test_udp_sender_cache_is_bounded_when_faults_are_active(monkeypatch):
+    import ptzsim.transports as transports_mod
+    monkeypatch.setattr(transports_mod, "MAX_CACHED_SENDERS", 3)
+
+    async def run():
+        sim = Simulator(ViscaCamera(instant=True), tick_interval=0.01,
+                        faults=FaultInjector(FaultConfig(latency_ms=1)))
+        port = free_port(socket.SOCK_DGRAM)
+        transport = await serve_udp(sim, "127.0.0.1", port, sony=False)
+        task = asyncio.ensure_future(sim.run())
+        try:
+            def burst():
+                for _ in range(5):
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                        s.settimeout(0.2)
+                        s.sendto(parse_hex(FOCUS_MODE_INQUIRY), ("127.0.0.1", port))
+                        s.recv(64)
+            await asyncio.get_running_loop().run_in_executor(None, burst)
+            await asyncio.sleep(0.1)
+            return len(transport.get_protocol()._sends)
+        finally:
+            task.cancel()
+            transport.close()
+
+    assert asyncio.run(run()) == 3  # cached (per-peer fault state) but bounded
 
 
 def test_sony_duplicate_reaches_the_client_twice():

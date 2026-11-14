@@ -1361,6 +1361,8 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int, faults=None, cap
             pass
         finally:
             if faults is not None:
+                # a half-closing client still gets this connection's delayed replies
+                await faults.wait_link("ONVIF", peer_name)
                 faults.release("ONVIF", peer_name)  # a reconnect gets a fresh allowance
             writer.close()
 

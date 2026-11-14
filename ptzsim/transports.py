@@ -18,6 +18,9 @@ log = logging.getLogger("ptzsim")
 
 Send = Callable[[bytes], None]
 
+# Upper bound for per-peer sender closures kept while fault injection needs them.
+MAX_CACHED_SENDERS = 1024
+
 # Sony VISCA over IP payload types.
 SONY_VISCA_COMMAND = 0x0100
 SONY_VISCA_INQUIRY = 0x0110
@@ -136,6 +139,8 @@ async def serve_tcp(sim: Simulator, host: str, port: int) -> asyncio.AbstractSer
             sim.clients -= 1
             log.info("TCP client disconnected: %s", peer)
             if sim.faults is not None:
+                # a half-closing client still gets this connection's delayed replies
+                await sim.faults.wait_link("VISCA/TCP", peer_name)
                 sim.faults.release("VISCA/TCP", peer_name)  # a reconnect gets a fresh allowance
             writer.close()
 
@@ -155,11 +160,16 @@ class RawUdpProtocol(asyncio.DatagramProtocol):
         self.transport = transport
 
     def _send_for(self, addr) -> Send:
+        peer = f"{addr[0]}:{addr[1]}"
+        raw = lambda reply, a=addr: self.transport.sendto(reply, a)
+        if self.sim.faults is None:
+            # no per-peer state needed: do not retain a sender per client socket
+            return self.sim.wrap_out("VISCA/UDP", peer, raw)
         if addr not in self._sends:
-            peer = f"{addr[0]}:{addr[1]}"
+            if len(self._sends) >= MAX_CACHED_SENDERS:
+                self._sends.pop(next(iter(self._sends)))  # evict the oldest peer
             self._sends[addr] = self.sim.wrap_out(
-                "VISCA/UDP", peer, lambda reply, a=addr: self.transport.sendto(reply, a),
-                on_disconnect=lambda a=addr: self._ignored.add(a))
+                "VISCA/UDP", peer, raw, on_disconnect=lambda a=addr: self._ignored.add(a))
         return self._sends[addr]
 
     def datagram_received(self, data: bytes, addr) -> None:
@@ -189,11 +199,16 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
         self.transport = transport
 
     def _send_for(self, addr) -> Send:
+        peer = f"{addr[0]}:{addr[1]}"
+        raw = lambda data, a=addr: self.transport.sendto(data, a)
+        if self.sim.faults is None:
+            # no per-peer state needed: do not retain a sender per client socket
+            return self.sim.wrap_out("Sony VISCA/IP", peer, raw)
         if addr not in self._sends:
-            peer = f"{addr[0]}:{addr[1]}"
+            if len(self._sends) >= MAX_CACHED_SENDERS:
+                self._sends.pop(next(iter(self._sends)))  # evict the oldest peer
             self._sends[addr] = self.sim.wrap_out(
-                "Sony VISCA/IP", peer, lambda data, a=addr: self.transport.sendto(data, a),
-                on_disconnect=lambda a=addr: self._ignored.add(a))
+                "Sony VISCA/IP", peer, raw, on_disconnect=lambda a=addr: self._ignored.add(a))
         return self._sends[addr]
 
     def _reply(self, addr, payload_type: int, sequence: int, payload: bytes) -> None:
