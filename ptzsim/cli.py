@@ -123,7 +123,7 @@ def send_packets(packets: List[bytes], host: str, port: int, proto: str, timeout
         with socket.create_connection((host, port), timeout=timeout) as sock:
             for packet in packets:
                 sock.sendall(packet)
-                replies += _collect_stream(sock, timeout)
+                replies += _collect_replies(sock, datagram=False, sony=False)
         return replies
 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -133,41 +133,32 @@ def send_packets(packets: List[bytes], host: str, port: int, proto: str, timeout
                 kind = SONY_VISCA_INQUIRY if len(packet) > 1 and packet[1] == 0x09 else SONY_VISCA_COMMAND
                 packet = SONY_HEADER.pack(kind, len(packet), seq) + packet
             sock.sendto(packet, (host, port))
-            replies += _collect_datagrams(sock, proto == "sony")
+            replies += _collect_replies(sock, datagram=True, sony=proto == "sony")
     return replies
 
 
-def _collect_stream(sock: socket.socket, timeout: float) -> List[bytes]:
-    buffer = bytearray()
+def _collect_replies(sock: socket.socket, datagram: bool, sony: bool) -> List[bytes]:
+    """Collect replies until the socket timeout or a final reply (completion, inquiry answer, error)."""
     replies: List[bytes] = []
+    buffer = bytearray()
     while True:
         try:
-            data = sock.recv(1024)
+            data = sock.recvfrom(1024)[0] if datagram else sock.recv(1024)
         except socket.timeout:
             break
         if not data:
             break
-        buffer.extend(data)
-        while 0xFF in buffer:
-            end = buffer.index(0xFF)
-            replies.append(bytes(buffer[: end + 1]))
-            del buffer[: end + 1]
-        if replies and _is_final(replies[-1]):
-            break
-    return replies
-
-
-def _collect_datagrams(sock: socket.socket, sony: bool) -> List[bytes]:
-    replies: List[bytes] = []
-    while True:
-        try:
-            data, _ = sock.recvfrom(1024)
-        except socket.timeout:
-            break
         if sony:
             data = data[SONY_HEADER.size:]
-        replies.append(data)
-        if _is_final(data):
+        if datagram:
+            replies.append(data)
+        else:
+            buffer.extend(data)
+            while 0xFF in buffer:
+                end = buffer.index(0xFF)
+                replies.append(bytes(buffer[: end + 1]))
+                del buffer[: end + 1]
+        if replies and _is_final(replies[-1]):
             break
     return replies
 
