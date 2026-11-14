@@ -194,8 +194,7 @@ class PelcoCamera:
             s.drive_zoom(direction, ZOOM_SPEEDS.get(self.zoom_speed, ZOOM_SPEEDS[ZOOM_SPEED_FALLBACK]))
             actions.append("zoom tele" if direction > 0 else "zoom wide")
         else:
-            s.zoom_velocity = 0.0
-            s.zoom_target = None
+            s.stop_axis("zoom")
         if cmd2 & FOCUS_FAR or cmd1 & FOCUS_NEAR_CMD1:
             if s.autofocus:
                 self.camera.record("Pelco-D", "focus ignored (autofocus on)", ok=False)
@@ -204,8 +203,7 @@ class PelcoCamera:
                 s.drive_focus(direction, FOCUS_SPEEDS.get(self.focus_speed, FOCUS_SPEEDS[FOCUS_SPEED_FALLBACK]))
                 actions.append("focus far" if direction < 0 else "focus near")
         else:
-            s.focus_velocity = 0.0
-            s.focus_target = None
+            s.stop_axis("focus")
         if cmd1 & (IRIS_OPEN_CMD1 | IRIS_CLOSE_CMD1):
             actions.append(f"iris {'open' if cmd1 & IRIS_OPEN_CMD1 else 'close'} (not simulated)")
         self._restart_runaway_timer(bool(pan_dir or tilt_dir or s.zoom_velocity or s.focus_velocity))
