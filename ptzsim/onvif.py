@@ -1206,7 +1206,7 @@ class OnvifCamera(DeviceService, MediaService, PtzService, ImagingService):
             self.camera.record("ONVIF", "HTTP digest: unknown user or nonce", ok=False)
             raise Unauthorized()
         def md5(text: str) -> str:
-            return hashlib.md5(text.encode()).hexdigest()
+            return hashlib.md5(text.encode()).hexdigest()  # codeql[py/weak-cryptographic-algorithm] RFC 2617 digest
         ha1 = md5(f"{self.username}:{params.get('realm', DIGEST_REALM)}:{self.password}")
         ha2 = md5(f"{method}:{params.get('uri', uri)}")
         if params.get("qop"):
@@ -1230,7 +1230,7 @@ class OnvifCamera(DeviceService, MediaService, PtzService, ImagingService):
         else:
             if nonce is None or created is None:  # Core spec 5.9.5: both are required
                 raise OnvifFault("ter:NotAuthorized", "digest without nonce/created")
-            digest = hashlib.sha1(base64.b64decode(nonce) + created.encode() + self.password.encode())
+            digest = hashlib.sha1(base64.b64decode(nonce) + created.encode() + self.password.encode())  # codeql[py/weak-cryptographic-algorithm] WS-Security PasswordDigest
             ok = base64.b64encode(digest.digest()).decode() == supplied
         if not ok:
             raise OnvifFault("ter:NotAuthorized", "wrong password")
