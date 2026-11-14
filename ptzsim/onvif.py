@@ -159,12 +159,6 @@ def envelope(body: str, header: str = "") -> str:
             f"<s:Header>{header}</s:Header><s:Body>{body}</s:Body></s:Envelope>")
 
 
-def response(prefix: str, action: str, body: str = "") -> str:
-    """Wrap a SOAP body in its ``<prefix:ActionResponse>`` element (self-closing when empty)."""
-    tag = f"{prefix}:{action}Response"
-    return f"<{tag}/>" if not body else f"<{tag}>{body}</{tag}>"
-
-
 class OnvifFault(Exception):
     """SOAP 1.2 fault. ``subcode`` is the ONVIF chain below env:Sender/env:Receiver,
     e.g. "ter:InvalidArgVal/ter:NoProfile" (Core spec 5.8.2, PTZ spec fault tables)."""
@@ -194,8 +188,905 @@ def action_failed(subcode: str, reason: str) -> OnvifFault:
 
 
 # ------------------------------------------------------------- service
-class OnvifCamera:
-    """Answers ONVIF SOAP requests for one simulated camera."""
+class DeviceService:
+    """Device service operations (``tds`` namespace): capabilities, scopes, network, hostname."""
+
+    def device_actions(self) -> Dict[str, Callable[[ET.Element, str], str]]:
+        return {
+            "GetSystemDateAndTime": self.get_system_date_and_time,
+            "GetCapabilities": self.get_capabilities,
+            "GetServices": self.get_services,
+            "GetDeviceInformation": self.get_device_information,
+            "GetWsdlUrl": self.get_wsdl_url,
+            "GetScopes": self.get_scopes,
+            "SetScopes": self.set_scopes,
+            "AddScopes": self.add_scopes,
+            "RemoveScopes": self.remove_scopes,
+            "GetDiscoveryMode": self.get_discovery_mode,
+            "SetDiscoveryMode": self.set_discovery_mode,
+            "GetHostname": self.get_hostname,
+            "SetHostname": self.set_hostname,
+            "GetNetworkInterfaces": self.get_network_interfaces,
+            "GetDNS": self.get_dns,
+            "GetNTP": self.get_ntp,
+            "GetNetworkProtocols": self.get_network_protocols,
+            "GetNetworkDefaultGateway": self.get_network_default_gateway,
+            "GetUsers": self.get_users,
+            "GetEndpointReference": self.get_endpoint_reference,
+            "SystemReboot": self.system_reboot,
+            "SetNetworkInterfaces": self._accept("SetNetworkInterfaces",
+                                                 "<tds:RebootNeeded>false</tds:RebootNeeded>"),
+            "SetDNS": self._accept("SetDNS"),
+            "SetNTP": self._accept("SetNTP"),
+            "SetNetworkProtocols": self._accept("SetNetworkProtocols"),
+            "SetNetworkDefaultGateway": self._accept("SetNetworkDefaultGateway"),
+            "SetSystemDateAndTime": self._accept("SetSystemDateAndTime"),
+            "SetSystemFactoryDefault": self._accept("SetSystemFactoryDefault"),
+        }
+
+    def get_system_date_and_time(self, request, host) -> str:
+        now = datetime.now(timezone.utc)
+        return ("<tds:GetSystemDateAndTimeResponse><tds:SystemDateAndTime>"
+                "<tt:DateTimeType>Manual</tt:DateTimeType><tt:DaylightSavings>false</tt:DaylightSavings>"
+                "<tt:TimeZone><tt:TZ>UTC0</tt:TZ></tt:TimeZone><tt:UTCDateTime>"
+                f"<tt:Time><tt:Hour>{now.hour}</tt:Hour><tt:Minute>{now.minute}</tt:Minute>"
+                f"<tt:Second>{now.second}</tt:Second></tt:Time>"
+                f"<tt:Date><tt:Year>{now.year}</tt:Year><tt:Month>{now.month}</tt:Month>"
+                f"<tt:Day>{now.day}</tt:Day></tt:Date>"
+                "</tt:UTCDateTime></tds:SystemDateAndTime></tds:GetSystemDateAndTimeResponse>")
+
+    def get_capabilities(self, request, host) -> str:
+        self.camera.record("ONVIF", "GetCapabilities")
+        base = f"http://{host}/onvif"
+        return ("<tds:GetCapabilitiesResponse><tds:Capabilities>"
+                f"<tt:Device><tt:XAddr>{base}/device_service</tt:XAddr></tt:Device>"
+                f"<tt:Imaging><tt:XAddr>{base}/imaging_service</tt:XAddr></tt:Imaging>"
+                f"<tt:Media><tt:XAddr>{base}/media_service</tt:XAddr><tt:StreamingCapabilities>"
+                "<tt:RTPMulticast>false</tt:RTPMulticast><tt:RTP_TCP>true</tt:RTP_TCP>"
+                "<tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP></tt:StreamingCapabilities></tt:Media>"
+                f"<tt:PTZ><tt:XAddr>{base}/ptz_service</tt:XAddr></tt:PTZ>"
+                "</tds:Capabilities></tds:GetCapabilitiesResponse>")
+
+    def get_services(self, request, host) -> str:
+        base = f"http://{host}/onvif"
+        include = (text_of(request, "IncludeCapability") or "false").lower() == "true"
+        services = [("tds", "device_service"), ("trt", "media_service"), ("tptz", "ptz_service"),
+                    ("timg", "imaging_service")]
+        items = "".join(
+            f"<tds:Service><tds:Namespace>{NS[prefix]}</tds:Namespace><tds:XAddr>{base}/{path}</tds:XAddr>"
+            + (f"<tds:Capabilities>{self._service_capabilities(prefix)}</tds:Capabilities>" if include else "")
+            + "<tds:Version><tt:Major>2</tt:Major><tt:Minor>0</tt:Minor></tds:Version></tds:Service>"
+            for prefix, path in services)
+        return f"<tds:GetServicesResponse>{items}</tds:GetServicesResponse>"
+
+    def _service_capabilities(self, prefix: str) -> str:
+        if prefix == "tds":
+            return ('<tds:Capabilities><tds:Network/>'
+                    f'<tds:Security UsernameToken="{str(self.auth != "digest").lower()}" '
+                    f'HttpDigest="{str(self.auth != "wsse").lower()}"/>'
+                    '<tds:System DiscoveryResolve="true" DiscoveryBye="true"/></tds:Capabilities>')
+        if prefix == "trt":
+            return ('<trt:Capabilities SnapshotUri="false"><trt:ProfileCapabilities MaximumNumberOfProfiles="1"/>'
+                    '<trt:StreamingCapabilities RTP_TCP="true" RTP_RTSP_TCP="true"/></trt:Capabilities>')
+        if prefix == "timg":
+            return "<timg:Capabilities/>"
+        return ('<tptz:Capabilities EFlip="false" Reverse="false" GetCompatibleConfigurations="true" '
+                'MoveStatus="true" StatusPosition="true"/>')
+
+    def _service_capabilities_handler(self, request: ET.Element):
+        """GetServiceCapabilities exists in every service; the namespace says which one."""
+        prefix = {v: k for k, v in NS.items()}.get(request.tag[1:].split("}")[0], "tds")
+        if prefix not in ("tds", "trt", "tptz", "timg"):
+            return None
+
+        def handler(request, host) -> str:
+            return (f"<{prefix}:GetServiceCapabilitiesResponse>{self._service_capabilities(prefix)}"
+                    f"</{prefix}:GetServiceCapabilitiesResponse>")
+        return handler
+
+    def get_wsdl_url(self, request, host) -> str:
+        return ("<tds:GetWsdlUrlResponse><tds:WsdlUrl>http://www.onvif.org/</tds:WsdlUrl>"
+                "</tds:GetWsdlUrlResponse>")
+
+    def get_device_information(self, request, host) -> str:
+        return ("<tds:GetDeviceInformationResponse><tds:Manufacturer>ptzsim</tds:Manufacturer>"
+                f"<tds:Model>{escape(self.name)}</tds:Model><tds:FirmwareVersion>0.1.0</tds:FirmwareVersion>"
+                f"<tds:SerialNumber>{self.serial}</tds:SerialNumber><tds:HardwareId>ptzsim</tds:HardwareId>"
+                "</tds:GetDeviceInformationResponse>")
+
+    @property
+    def scopes(self) -> list:
+        return self.fixed_scopes + self.configurable_scopes
+
+    def get_scopes(self, request, host) -> str:
+        items = "".join(f"<tds:Scopes><tt:ScopeDef>{kind}</tt:ScopeDef><tt:ScopeItem>{escape(scope)}</tt:ScopeItem>"
+                        "</tds:Scopes>"
+                        for kind, scopes in (("Fixed", self.fixed_scopes), ("Configurable", self.configurable_scopes))
+                        for scope in scopes)
+        return f"<tds:GetScopesResponse>{items}</tds:GetScopesResponse>"
+
+    @staticmethod
+    def _scope_items(request: ET.Element, tag: str) -> list:
+        return [e.text.strip() for e in request.iter() if _local(e.tag) == tag and e.text and e.text.strip()]
+
+    def _check_scope_count(self, configurable: list) -> None:
+        if len(self.fixed_scopes) + len(configurable) > MAX_SCOPES:
+            raise action_failed("ter:TooManyScopes", f"more than {MAX_SCOPES} scopes")
+
+    def set_scopes(self, request, host) -> str:
+        """Core 8.3.15: replaces all configurable scopes, fixed ones stay."""
+        scopes = self._scope_items(request, "Scopes")
+        self._check_scope_count(scopes)
+        self.configurable_scopes = scopes
+        self.camera.record("ONVIF", f"SetScopes ({len(scopes)})")
+        return "<tds:SetScopesResponse/>"
+
+    def add_scopes(self, request, host) -> str:
+        new = [s for s in self._scope_items(request, "ScopeItem") if s not in self.scopes]
+        self._check_scope_count(self.configurable_scopes + new)
+        self.configurable_scopes += new
+        self.camera.record("ONVIF", f"AddScopes ({len(new)})")
+        return "<tds:AddScopesResponse/>"
+
+    def remove_scopes(self, request, host) -> str:
+        items = self._scope_items(request, "ScopeItem")
+        for scope in items:
+            if scope in self.fixed_scopes:
+                raise OnvifFault("ter:OperationProhibited/ter:FixedScope", f"{scope} is fixed")
+            if scope not in self.configurable_scopes:
+                raise invalid_arg("ter:NoScope", f"{scope} does not exist")
+        self.configurable_scopes = [s for s in self.configurable_scopes if s not in items]
+        self.camera.record("ONVIF", f"RemoveScopes ({len(items)})")
+        removed = "".join(f"<tds:ScopeItem>{escape(s)}</tds:ScopeItem>" for s in items)
+        return f"<tds:RemoveScopesResponse>{removed}</tds:RemoveScopesResponse>"
+
+    def get_discovery_mode(self, request, host) -> str:
+        mode = "Discoverable" if self.discoverable else "NonDiscoverable"
+        return f"<tds:GetDiscoveryModeResponse><tds:DiscoveryMode>{mode}</tds:DiscoveryMode></tds:GetDiscoveryModeResponse>"
+
+    def set_discovery_mode(self, request, host) -> str:
+        mode = text_of(request, "DiscoveryMode")
+        if mode not in ("Discoverable", "NonDiscoverable"):
+            raise OnvifFault("ter:InvalidArgVal", f"unknown discovery mode {mode}")
+        self.discoverable = mode == "Discoverable"
+        self.camera.record("ONVIF", f"SetDiscoveryMode {mode}")
+        return "<tds:SetDiscoveryModeResponse/>"
+
+    def get_hostname(self, request, host) -> str:
+        return ("<tds:GetHostnameResponse><tds:HostnameInformation><tt:FromDHCP>false</tt:FromDHCP>"
+                f"<tt:Name>{escape(self.hostname)}</tt:Name></tds:HostnameInformation></tds:GetHostnameResponse>")
+
+    def set_hostname(self, request, host) -> str:
+        name = text_of(request, "Name") or ""
+        # Core 8.2.2: RFC 1123 host names; anything else is ter:InvalidHostname
+        if not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?", name):
+            raise invalid_arg("ter:InvalidHostname", f"invalid host name {name!r}")
+        self.hostname = name
+        self.camera.record("ONVIF", f"SetHostname {name}")
+        return "<tds:SetHostnameResponse/>"
+
+    @staticmethod
+    def _host_ip(host: str) -> str:
+        address = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+        if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", address) and not address.startswith("0."):
+            return address
+        return _local_ip_for(DISCOVERY_GROUP)
+
+    def get_network_interfaces(self, request, host) -> str:
+        mac = ":".join(["02"] + [self.serial[i:i + 2].lower() for i in range(2, 12, 2)])
+        return ('<tds:GetNetworkInterfacesResponse><tds:NetworkInterfaces token="eth0">'
+                "<tt:Enabled>true</tt:Enabled><tt:Info><tt:Name>eth0</tt:Name>"
+                f"<tt:HwAddress>{mac}</tt:HwAddress><tt:MTU>1500</tt:MTU></tt:Info>"
+                "<tt:IPv4><tt:Enabled>true</tt:Enabled><tt:Config><tt:Manual>"
+                f"<tt:Address>{self._host_ip(host)}</tt:Address><tt:PrefixLength>24</tt:PrefixLength></tt:Manual>"
+                "<tt:DHCP>false</tt:DHCP></tt:Config></tt:IPv4>"
+                "</tds:NetworkInterfaces></tds:GetNetworkInterfacesResponse>")
+
+    def get_dns(self, request, host) -> str:
+        return ("<tds:GetDNSResponse><tds:DNSInformation><tt:FromDHCP>false</tt:FromDHCP>"
+                "</tds:DNSInformation></tds:GetDNSResponse>")
+
+    def get_ntp(self, request, host) -> str:
+        return ("<tds:GetNTPResponse><tds:NTPInformation><tt:FromDHCP>false</tt:FromDHCP>"
+                "</tds:NTPInformation></tds:GetNTPResponse>")
+
+    def get_network_protocols(self, request, host) -> str:
+        port = host.rsplit(":", 1)[1] if host.count(":") == 1 else "80"
+        return ("<tds:GetNetworkProtocolsResponse><tds:NetworkProtocols><tt:Name>HTTP</tt:Name>"
+                f"<tt:Enabled>true</tt:Enabled><tt:Port>{escape(port)}</tt:Port></tds:NetworkProtocols>"
+                "</tds:GetNetworkProtocolsResponse>")
+
+    def get_network_default_gateway(self, request, host) -> str:
+        return ("<tds:GetNetworkDefaultGatewayResponse><tds:NetworkGateway/>"
+                "</tds:GetNetworkDefaultGatewayResponse>")
+
+    def get_users(self, request, host) -> str:
+        user = (f"<tds:User><tt:Username>{escape(self.username)}</tt:Username>"
+                "<tt:UserLevel>Administrator</tt:UserLevel></tds:User>") if self.username else ""
+        return f"<tds:GetUsersResponse>{user}</tds:GetUsersResponse>"
+
+    def get_endpoint_reference(self, request, host) -> str:
+        return (f"<tds:GetEndpointReferenceResponse><tds:GUID>urn:uuid:{self.endpoint_uuid}</tds:GUID>"
+                "</tds:GetEndpointReferenceResponse>")
+
+    def system_reboot(self, request, host) -> str:
+        self.camera.record("ONVIF", "SystemReboot (simulated, nothing restarts)")
+        return "<tds:SystemRebootResponse><tds:Message>Rebooting in 0 seconds</tds:Message></tds:SystemRebootResponse>"
+
+    def _accept(self, action: str, body: str = ""):
+        """Settings a simulator cannot apply (network, clock, factory reset): accepted, unchanged."""
+        def handler(request, host) -> str:
+            self.camera.record("ONVIF", f"{action} (accepted, not changed)")
+            return f"<tds:{action}Response>{body}</tds:{action}Response>"
+        return handler
+
+class MediaService:
+    """Media service operations (``trt`` namespace): profile, video source and encoder configurations."""
+
+    def media_actions(self) -> Dict[str, Callable[[ET.Element, str], str]]:
+        return {
+            "GetProfiles": self.get_profiles,
+            "GetProfile": self.get_profile,
+            "GetStreamUri": self.get_stream_uri,
+            "GetVideoSources": self.get_video_sources,
+            "GetVideoSourceConfigurations": self.get_video_source_configurations,
+            "GetVideoSourceConfiguration": self.get_video_source_configuration,
+            "GetCompatibleVideoSourceConfigurations": self.get_compatible_video_source_configurations,
+            "GetVideoSourceConfigurationOptions": self.get_video_source_configuration_options,
+            "SetVideoSourceConfiguration": self.set_video_source_configuration,
+            "GetVideoEncoderConfigurations": self.get_video_encoder_configurations,
+            "GetVideoEncoderConfiguration": self.get_video_encoder_configuration,
+            "GetCompatibleVideoEncoderConfigurations": self.get_compatible_video_encoder_configurations,
+            "GetVideoEncoderConfigurationOptions": self.get_video_encoder_configuration_options,
+            "SetVideoEncoderConfiguration": self.set_video_encoder_configuration,
+            "GetGuaranteedNumberOfVideoEncoderInstances": self.get_guaranteed_encoder_instances,
+            "AddVideoSourceConfiguration": self._add_config("source", VIDEO_SOURCE_CONFIG_TOKEN),
+            "AddVideoEncoderConfiguration": self._add_config("encoder", VIDEO_ENCODER_CONFIG_TOKEN),
+            "AddPTZConfiguration": self._add_config("ptz", PTZ_CONFIG_TOKEN),
+            "RemoveVideoSourceConfiguration": self._remove_config("source"),
+            "RemoveVideoEncoderConfiguration": self._remove_config("encoder"),
+            "RemovePTZConfiguration": self._remove_config("ptz"),
+        }
+
+    def _profile_xml(self, tag: str = "trt:Profiles") -> str:
+        c = self.profile_configs
+        return (f'<{tag} token="{PROFILE_TOKEN}" fixed="true"><tt:Name>{escape(self.name)}</tt:Name>'
+                + (self._video_source_config_xml("tt:VideoSourceConfiguration") if c["source"] else "")
+                + (self._video_encoder_config_xml("tt:VideoEncoderConfiguration") if c["encoder"] else "")
+                + (self._configuration_xml("tt:PTZConfiguration") if c["ptz"] else "")
+                + f"</{tag}>")
+
+    def get_profiles(self, request, host) -> str:
+        self.camera.record("ONVIF", "GetProfiles")
+        return f"<trt:GetProfilesResponse>{self._profile_xml()}</trt:GetProfilesResponse>"
+
+    def get_profile(self, request, host) -> str:
+        self._check_profile(request)
+        return f"<trt:GetProfileResponse>{self._profile_xml('trt:Profile')}</trt:GetProfileResponse>"
+
+    def get_stream_uri(self, request, host) -> str:
+        self._check_profile(request)
+        if not (self.profile_configs["source"] and self.profile_configs["encoder"]):
+            raise action_failed("ter:IncompleteConfiguration", "profile has no video source/encoder")
+        uri = self.rtsp_uri or f"rtsp://{host.split(':')[0]}:554/stream"
+        return ("<trt:GetStreamUriResponse><trt:MediaUri>"
+                f"<tt:Uri>{escape(uri)}</tt:Uri><tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>"
+                "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot><tt:Timeout>PT0S</tt:Timeout>"
+                "</trt:MediaUri></trt:GetStreamUriResponse>")
+
+    def _video_source_config_xml(self, tag: str) -> str:
+        return (f'<{tag} token="{VIDEO_SOURCE_CONFIG_TOKEN}"><tt:Name>VideoSource</tt:Name>'
+                f"<tt:UseCount>{int(self.profile_configs['source'])}</tt:UseCount>"
+                f"<tt:SourceToken>{IMAGING_SOURCE_TOKEN}</tt:SourceToken>"
+                f'<tt:Bounds x="0" y="0" width="{VIDEO_WIDTH}" height="{VIDEO_HEIGHT}"/></{tag}>')
+
+    def _video_encoder_config_xml(self, tag: str) -> str:
+        e = self.encoder
+        return (f'<{tag} token="{VIDEO_ENCODER_CONFIG_TOKEN}"><tt:Name>H264</tt:Name>'
+                f"<tt:UseCount>{int(self.profile_configs['encoder'])}</tt:UseCount>"
+                "<tt:Encoding>H264</tt:Encoding>"
+                f"<tt:Resolution><tt:Width>{e['width']}</tt:Width><tt:Height>{e['height']}</tt:Height></tt:Resolution>"
+                f"<tt:Quality>{_f(e['quality'])}</tt:Quality>"
+                f"<tt:RateControl><tt:FrameRateLimit>{e['framerate']}</tt:FrameRateLimit>"
+                f"<tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>{e['bitrate']}</tt:BitrateLimit>"
+                "</tt:RateControl>"
+                f"<tt:H264><tt:GovLength>{e['gov']}</tt:GovLength><tt:H264Profile>{e['profile']}</tt:H264Profile></tt:H264>"
+                "<tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>0.0.0.0</tt:IPv4Address>"
+                "</tt:Address><tt:Port>0</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast>"
+                f"<tt:SessionTimeout>PT60S</tt:SessionTimeout></{tag}>")
+
+    @staticmethod
+    def _check_token(request: ET.Element, expected: str, tag: str = "ConfigurationToken",
+                     optional: bool = False) -> None:
+        token = text_of(request, tag)
+        if token != expected and not (optional and token is None):
+            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
+
+    def get_video_source_configurations(self, request, host) -> str:
+        return ("<trt:GetVideoSourceConfigurationsResponse>"
+                f"{self._video_source_config_xml('trt:Configurations')}</trt:GetVideoSourceConfigurationsResponse>")
+
+    def get_video_source_configuration(self, request, host) -> str:
+        self._check_token(request, VIDEO_SOURCE_CONFIG_TOKEN)
+        return ("<trt:GetVideoSourceConfigurationResponse>"
+                f"{self._video_source_config_xml('trt:Configuration')}</trt:GetVideoSourceConfigurationResponse>")
+
+    def get_compatible_video_source_configurations(self, request, host) -> str:
+        self._check_profile(request)
+        return ("<trt:GetCompatibleVideoSourceConfigurationsResponse>"
+                f"{self._video_source_config_xml('trt:Configurations')}"
+                "</trt:GetCompatibleVideoSourceConfigurationsResponse>")
+
+    def get_video_source_configuration_options(self, request, host) -> str:
+        self._check_token(request, VIDEO_SOURCE_CONFIG_TOKEN, optional=True)
+        self._check_profile(request)
+
+        def rng(low, high):
+            return f"<tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max>"
+        return ("<trt:GetVideoSourceConfigurationOptionsResponse><trt:Options><tt:BoundsRange>"
+                f"<tt:XRange>{rng(0, 0)}</tt:XRange><tt:YRange>{rng(0, 0)}</tt:YRange>"
+                f"<tt:WidthRange>{rng(VIDEO_WIDTH, VIDEO_WIDTH)}</tt:WidthRange>"
+                f"<tt:HeightRange>{rng(VIDEO_HEIGHT, VIDEO_HEIGHT)}</tt:HeightRange></tt:BoundsRange>"
+                f"<tt:VideoSourceTokensAvailable>{IMAGING_SOURCE_TOKEN}</tt:VideoSourceTokensAvailable>"
+                "</trt:Options></trt:GetVideoSourceConfigurationOptionsResponse>")
+
+    def set_video_source_configuration(self, request, host) -> str:
+        config = find(request, "Configuration")
+        token = config.get("token") if config is not None else None
+        if token != VIDEO_SOURCE_CONFIG_TOKEN:
+            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
+        if text_of(config, "SourceToken") not in (None, IMAGING_SOURCE_TOKEN):
+            raise invalid_arg("ter:ConfigModify", "unknown video source")
+        bounds = find(config, "Bounds")
+        if bounds is not None and (bounds.get("width"), bounds.get("height")) != (str(VIDEO_WIDTH), str(VIDEO_HEIGHT)):
+            raise invalid_arg("ter:ConfigModify", f"bounds must be {VIDEO_WIDTH}x{VIDEO_HEIGHT}")
+        self.camera.record("ONVIF", "SetVideoSourceConfiguration")
+        return "<trt:SetVideoSourceConfigurationResponse/>"
+
+    def get_video_encoder_configurations(self, request, host) -> str:
+        return ("<trt:GetVideoEncoderConfigurationsResponse>"
+                f"{self._video_encoder_config_xml('trt:Configurations')}</trt:GetVideoEncoderConfigurationsResponse>")
+
+    def get_video_encoder_configuration(self, request, host) -> str:
+        self._check_token(request, VIDEO_ENCODER_CONFIG_TOKEN)
+        return ("<trt:GetVideoEncoderConfigurationResponse>"
+                f"{self._video_encoder_config_xml('trt:Configuration')}</trt:GetVideoEncoderConfigurationResponse>")
+
+    def get_compatible_video_encoder_configurations(self, request, host) -> str:
+        self._check_profile(request)
+        return ("<trt:GetCompatibleVideoEncoderConfigurationsResponse>"
+                f"{self._video_encoder_config_xml('trt:Configurations')}"
+                "</trt:GetCompatibleVideoEncoderConfigurationsResponse>")
+
+    def get_video_encoder_configuration_options(self, request, host) -> str:
+        self._check_token(request, VIDEO_ENCODER_CONFIG_TOKEN, optional=True)
+        self._check_profile(request)
+        resolutions = "".join(f"<tt:ResolutionsAvailable><tt:Width>{w}</tt:Width><tt:Height>{h}</tt:Height>"
+                              "</tt:ResolutionsAvailable>" for w, h in ENCODER_RESOLUTIONS)
+        profiles = "".join(f"<tt:H264ProfilesSupported>{p}</tt:H264ProfilesSupported>"
+                           for p in ENCODER_H264_PROFILES)
+        return ("<trt:GetVideoEncoderConfigurationOptionsResponse><trt:Options>"
+                f"<tt:QualityRange><tt:Min>{ENCODER_QUALITY_RANGE[0]}</tt:Min><tt:Max>{ENCODER_QUALITY_RANGE[1]}"
+                f"</tt:Max></tt:QualityRange><tt:H264>{resolutions}"
+                f"<tt:GovLengthRange><tt:Min>{ENCODER_GOV_RANGE[0]}</tt:Min><tt:Max>{ENCODER_GOV_RANGE[1]}</tt:Max>"
+                f"</tt:GovLengthRange><tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>{VIDEO_FRAMERATE}</tt:Max>"
+                "</tt:FrameRateRange><tt:EncodingIntervalRange><tt:Min>1</tt:Min><tt:Max>1</tt:Max>"
+                f"</tt:EncodingIntervalRange>{profiles}</tt:H264></trt:Options>"
+                "</trt:GetVideoEncoderConfigurationOptionsResponse>")
+
+    def set_video_encoder_configuration(self, request, host) -> str:
+        """Store the settings the options allow; anything else is ter:ConfigModify (Media 5.5.5)."""
+        config = find(request, "Configuration")
+        token = config.get("token") if config is not None else None
+        if token != VIDEO_ENCODER_CONFIG_TOKEN:
+            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
+        new = dict(self.encoder)
+
+        def number(*path, cast=int):
+            value = text_of(config, *path)
+            return cast(value) if value is not None else None
+        encoding = text_of(config, "Encoding")
+        width, height = number("Resolution", "Width"), number("Resolution", "Height")
+        quality = number("Quality", cast=float)
+        framerate, bitrate = number("RateControl", "FrameRateLimit"), number("RateControl", "BitrateLimit")
+        gov, profile = number("H264", "GovLength"), text_of(config, "H264", "H264Profile")
+        if encoding not in (None, "H264"):
+            raise invalid_arg("ter:ConfigModify", "only H264 is supported")
+        if width is not None or height is not None:
+            if (width, height) not in ENCODER_RESOLUTIONS:
+                raise invalid_arg("ter:ConfigModify", f"resolution {width}x{height} not supported")
+            new["width"], new["height"] = width, height
+        checks = (("quality", quality, ENCODER_QUALITY_RANGE), ("framerate", framerate, (1, VIDEO_FRAMERATE)),
+                  ("bitrate", bitrate, (1, 1 << 20)), ("gov", gov, ENCODER_GOV_RANGE))
+        for key, value, (low, high) in checks:
+            if value is not None:
+                if not low <= value <= high:
+                    raise invalid_arg("ter:ConfigModify", f"{key} {value} outside {low}..{high}")
+                new[key] = value
+        if profile is not None:
+            if profile not in ENCODER_H264_PROFILES:
+                raise invalid_arg("ter:ConfigModify", f"H264 profile {profile} not supported")
+            new["profile"] = profile
+        self.encoder = new
+        self.camera.record("ONVIF", f"SetVideoEncoderConfiguration {new['width']}x{new['height']} "
+                                    f"{new['framerate']} fps")
+        return "<trt:SetVideoEncoderConfigurationResponse/>"
+
+    def get_guaranteed_encoder_instances(self, request, host) -> str:
+        self._check_token(request, VIDEO_SOURCE_CONFIG_TOKEN)
+        return ("<trt:GetGuaranteedNumberOfVideoEncoderInstancesResponse><trt:TotalNumber>1</trt:TotalNumber>"
+                "<trt:H264>1</trt:H264></trt:GetGuaranteedNumberOfVideoEncoderInstancesResponse>")
+
+    _CONFIG_ACTIONS = {"source": "VideoSourceConfiguration", "encoder": "VideoEncoderConfiguration",
+                       "ptz": "PTZConfiguration"}
+
+    def _add_config(self, kind: str, token: str):
+        name = self._CONFIG_ACTIONS[kind]
+
+        def handler(request, host) -> str:
+            self._check_profile(request, required=True)
+            self._check_token(request, token)
+            self.profile_configs[kind] = True
+            self.camera.record("ONVIF", f"Add{name}")
+            return f"<trt:Add{name}Response/>"
+        return handler
+
+    def _remove_config(self, kind: str):
+        name = self._CONFIG_ACTIONS[kind]
+
+        def handler(request, host) -> str:
+            self._check_profile(request, required=True)
+            self.profile_configs[kind] = False
+            self.camera.record("ONVIF", f"Remove{name}")
+            return f"<trt:Remove{name}Response/>"
+        return handler
+
+    def get_video_sources(self, request, host) -> str:
+        return ("<trt:GetVideoSourcesResponse>"
+                f'<trt:VideoSources token="{IMAGING_SOURCE_TOKEN}"><tt:Framerate>{VIDEO_FRAMERATE}</tt:Framerate>'
+                f"<tt:Resolution><tt:Width>{VIDEO_WIDTH}</tt:Width><tt:Height>{VIDEO_HEIGHT}</tt:Height></tt:Resolution>"
+                "</trt:VideoSources></trt:GetVideoSourcesResponse>")
+
+class PtzService:
+    """PTZ service operations (``tptz`` namespace): node, spaces, moves, presets."""
+
+    def ptz_actions(self) -> Dict[str, Callable[[ET.Element, str], str]]:
+        return {
+            "GetNodes": self.get_nodes,
+            "GetNode": self.get_node,
+            "GetConfigurations": self.get_configurations,
+            "GetConfiguration": self.get_configuration,
+            "GetConfigurationOptions": self.get_configuration_options,
+            "SetConfiguration": self.set_configuration,
+            "GetStatus": self.get_status,
+            "ContinuousMove": self.continuous_move,
+            "AbsoluteMove": self.absolute_move,
+            "RelativeMove": self.relative_move,
+            "Stop": self.stop,
+            "GotoHomePosition": self.goto_home,
+            "SetHomePosition": self.set_home,
+            "GetPresets": self.get_presets,
+            "SetPreset": self.set_preset,
+            "GotoPreset": self.goto_preset,
+            "RemovePreset": self.remove_preset,
+            "GetCompatibleConfigurations": self.get_compatible_ptz_configurations,
+        }
+
+    def get_compatible_ptz_configurations(self, request, host) -> str:
+        self._check_profile(request)
+        return ("<tptz:GetCompatibleConfigurationsResponse>"
+                f"{self._configuration_xml('tptz:PTZConfiguration')}</tptz:GetCompatibleConfigurationsResponse>")
+
+    def _spaces_xml(self) -> str:
+        def space2d(tag, uri, low, high):
+            return (f"<tt:{tag}><tt:URI>{uri}</tt:URI><tt:XRange><tt:Min>{low}</tt:Min><tt:Max>{high}"
+                    f"</tt:Max></tt:XRange><tt:YRange><tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max>"
+                    f"</tt:YRange></tt:{tag}>")
+
+        def space1d(tag, uri, low, high):
+            return (f"<tt:{tag}><tt:URI>{uri}</tt:URI><tt:XRange><tt:Min>{low}</tt:Min>"
+                    f"<tt:Max>{high}</tt:Max></tt:XRange></tt:{tag}>")
+
+        absolute = (space2d("AbsolutePanTiltPositionSpace", PT_POSITION_SPACE, -1, 1)
+                    + space1d("AbsoluteZoomPositionSpace", ZOOM_POSITION_SPACE, 0, 1)) if self.absolute else ""
+        return (absolute
+                + space2d("RelativePanTiltTranslationSpace", PT_TRANSLATION_SPACE, -1, 1)
+                + space1d("RelativeZoomTranslationSpace", ZOOM_TRANSLATION_SPACE, -1, 1)
+                + space2d("ContinuousPanTiltVelocitySpace", PT_VELOCITY_SPACE, -1, 1)
+                + space1d("ContinuousZoomVelocitySpace", ZOOM_VELOCITY_SPACE, -1, 1)
+                + space1d("PanTiltSpeedSpace", PT_SPEED_SPACE, 0, 1)
+                + space1d("ZoomSpeedSpace", ZOOM_SPEED_SPACE, 0, 1))
+
+    def _node_xml(self, tag: str) -> str:
+        return (f'<{tag} token="{PTZ_NODE_TOKEN}" FixedHomePosition="false"><tt:Name>{escape(self.name)}</tt:Name>'
+                f"<tt:SupportedPTZSpaces>{self._spaces_xml()}</tt:SupportedPTZSpaces>"
+                f"<tt:MaximumNumberOfPresets>{st.PRESET_COUNT}</tt:MaximumNumberOfPresets>"
+                f"<tt:HomeSupported>true</tt:HomeSupported></{tag}>")
+
+    def _configuration_xml(self, tag: str) -> str:
+        absolute = (f"<tt:DefaultAbsolutePantTiltPositionSpace>{PT_POSITION_SPACE}</tt:DefaultAbsolutePantTiltPositionSpace>"
+                    f"<tt:DefaultAbsoluteZoomPositionSpace>{ZOOM_POSITION_SPACE}</tt:DefaultAbsoluteZoomPositionSpace>"
+                    if self.absolute else "")
+        return (f'<{tag} token="{PTZ_CONFIG_TOKEN}"><tt:Name>PTZ</tt:Name>'
+                f"<tt:UseCount>{int(self.profile_configs['ptz'])}</tt:UseCount>"
+                f"<tt:NodeToken>{PTZ_NODE_TOKEN}</tt:NodeToken>"
+                + absolute
+                + f"<tt:DefaultRelativePanTiltTranslationSpace>{PT_TRANSLATION_SPACE}</tt:DefaultRelativePanTiltTranslationSpace>"
+                f"<tt:DefaultRelativeZoomTranslationSpace>{ZOOM_TRANSLATION_SPACE}</tt:DefaultRelativeZoomTranslationSpace>"
+                f"<tt:DefaultContinuousPanTiltVelocitySpace>{PT_VELOCITY_SPACE}</tt:DefaultContinuousPanTiltVelocitySpace>"
+                f"<tt:DefaultContinuousZoomVelocitySpace>{ZOOM_VELOCITY_SPACE}</tt:DefaultContinuousZoomVelocitySpace>"
+                f'<tt:DefaultPTZSpeed><tt:PanTilt x="1" y="1" space="{PT_SPEED_SPACE}"/>'
+                f'<tt:Zoom x="1" space="{ZOOM_SPEED_SPACE}"/></tt:DefaultPTZSpeed>'
+                f"<tt:DefaultPTZTimeout>PT5S</tt:DefaultPTZTimeout></{tag}>")
+
+    def get_nodes(self, request, host) -> str:
+        return f"<tptz:GetNodesResponse>{self._node_xml('tptz:PTZNode')}</tptz:GetNodesResponse>"
+
+    def get_node(self, request, host) -> str:
+        token = text_of(request, "NodeToken")
+        if token != PTZ_NODE_TOKEN:
+            raise invalid_arg("ter:NoEntity", f"unknown node {token}")
+        return f"<tptz:GetNodeResponse>{self._node_xml('tptz:PTZNode')}</tptz:GetNodeResponse>"
+
+    def get_configurations(self, request, host) -> str:
+        return (f"<tptz:GetConfigurationsResponse>{self._configuration_xml('tptz:PTZConfiguration')}"
+                "</tptz:GetConfigurationsResponse>")
+
+    @staticmethod
+    def _check_config(request: ET.Element, tag: str) -> None:
+        token = text_of(request, tag)
+        if token != PTZ_CONFIG_TOKEN:
+            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
+
+    def get_configuration(self, request, host) -> str:
+        self._check_config(request, "PTZConfigurationToken")
+        return (f"<tptz:GetConfigurationResponse>{self._configuration_xml('tptz:PTZConfiguration')}"
+                "</tptz:GetConfigurationResponse>")
+
+    def set_configuration(self, request, host) -> str:
+        config = find(request, "PTZConfiguration")
+        token = config.get("token") if config is not None else None
+        if token != PTZ_CONFIG_TOKEN:
+            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
+        self.camera.record("ONVIF", "SetConfiguration (accepted, not changed)")
+        return "<tptz:SetConfigurationResponse/>"
+
+    def get_configuration_options(self, request, host) -> str:
+        self._check_config(request, "ConfigurationToken")
+        return ("<tptz:GetConfigurationOptionsResponse><tptz:PTZConfigurationOptions>"
+                f"<tt:Spaces>{self._spaces_xml()}</tt:Spaces>"
+                "<tt:PTZTimeout><tt:Min>PT0.1S</tt:Min><tt:Max>PT60S</tt:Max></tt:PTZTimeout>"
+                "</tptz:PTZConfigurationOptions></tptz:GetConfigurationOptionsResponse>")
+
+    def _vector_xml(self, pan: float, tilt: float, zoom: float) -> str:
+        return (f'<tt:PanTilt x="{_f(pan_to_onvif(pan))}" y="{_f(tilt_to_onvif(tilt))}" '
+                f'space="{PT_POSITION_SPACE}"/>'
+                f'<tt:Zoom x="{_f(zoom_to_onvif(zoom))}" space="{ZOOM_POSITION_SPACE}"/>')
+
+    def get_status(self, request, host) -> str:
+        self._check_ptz_profile(request)
+        s = self.state
+        pt_moving = s.pan_target or s.tilt_target or s.pan_velocity or s.tilt_velocity
+        zoom_moving = s.zoom_target or s.zoom_velocity
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return ("<tptz:GetStatusResponse><tptz:PTZStatus>"
+                f"<tt:Position>{self._vector_xml(s.pan, s.tilt, s.zoom)}</tt:Position>"
+                f"<tt:MoveStatus><tt:PanTilt>{'MOVING' if pt_moving else 'IDLE'}</tt:PanTilt>"
+                f"<tt:Zoom>{'MOVING' if zoom_moving else 'IDLE'}</tt:Zoom></tt:MoveStatus>"
+                f"<tt:UtcTime>{now}</tt:UtcTime></tptz:PTZStatus></tptz:GetStatusResponse>")
+
+    def _require_power(self) -> None:
+        if not self.state.power:
+            raise OnvifFault("ter:Action", "camera in standby", sender=False)
+
+    def _cancel_timer(self) -> None:
+        if self._stop_timer is not None:
+            self._stop_timer.cancel()
+            self._stop_timer = None
+
+    @staticmethod
+    def _xy(elem: Optional[ET.Element]) -> Tuple[Optional[float], Optional[float]]:
+        if elem is None:
+            return None, None
+        x, y = elem.get("x"), elem.get("y")
+        return (float(x) if x is not None else None), (float(y) if y is not None else None)
+
+    @staticmethod
+    def _check_spaces(request: ET.Element, element: str, kind: str) -> None:
+        """PTZ spec 5.3/5.4.3: only spaces the node supports may be referenced."""
+        for axis, supported in SUPPORTED_SPACES[kind].items():
+            vector = find(request, element, axis)
+            space = vector.get("space") if vector is not None else None
+            if space is not None and space != supported:
+                raise invalid_arg("ter:SpaceNotSupported", f"{axis} space {space} is not supported")
+
+    def _speed_values(self, request: ET.Element) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        """Pan, tilt and zoom of <Speed> in the generic speed spaces [0, 1] (ter:InvalidSpeed outside)."""
+        self._check_spaces(request, "Speed", "speed")
+        sx, sy = self._xy(find(request, "Speed", "PanTilt"))
+        sz, _ = self._xy(find(request, "Speed", "Zoom"))
+        if any(v is not None and not 0.0 <= v <= 1.0 for v in (sx, sy, sz)):
+            raise invalid_arg("ter:InvalidSpeed", "speed outside the generic speed space [0, 1]")
+        return sx, sy, sz
+
+    def _speeds(self, request: ET.Element) -> Tuple[float, float, float]:
+        """Return pan speed step, tilt speed step and a zoom factor from <Speed>."""
+        sx, sy, sz = self._speed_values(request)
+        pan = st.PAN_SPEED_MAX * st.clamp(sx if sx is not None else 1.0, 0.0, 1.0)
+        tilt = st.TILT_SPEED_MAX * st.clamp(sy if sy is not None else 1.0, 0.0, 1.0)
+        return max(pan, 1.0), max(tilt, 1.0), st.clamp(sz if sz is not None else 1.0, 0.05, 1.0)
+
+    def continuous_move(self, request, host) -> str:
+        self._check_ptz_profile(request)
+        self._require_power()
+        s = self.state
+        self._check_spaces(request, "Velocity", "velocity")
+        vx, vy = self._xy(find(request, "Velocity", "PanTilt"))
+        vz, _ = self._xy(find(request, "Velocity", "Zoom"))
+        if any(v is not None and not -1.0 <= v <= 1.0 for v in (vx, vy, vz)):
+            raise invalid_arg("ter:InvalidVelocity", "velocity outside the generic space [-1, 1]")
+        timeout_text = text_of(request, "Timeout")
+        timeout = parse_duration(timeout_text) if timeout_text else DEFAULT_CONTINUOUS_TIMEOUT
+        if not TIMEOUT_RANGE[0] <= timeout <= TIMEOUT_RANGE[1]:
+            raise invalid_arg("ter:TimeoutNotSupported", f"timeout {timeout:g}s outside PT0.1S..PT60S")
+        vx, vy = vx or 0.0, vy or 0.0
+        if find(request, "Velocity", "PanTilt") is not None:
+            s.pan_target = s.tilt_target = None
+            s.pan_velocity = vx * st.PAN_SPEED_MAX * st.PAN_TILT_UNITS_PER_SPEED_STEP
+            s.tilt_velocity = vy * st.TILT_SPEED_MAX * st.PAN_TILT_UNITS_PER_SPEED_STEP
+        if vz is not None:
+            s.zoom_target = None
+            s.zoom_velocity = vz * 8 * st.ZOOM_UNITS_PER_SPEED_STEP
+
+        self._cancel_timer()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and timeout > 0:
+            self._stop_timer = loop.call_later(timeout, self._timeout_stop)
+
+        parts = [f"pan {vx:+.2f} tilt {vy:+.2f}"] if find(request, "Velocity", "PanTilt") is not None else []
+        if vz is not None:
+            parts.append(f"zoom {vz:+.2f}")
+        self.camera.record("ONVIF", f"ContinuousMove {' '.join(parts)} ({timeout:g}s)")
+        return "<tptz:ContinuousMoveResponse/>"
+
+    def _timeout_stop(self) -> None:
+        self._stop_timer = None
+        s = self.state
+        s.pan_velocity = s.tilt_velocity = s.zoom_velocity = 0.0
+        self.camera.record("ONVIF", "ContinuousMove timeout, stopped")
+
+    def stop(self, request, host) -> str:
+        self._check_ptz_profile(request)
+        stop_pt = (text_of(request, "PanTilt") or "true").lower() == "true"
+        stop_zoom = (text_of(request, "Zoom") or "true").lower() == "true"
+        s = self.state
+        if stop_pt:
+            s.stop_pan_tilt()
+        if stop_zoom:
+            s.zoom_velocity = 0.0
+            s.zoom_target = None
+        if stop_pt and stop_zoom:
+            self._cancel_timer()
+        what = " + ".join(n for n, f in (("pan/tilt", stop_pt), ("zoom", stop_zoom)) if f)
+        self.camera.record("ONVIF", f"Stop {what or 'nothing'}")
+        return "<tptz:StopResponse/>"
+
+    def _move_to(self, pan: Optional[float], tilt: Optional[float], zoom: Optional[float],
+                 speeds: Tuple[float, float, float]) -> None:
+        s = self.state
+        pan_speed, tilt_speed, zoom_factor = speeds
+        if pan is not None or tilt is not None:
+            s.move_pan_tilt_to(pan if pan is not None else s.pan,
+                               tilt if tilt is not None else s.tilt, pan_speed, tilt_speed)
+        if zoom is not None:
+            s.zoom_to(zoom)
+            s.zoom_target = (s.zoom_target[0], s.zoom_target[1] * zoom_factor)
+        if self.camera.instant:
+            s.finish_moves()
+
+    def absolute_move(self, request, host) -> str:
+        if not self.absolute:
+            raise OnvifFault("ter:ActionNotSupported/ter:OptionalActionNotSupported",
+                             "AbsoluteMove is not supported", sender=False)
+        self._check_ptz_profile(request)
+        self._require_power()
+        self._check_spaces(request, "Position", "position")
+        speeds = self._speeds(request)
+        x, y = self._xy(find(request, "Position", "PanTilt"))
+        z, _ = self._xy(find(request, "Position", "Zoom"))
+        if any(v is not None and not -1.0 <= v <= 1.0 for v in (x, y)) or (z is not None and not 0.0 <= z <= 1.0):
+            raise invalid_arg("ter:InvalidPosition", "position outside the generic space")
+        self._cancel_timer()
+        self._move_to(pan_from_onvif(x) if x is not None else None,
+                      tilt_from_onvif(y) if y is not None else None,
+                      zoom_from_onvif(z) if z is not None else None, speeds)
+        self.camera.record("ONVIF", "AbsoluteMove " + " ".join(
+            f"{n} {v:+.3f}" for n, v in (("pan", x), ("tilt", y), ("zoom", z)) if v is not None))
+        return "<tptz:AbsoluteMoveResponse/>"
+
+    def relative_move(self, request, host) -> str:
+        self._check_ptz_profile(request)
+        self._require_power()
+        self._check_spaces(request, "Translation", "translation")
+        speeds = self._speeds(request)
+        s = self.state
+        dx, dy = self._xy(find(request, "Translation", "PanTilt"))
+        dz, _ = self._xy(find(request, "Translation", "Zoom"))
+        # The generic translation spaces span [-1, 1]; a translation that leads past
+        # the end stops are clipped at the border (5.3.2), larger values are faults.
+        if any(v is not None and not -1.0 <= v <= 1.0 for v in (dx, dy, dz)):
+            raise invalid_arg("ter:InvalidTranslation", "translation outside the generic space [-1, 1]")
+        self._cancel_timer()
+        base_pan = s.pan_target[0] if s.pan_target else s.pan
+        base_tilt = s.tilt_target[0] if s.tilt_target else s.tilt
+        base_zoom = s.zoom_target[0] if s.zoom_target else s.zoom
+        self._move_to(
+            base_pan + dx * st.PAN_MAX if dx is not None else None,
+            tilt_from_onvif(tilt_to_onvif(base_tilt) + dy) if dy is not None else None,
+            base_zoom + dz * (st.ZOOM_MAX - st.ZOOM_MIN) if dz is not None else None,
+            speeds)
+        self.camera.record("ONVIF", "RelativeMove " + " ".join(
+            f"{n} {v:+.3f}" for n, v in (("pan", dx), ("tilt", dy), ("zoom", dz)) if v is not None))
+        return "<tptz:RelativeMoveResponse/>"
+
+    def goto_home(self, request, host) -> str:
+        self._check_ptz_profile(request)
+        self._require_power()
+        pan_speed, tilt_speed, _ = self._speeds(request)  # 5.5.1: Speed overrides the default
+        self._cancel_timer()
+        self.state.move_pan_tilt_to(*self.state.home_position, pan_speed, tilt_speed)
+        if self.camera.instant:
+            self.state.finish_moves()
+        self.camera.record("ONVIF", "GotoHomePosition")
+        return "<tptz:GotoHomePositionResponse/>"
+
+    def set_home(self, request, host) -> str:
+        self._check_ptz_profile(request)
+        self.state.set_home()
+        self.camera.record("ONVIF", "SetHomePosition")
+        return "<tptz:SetHomePositionResponse/>"
+
+    def get_presets(self, request, host) -> str:
+        self._check_ptz_profile(request)
+        items = "".join(
+            f'<tptz:Preset token="{n}"><tt:Name>{escape(p.name or f"Preset {n}")}</tt:Name>'
+            f"<tt:PTZPosition>{self._vector_xml(p.pan, p.tilt, p.zoom)}</tt:PTZPosition></tptz:Preset>"
+            for n, p in sorted(self.state.presets.items()))
+        return f"<tptz:GetPresetsResponse>{items}</tptz:GetPresetsResponse>"
+
+    def _preset_number(self, token: Optional[str]) -> int:
+        try:
+            number = int(token)
+        except (TypeError, ValueError):
+            raise invalid_arg("ter:NoToken", f"unknown preset {token}")
+        if not 0 <= number < st.PRESET_COUNT:
+            raise invalid_arg("ter:NoToken", f"unknown preset {token}")
+        return number
+
+    def set_preset(self, request, host) -> str:
+        self._check_ptz_profile(request)
+        if self.state.moving:  # PTZ spec 5.4.1: fails while the unit moves
+            raise action_failed("ter:MovingPTZ", "preset cannot be set while the camera moves")
+        token = text_of(request, "PresetToken")
+        if token is None:
+            number = self.state.free_preset_number()
+            if number is None:
+                raise action_failed("ter:TooManyPresets", "no free preset slot")
+        else:
+            number = self._preset_number(token)
+            if number not in self.state.presets:  # 5.4.1: the token must name an existing preset
+                raise invalid_arg("ter:NoToken", f"preset {token} does not exist")
+        self.state.save_preset(number, text_of(request, "PresetName"))
+        self.camera.record("ONVIF", f"SetPreset {number}")
+        return f"<tptz:SetPresetResponse><tptz:PresetToken>{number}</tptz:PresetToken></tptz:SetPresetResponse>"
+
+    def goto_preset(self, request, host) -> str:
+        self._check_ptz_profile(request)
+        self._require_power()
+        number = self._preset_number(text_of(request, "PresetToken"))
+        if number not in self.state.presets:
+            raise invalid_arg("ter:NoToken", f"preset {number} not set")
+        sx, _, sz = self._speed_values(request)
+        speed = next((v for v in (sx, sz) if v is not None), None)
+        self._cancel_timer()
+        self.state.recall_preset(number, speed)
+        if self.camera.instant:
+            self.state.finish_moves()
+        self.camera.record("ONVIF", f"GotoPreset {number}")
+        return "<tptz:GotoPresetResponse/>"
+
+    def remove_preset(self, request, host) -> str:
+        self._check_ptz_profile(request)
+        number = self._preset_number(text_of(request, "PresetToken"))
+        if number not in self.state.presets:
+            raise invalid_arg("ter:NoToken", f"preset {number} not set")
+        self.state.clear_preset(number)
+        self.camera.record("ONVIF", f"RemovePreset {number}")
+        return "<tptz:RemovePresetResponse/>"
+
+class ImagingService:
+    """Imaging service operations (``timg`` namespace): white balance only."""
+
+    def imaging_actions(self) -> Dict[str, Callable[[ET.Element, str], str]]:
+        return {
+            "GetImagingSettings": self.get_imaging_settings,
+            "SetImagingSettings": self.set_imaging_settings,
+            "GetOptions": self.get_options,
+            "GetMoveOptions": self.get_move_options,
+            "GetStatus": self.get_imaging_status,
+        }
+
+    def _check_source(self, request: ET.Element) -> None:
+        token = text_of(request, "VideoSourceToken")
+        if token != IMAGING_SOURCE_TOKEN:
+            raise invalid_arg("ter:NoSource", f"unknown video source {token}")
+
+    def _white_balance_xml(self) -> str:
+        s = self.state
+        mode = "AUTO" if s.white_balance in st.WB_AUTO_MODES else "MANUAL"
+        return ("<tt:WhiteBalance>"
+                f"<tt:Mode>{mode}</tt:Mode>"
+                f"<tt:CrGain>{_f(s.red_gain / WB_ONVIF_UNIT)}</tt:CrGain>"
+                f"<tt:CbGain>{_f(s.blue_gain / WB_ONVIF_UNIT)}</tt:CbGain>"
+                "</tt:WhiteBalance>")
+
+    def get_imaging_settings(self, request, host) -> str:
+        self._check_source(request)
+        return ("<timg:GetImagingSettingsResponse><timg:ImagingSettings>"
+                f"{self._white_balance_xml()}</timg:ImagingSettings></timg:GetImagingSettingsResponse>")
+
+    @staticmethod
+    def _gain(request: ET.Element, tag: str) -> Optional[int]:
+        text = text_of(request, "WhiteBalance", tag)
+        if text is None:
+            return None
+        value = float(text)
+        if not 0 <= value <= st.WB_GAIN_MAX / WB_ONVIF_UNIT:
+            raise invalid_arg("ter:SettingsInvalid", f"{tag} outside 0..{_f(st.WB_GAIN_MAX / WB_ONVIF_UNIT)}")
+        return round(value * WB_ONVIF_UNIT)
+
+    def set_imaging_settings(self, request, host) -> str:
+        self._check_source(request)
+        mode = text_of(request, "WhiteBalance", "Mode")
+        if mode not in (None, "AUTO", "MANUAL"):
+            raise invalid_arg("ter:SettingsInvalid", f"unknown white balance mode {mode}")
+        red, blue = self._gain(request, "CrGain"), self._gain(request, "CbGain")
+        s = self.state
+        if mode == "AUTO" and s.white_balance not in st.WB_AUTO_MODES:
+            s.set_white_balance("auto")
+        if mode == "MANUAL" and s.white_balance != "manual":
+            s.set_white_balance("manual")
+        s.set_gains(red if red is not None else s.red_gain, blue if blue is not None else s.blue_gain)
+        self.camera.record("ONVIF", f"SetImagingSettings white balance {s.white_balance}")
+        return "<timg:SetImagingSettingsResponse/>"
+
+    def get_move_options(self, request, host) -> str:
+        """No remote focus: the imaging spec (5.3.2) requires an empty answer."""
+        self._check_source(request)
+        return "<timg:GetMoveOptionsResponse><timg:MoveOptions/></timg:GetMoveOptionsResponse>"
+
+    def get_imaging_status(self, request, host) -> str:
+        self._check_source(request)
+        return "<timg:GetStatusResponse><timg:Status/></timg:GetStatusResponse>"
+
+    def get_options(self, request, host) -> str:
+        self._check_source(request)
+        low, high = _f(0), _f(st.WB_GAIN_MAX / WB_ONVIF_UNIT)
+        return ("<timg:GetOptionsResponse><timg:ImagingOptions><tt:WhiteBalance>"
+                "<tt:Mode>AUTO</tt:Mode><tt:Mode>MANUAL</tt:Mode>"
+                f"<tt:YrGain><tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max></tt:YrGain>"
+                f"<tt:YbGain><tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max></tt:YbGain>"
+                "</tt:WhiteBalance></timg:ImagingOptions></timg:GetOptionsResponse>")
+
+class OnvifCamera(DeviceService, MediaService, PtzService, ImagingService):
+    """Answers ONVIF SOAP requests for one simulated camera.
+
+    The operations live in the service mixins; this class holds the shared state,
+    the authentication and the SOAP dispatch.
+    """
 
     def __init__(self, camera: ViscaCamera, name: str = "PTZ-Simulator",
                  username: Optional[str] = None, password: Optional[str] = None,
@@ -228,96 +1119,15 @@ class OnvifCamera:
         self.configurable_scopes = [f"onvif://www.onvif.org/name/{urllib.parse.quote(name)}",
                                     "onvif://www.onvif.org/location/simulator"]
         self._actions: Dict[str, Callable[[ET.Element, str], str]] = {
-            "GetSystemDateAndTime": self.get_system_date_and_time,
-            "GetCapabilities": self.get_capabilities,
-            "GetServices": self.get_services,
-            "GetDeviceInformation": self.get_device_information,
-            "GetProfiles": self.get_profiles,
-            "GetProfile": self.get_profile,
-            "GetStreamUri": self.get_stream_uri,
-            "GetNodes": self.get_nodes,
-            "GetNode": self.get_node,
-            "GetConfigurations": self.get_configurations,
-            "GetConfiguration": self.get_configuration,
-            "GetConfigurationOptions": self.get_configuration_options,
-            "SetConfiguration": self.set_configuration,
-            "GetStatus": self.get_status,
-            "ContinuousMove": self.continuous_move,
-            "AbsoluteMove": self.absolute_move,
-            "RelativeMove": self.relative_move,
-            "Stop": self.stop,
-            "GotoHomePosition": self.goto_home,
-            "SetHomePosition": self.set_home,
-            "GetPresets": self.get_presets,
-            "SetPreset": self.set_preset,
-            "GotoPreset": self.goto_preset,
-            "RemovePreset": self.remove_preset,
-            "GetVideoSources": self.get_video_sources,
-            "GetWsdlUrl": self.get_wsdl_url,
-            "GetCompatibleConfigurations": self.get_compatible_ptz_configurations,
-            # media: video source / encoder configurations, profile composition
-            "GetVideoSourceConfigurations": self.get_video_source_configurations,
-            "GetVideoSourceConfiguration": self.get_video_source_configuration,
-            "GetCompatibleVideoSourceConfigurations": self.get_compatible_video_source_configurations,
-            "GetVideoSourceConfigurationOptions": self.get_video_source_configuration_options,
-            "SetVideoSourceConfiguration": self.set_video_source_configuration,
-            "GetVideoEncoderConfigurations": self.get_video_encoder_configurations,
-            "GetVideoEncoderConfiguration": self.get_video_encoder_configuration,
-            "GetCompatibleVideoEncoderConfigurations": self.get_compatible_video_encoder_configurations,
-            "GetVideoEncoderConfigurationOptions": self.get_video_encoder_configuration_options,
-            "SetVideoEncoderConfiguration": self.set_video_encoder_configuration,
-            "GetGuaranteedNumberOfVideoEncoderInstances": self.get_guaranteed_encoder_instances,
-            "AddVideoSourceConfiguration": self._add_config("source", VIDEO_SOURCE_CONFIG_TOKEN),
-            "AddVideoEncoderConfiguration": self._add_config("encoder", VIDEO_ENCODER_CONFIG_TOKEN),
-            "AddPTZConfiguration": self._add_config("ptz", PTZ_CONFIG_TOKEN),
-            "RemoveVideoSourceConfiguration": self._remove_config("source"),
-            "RemoveVideoEncoderConfiguration": self._remove_config("encoder"),
-            "RemovePTZConfiguration": self._remove_config("ptz"),
-            # device management
-            "GetScopes": self.get_scopes,
-            "SetScopes": self.set_scopes,
-            "AddScopes": self.add_scopes,
-            "RemoveScopes": self.remove_scopes,
-            "GetDiscoveryMode": self.get_discovery_mode,
-            "SetDiscoveryMode": self.set_discovery_mode,
-            "GetHostname": self.get_hostname,
-            "SetHostname": self.set_hostname,
-            "GetNetworkInterfaces": self.get_network_interfaces,
-            "GetDNS": self.get_dns,
-            "GetNTP": self.get_ntp,
-            "GetNetworkProtocols": self.get_network_protocols,
-            "GetNetworkDefaultGateway": self.get_network_default_gateway,
-            "GetUsers": self.get_users,
-            "GetEndpointReference": self.get_endpoint_reference,
-            "SystemReboot": self.system_reboot,
-            "SetNetworkInterfaces": self._accept("SetNetworkInterfaces",
-                                                 "<tds:RebootNeeded>false</tds:RebootNeeded>"),
-            "SetDNS": self._accept("SetDNS"),
-            "SetNTP": self._accept("SetNTP"),
-            "SetNetworkProtocols": self._accept("SetNetworkProtocols"),
-            "SetNetworkDefaultGateway": self._accept("SetNetworkDefaultGateway"),
-            "SetSystemDateAndTime": self._accept("SetSystemDateAndTime"),
-            "SetSystemFactoryDefault": self._accept("SetSystemFactoryDefault"),
-        }
+            **self.device_actions(), **self.media_actions(), **self.ptz_actions()}
         # The imaging service reuses operation names of the PTZ service (GetStatus, Stop,
         # Move), so requests in its namespace are dispatched separately.
-        self._imaging_actions: Dict[str, Callable[[ET.Element, str], str]] = {
-            "GetImagingSettings": self.get_imaging_settings,
-            "SetImagingSettings": self.set_imaging_settings,
-            "GetOptions": self.get_options,
-            "GetMoveOptions": self.get_move_options,
-            "GetStatus": self.get_imaging_status,
-        }
+        self._imaging_actions: Dict[str, Callable[[ET.Element, str], str]] = self.imaging_actions()
 
     @property
     def state(self) -> st.CameraState:
         return self.camera.state
 
-    @property
-    def _name_xml(self) -> str:
-        return escape(self.name)
-
-    # ------------------------------------------------------------- dispatch
     def handle(self, xml_body: bytes, host: str, authorization: Optional[str] = None,
                method: str = "POST", uri: str = "/onvif/device_service") -> Tuple[int, str]:
         """Handle one SOAP request; returns (HTTP status, response XML).
@@ -341,13 +1151,12 @@ class OnvifCamera:
         try:
             if action not in PRE_AUTH:
                 self._check_auth(root, authorization, method, uri)
-            if action == "GetServiceCapabilities":
-                # exists in every service; the request namespace says which one
-                handler = self._service_capabilities_handler(request)
-            elif request.tag.startswith("{" + NS["timg"] + "}"):
+            if request.tag.startswith("{" + NS["timg"] + "}"):
                 handler = self._imaging_actions.get(action)
             else:
                 handler = self._actions.get(action)
+            if action == "GetServiceCapabilities":
+                handler = self._service_capabilities_handler(request)
             if handler is None:
                 raise OnvifFault("ter:ActionNotSupported", f"{action} is not supported", sender=False)
             response = handler(request, host)
@@ -436,812 +1245,15 @@ class OnvifCamera:
         self._check_profile(request)
         if not self.profile_configs["ptz"]:
             raise invalid_arg("ter:NoPTZProfile", "profile has no PTZ configuration")
-
-    # ------------------------------------------------------------- device
-    def get_system_date_and_time(self, request, host) -> str:
-        now = datetime.now(timezone.utc)
-        return response("tds", "GetSystemDateAndTime", "<tds:SystemDateAndTime>"
-                "<tt:DateTimeType>Manual</tt:DateTimeType><tt:DaylightSavings>false</tt:DaylightSavings>"
-                "<tt:TimeZone><tt:TZ>UTC0</tt:TZ></tt:TimeZone><tt:UTCDateTime>"
-                f"<tt:Time><tt:Hour>{now.hour}</tt:Hour><tt:Minute>{now.minute}</tt:Minute>"
-                f"<tt:Second>{now.second}</tt:Second></tt:Time>"
-                f"<tt:Date><tt:Year>{now.year}</tt:Year><tt:Month>{now.month}</tt:Month>"
-                f"<tt:Day>{now.day}</tt:Day></tt:Date>"
-                "</tt:UTCDateTime></tds:SystemDateAndTime>")
-
-    def get_capabilities(self, request, host) -> str:
-        self.camera.record("ONVIF", "GetCapabilities")
-        base = f"http://{host}/onvif"
-        return response("tds", "GetCapabilities", "<tds:Capabilities>"
-                f"<tt:Device><tt:XAddr>{base}/device_service</tt:XAddr></tt:Device>"
-                f"<tt:Imaging><tt:XAddr>{base}/imaging_service</tt:XAddr></tt:Imaging>"
-                f"<tt:Media><tt:XAddr>{base}/media_service</tt:XAddr><tt:StreamingCapabilities>"
-                "<tt:RTPMulticast>false</tt:RTPMulticast><tt:RTP_TCP>true</tt:RTP_TCP>"
-                "<tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP></tt:StreamingCapabilities></tt:Media>"
-                f"<tt:PTZ><tt:XAddr>{base}/ptz_service</tt:XAddr></tt:PTZ>"
-                "</tds:Capabilities>")
-
-    def get_services(self, request, host) -> str:
-        base = f"http://{host}/onvif"
-        include = (text_of(request, "IncludeCapability") or "false").lower() == "true"
-        services = [("tds", "device_service"), ("trt", "media_service"), ("tptz", "ptz_service"),
-                    ("timg", "imaging_service")]
-        items = "".join(
-            f"<tds:Service><tds:Namespace>{NS[prefix]}</tds:Namespace><tds:XAddr>{base}/{path}</tds:XAddr>"
-            + (f"<tds:Capabilities>{self._service_capabilities(prefix)}</tds:Capabilities>" if include else "")
-            + "<tds:Version><tt:Major>2</tt:Major><tt:Minor>0</tt:Minor></tds:Version></tds:Service>"
-            for prefix, path in services)
-        return response("tds", "GetServices", items)
-
-    def _service_capabilities(self, prefix: str) -> str:
-        if prefix == "tds":
-            return ('<tds:Capabilities><tds:Network/>'
-                    f'<tds:Security UsernameToken="{str(self.auth != "digest").lower()}" '
-                    f'HttpDigest="{str(self.auth != "wsse").lower()}"/>'
-                    '<tds:System DiscoveryResolve="true" DiscoveryBye="true"/></tds:Capabilities>')
-        if prefix == "trt":
-            return ('<trt:Capabilities SnapshotUri="false"><trt:ProfileCapabilities MaximumNumberOfProfiles="1"/>'
-                    '<trt:StreamingCapabilities RTP_TCP="true" RTP_RTSP_TCP="true"/></trt:Capabilities>')
-        if prefix == "timg":
-            return "<timg:Capabilities/>"
-        return ('<tptz:Capabilities EFlip="false" Reverse="false" GetCompatibleConfigurations="true" '
-                'MoveStatus="true" StatusPosition="true"/>')
-
-    def _service_capabilities_handler(self, request: ET.Element):
-        """GetServiceCapabilities exists in every service; the namespace says which one."""
-        prefix = {v: k for k, v in NS.items()}.get(request.tag[1:].split("}")[0], "tds")
-        if prefix not in ("tds", "trt", "tptz", "timg"):
-            return None
-
-        def handler(request, host) -> str:
-            return response(prefix, "GetServiceCapabilities", self._service_capabilities(prefix))
-        return handler
-
-    def get_wsdl_url(self, request, host) -> str:
-        return response("tds", "GetWsdlUrl", "<tds:WsdlUrl>http://www.onvif.org/</tds:WsdlUrl>"
-                "")
-
-    def get_device_information(self, request, host) -> str:
-        return response("tds", "GetDeviceInformation", "<tds:Manufacturer>ptzsim</tds:Manufacturer>"
-                f"<tds:Model>{self._name_xml}</tds:Model><tds:FirmwareVersion>0.1.0</tds:FirmwareVersion>"
-                f"<tds:SerialNumber>{self.serial}</tds:SerialNumber><tds:HardwareId>ptzsim</tds:HardwareId>"
-                "")
-
-    # ---------------------------------------- device: scopes and network
-    @property
-    def scopes(self) -> list:
-        return self.fixed_scopes + self.configurable_scopes
-
-    def get_scopes(self, request, host) -> str:
-        items = "".join(f"<tds:Scopes><tt:ScopeDef>{kind}</tt:ScopeDef><tt:ScopeItem>{escape(scope)}</tt:ScopeItem>"
-                        "</tds:Scopes>"
-                        for kind, scopes in (("Fixed", self.fixed_scopes), ("Configurable", self.configurable_scopes))
-                        for scope in scopes)
-        return response("tds", "GetScopes", items)
-
-    @staticmethod
-    def _scope_items(request: ET.Element, tag: str) -> list:
-        return [e.text.strip() for e in request.iter() if _local(e.tag) == tag and e.text and e.text.strip()]
-
-    def _check_scope_count(self, configurable: list) -> None:
-        if len(self.fixed_scopes) + len(configurable) > MAX_SCOPES:
-            raise action_failed("ter:TooManyScopes", f"more than {MAX_SCOPES} scopes")
-
-    def set_scopes(self, request, host) -> str:
-        """Core 8.3.15: replaces all configurable scopes, fixed ones stay."""
-        scopes = self._scope_items(request, "Scopes")
-        self._check_scope_count(scopes)
-        self.configurable_scopes = scopes
-        self.camera.record("ONVIF", f"SetScopes ({len(scopes)})")
-        return response("tds", "SetScopes")
-
-    def add_scopes(self, request, host) -> str:
-        new = [s for s in self._scope_items(request, "ScopeItem") if s not in self.scopes]
-        self._check_scope_count(self.configurable_scopes + new)
-        self.configurable_scopes += new
-        self.camera.record("ONVIF", f"AddScopes ({len(new)})")
-        return response("tds", "AddScopes")
-
-    def remove_scopes(self, request, host) -> str:
-        items = self._scope_items(request, "ScopeItem")
-        for scope in items:
-            if scope in self.fixed_scopes:
-                raise OnvifFault("ter:OperationProhibited/ter:FixedScope", f"{scope} is fixed")
-            if scope not in self.configurable_scopes:
-                raise invalid_arg("ter:NoScope", f"{scope} does not exist")
-        self.configurable_scopes = [s for s in self.configurable_scopes if s not in items]
-        self.camera.record("ONVIF", f"RemoveScopes ({len(items)})")
-        removed = "".join(f"<tds:ScopeItem>{escape(s)}</tds:ScopeItem>" for s in items)
-        return response("tds", "RemoveScopes", removed)
-
-    def get_discovery_mode(self, request, host) -> str:
-        mode = "Discoverable" if self.discoverable else "NonDiscoverable"
-        return response("tds", "GetDiscoveryMode", f"<tds:DiscoveryMode>{mode}</tds:DiscoveryMode>")
-
-    def set_discovery_mode(self, request, host) -> str:
-        mode = text_of(request, "DiscoveryMode")
-        if mode not in ("Discoverable", "NonDiscoverable"):
-            raise OnvifFault("ter:InvalidArgVal", f"unknown discovery mode {mode}")
-        self.discoverable = mode == "Discoverable"
-        self.camera.record("ONVIF", f"SetDiscoveryMode {mode}")
-        return response("tds", "SetDiscoveryMode")
-
-    def get_hostname(self, request, host) -> str:
-        return response("tds", "GetHostname", "<tds:HostnameInformation><tt:FromDHCP>false</tt:FromDHCP>"
-                f"<tt:Name>{escape(self.hostname)}</tt:Name></tds:HostnameInformation>")
-
-    def set_hostname(self, request, host) -> str:
-        name = text_of(request, "Name") or ""
-        # Core 8.2.2: RFC 1123 host names; anything else is ter:InvalidHostname
-        if not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?", name):
-            raise invalid_arg("ter:InvalidHostname", f"invalid host name {name!r}")
-        self.hostname = name
-        self.camera.record("ONVIF", f"SetHostname {name}")
-        return response("tds", "SetHostname")
-
-    @staticmethod
-    def _host_ip(host: str) -> str:
-        address = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
-        if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", address) and not address.startswith("0."):
-            return address
-        return _local_ip_for(DISCOVERY_GROUP)
-
-    def get_network_interfaces(self, request, host) -> str:
-        mac = ":".join(["02"] + [self.serial[i:i + 2].lower() for i in range(2, 12, 2)])
-        return response("tds", "GetNetworkInterfaces",
-                        '<tds:NetworkInterfaces token="eth0">'
-                        "<tt:Enabled>true</tt:Enabled><tt:Info><tt:Name>eth0</tt:Name>"
-                        f"<tt:HwAddress>{mac}</tt:HwAddress><tt:MTU>1500</tt:MTU></tt:Info>"
-                        "<tt:IPv4><tt:Enabled>true</tt:Enabled><tt:Config><tt:Manual>"
-                        f"<tt:Address>{self._host_ip(host)}</tt:Address><tt:PrefixLength>24</tt:PrefixLength></tt:Manual>"
-                        "<tt:DHCP>false</tt:DHCP></tt:Config></tt:IPv4>"
-                        "</tds:NetworkInterfaces>")
-
-    def get_dns(self, request, host) -> str:
-        return response("tds", "GetDNS", "<tds:DNSInformation><tt:FromDHCP>false</tt:FromDHCP>"
-                "</tds:DNSInformation>")
-
-    def get_ntp(self, request, host) -> str:
-        return response("tds", "GetNTP", "<tds:NTPInformation><tt:FromDHCP>false</tt:FromDHCP>"
-                "</tds:NTPInformation>")
-
-    def get_network_protocols(self, request, host) -> str:
-        port = host.rsplit(":", 1)[1] if host.count(":") == 1 else "80"
-        return response("tds", "GetNetworkProtocols", "<tds:NetworkProtocols><tt:Name>HTTP</tt:Name>"
-                f"<tt:Enabled>true</tt:Enabled><tt:Port>{escape(port)}</tt:Port></tds:NetworkProtocols>"
-                "")
-
-    def get_network_default_gateway(self, request, host) -> str:
-        return response("tds", "GetNetworkDefaultGateway", "<tds:NetworkGateway/>"
-                "")
-
-    def get_users(self, request, host) -> str:
-        user = (f"<tds:User><tt:Username>{escape(self.username)}</tt:Username>"
-                "<tt:UserLevel>Administrator</tt:UserLevel></tds:User>") if self.username else ""
-        return response("tds", "GetUsers", user)
-
-    def get_endpoint_reference(self, request, host) -> str:
-        return response("tds", "GetEndpointReference", f"<tds:GUID>urn:uuid:{self.endpoint_uuid}</tds:GUID>"
-                "")
-
-    def system_reboot(self, request, host) -> str:
-        self.camera.record("ONVIF", "SystemReboot (simulated, nothing restarts)")
-        return response("tds", "SystemReboot", "<tds:Message>Rebooting in 0 seconds</tds:Message>")
-
-    def _accept(self, action: str, body: str = ""):
-        """Settings a simulator cannot apply (network, clock, factory reset): accepted, unchanged."""
-        def handler(request, host) -> str:
-            self.camera.record("ONVIF", f"{action} (accepted, not changed)")
-            return response("tds", action, body)
-        return handler
-
-    # -------------------------------------------------------------- media
-    def _profile_xml(self, tag: str = "trt:Profiles") -> str:
-        c = self.profile_configs
-        return (f'<{tag} token="{PROFILE_TOKEN}" fixed="true"><tt:Name>{self._name_xml}</tt:Name>'
-                + (self._video_source_config_xml("tt:VideoSourceConfiguration") if c["source"] else "")
-                + (self._video_encoder_config_xml("tt:VideoEncoderConfiguration") if c["encoder"] else "")
-                + (self._configuration_xml("tt:PTZConfiguration") if c["ptz"] else "")
-                + f"</{tag}>")
-
-    def get_profiles(self, request, host) -> str:
-        self.camera.record("ONVIF", "GetProfiles")
-        return response("trt", "GetProfiles", self._profile_xml())
-
-    def get_profile(self, request, host) -> str:
-        self._check_profile(request)
-        return response("trt", "GetProfile", self._profile_xml('trt:Profile'))
-
-    def get_stream_uri(self, request, host) -> str:
-        self._check_profile(request)
-        if not (self.profile_configs["source"] and self.profile_configs["encoder"]):
-            raise action_failed("ter:IncompleteConfiguration", "profile has no video source/encoder")
-        uri = self.rtsp_uri or f"rtsp://{host.split(':')[0]}:554/stream"
-        return response("trt", "GetStreamUri", "<trt:MediaUri>"
-                f"<tt:Uri>{escape(uri)}</tt:Uri><tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>"
-                "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot><tt:Timeout>PT0S</tt:Timeout>"
-                "</trt:MediaUri>")
-
-    # ------------------------------------------- media: source and encoder
-    def _video_source_config_xml(self, tag: str) -> str:
-        return (f'<{tag} token="{VIDEO_SOURCE_CONFIG_TOKEN}"><tt:Name>VideoSource</tt:Name>'
-                f"<tt:UseCount>{int(self.profile_configs['source'])}</tt:UseCount>"
-                f"<tt:SourceToken>{IMAGING_SOURCE_TOKEN}</tt:SourceToken>"
-                f'<tt:Bounds x="0" y="0" width="{VIDEO_WIDTH}" height="{VIDEO_HEIGHT}"/></{tag}>')
-
-    def _video_encoder_config_xml(self, tag: str) -> str:
-        e = self.encoder
-        return (f'<{tag} token="{VIDEO_ENCODER_CONFIG_TOKEN}"><tt:Name>H264</tt:Name>'
-                f"<tt:UseCount>{int(self.profile_configs['encoder'])}</tt:UseCount>"
-                "<tt:Encoding>H264</tt:Encoding>"
-                f"<tt:Resolution><tt:Width>{e['width']}</tt:Width><tt:Height>{e['height']}</tt:Height></tt:Resolution>"
-                f"<tt:Quality>{_f(e['quality'])}</tt:Quality>"
-                f"<tt:RateControl><tt:FrameRateLimit>{e['framerate']}</tt:FrameRateLimit>"
-                f"<tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>{e['bitrate']}</tt:BitrateLimit>"
-                "</tt:RateControl>"
-                f"<tt:H264><tt:GovLength>{e['gov']}</tt:GovLength><tt:H264Profile>{e['profile']}</tt:H264Profile></tt:H264>"
-                "<tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>0.0.0.0</tt:IPv4Address>"
-                "</tt:Address><tt:Port>0</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast>"
-                f"<tt:SessionTimeout>PT60S</tt:SessionTimeout></{tag}>")
-
-    @staticmethod
-    def _check_token(request: ET.Element, expected: str, tag: str = "ConfigurationToken",
-                     optional: bool = False) -> None:
-        token = text_of(request, tag)
-        if token != expected and not (optional and token is None):
-            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
-
-    def get_video_source_configurations(self, request, host) -> str:
-        return response("trt", "GetVideoSourceConfigurations", ""
-                f"{self._video_source_config_xml('trt:Configurations')}")
-
-    def get_video_source_configuration(self, request, host) -> str:
-        self._check_token(request, VIDEO_SOURCE_CONFIG_TOKEN)
-        return response("trt", "GetVideoSourceConfiguration", ""
-                f"{self._video_source_config_xml('trt:Configuration')}")
-
-    def get_compatible_video_source_configurations(self, request, host) -> str:
-        self._check_profile(request)
-        return response("trt", "GetCompatibleVideoSourceConfigurations", ""
-                f"{self._video_source_config_xml('trt:Configurations')}"
-                "")
-
-    def get_video_source_configuration_options(self, request, host) -> str:
-        self._check_token(request, VIDEO_SOURCE_CONFIG_TOKEN, optional=True)
-        self._check_profile(request)
-
-        def rng(low, high):
-            return f"<tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max>"
-        return response("trt", "GetVideoSourceConfigurationOptions", "<trt:Options><tt:BoundsRange>"
-                f"<tt:XRange>{rng(0, 0)}</tt:XRange><tt:YRange>{rng(0, 0)}</tt:YRange>"
-                f"<tt:WidthRange>{rng(VIDEO_WIDTH, VIDEO_WIDTH)}</tt:WidthRange>"
-                f"<tt:HeightRange>{rng(VIDEO_HEIGHT, VIDEO_HEIGHT)}</tt:HeightRange></tt:BoundsRange>"
-                f"<tt:VideoSourceTokensAvailable>{IMAGING_SOURCE_TOKEN}</tt:VideoSourceTokensAvailable>"
-                "</trt:Options>")
-
-    def set_video_source_configuration(self, request, host) -> str:
-        config = find(request, "Configuration")
-        token = config.get("token") if config is not None else None
-        if token != VIDEO_SOURCE_CONFIG_TOKEN:
-            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
-        if text_of(config, "SourceToken") not in (None, IMAGING_SOURCE_TOKEN):
-            raise invalid_arg("ter:ConfigModify", "unknown video source")
-        bounds = find(config, "Bounds")
-        if bounds is not None and (bounds.get("width"), bounds.get("height")) != (str(VIDEO_WIDTH), str(VIDEO_HEIGHT)):
-            raise invalid_arg("ter:ConfigModify", f"bounds must be {VIDEO_WIDTH}x{VIDEO_HEIGHT}")
-        self.camera.record("ONVIF", "SetVideoSourceConfiguration")
-        return response("trt", "SetVideoSourceConfiguration")
-
-    def get_video_encoder_configurations(self, request, host) -> str:
-        return response("trt", "GetVideoEncoderConfigurations", ""
-                f"{self._video_encoder_config_xml('trt:Configurations')}")
-
-    def get_video_encoder_configuration(self, request, host) -> str:
-        self._check_token(request, VIDEO_ENCODER_CONFIG_TOKEN)
-        return response("trt", "GetVideoEncoderConfiguration", ""
-                f"{self._video_encoder_config_xml('trt:Configuration')}")
-
-    def get_compatible_video_encoder_configurations(self, request, host) -> str:
-        self._check_profile(request)
-        return response("trt", "GetCompatibleVideoEncoderConfigurations", ""
-                f"{self._video_encoder_config_xml('trt:Configurations')}"
-                "")
-
-    def get_video_encoder_configuration_options(self, request, host) -> str:
-        self._check_token(request, VIDEO_ENCODER_CONFIG_TOKEN, optional=True)
-        self._check_profile(request)
-        resolutions = "".join(f"<tt:ResolutionsAvailable><tt:Width>{w}</tt:Width><tt:Height>{h}</tt:Height>"
-                              "</tt:ResolutionsAvailable>" for w, h in ENCODER_RESOLUTIONS)
-        profiles = "".join(f"<tt:H264ProfilesSupported>{p}</tt:H264ProfilesSupported>"
-                           for p in ENCODER_H264_PROFILES)
-        return response("trt", "GetVideoEncoderConfigurationOptions", "<trt:Options>"
-                f"<tt:QualityRange><tt:Min>{ENCODER_QUALITY_RANGE[0]}</tt:Min><tt:Max>{ENCODER_QUALITY_RANGE[1]}"
-                f"</tt:Max></tt:QualityRange><tt:H264>{resolutions}"
-                f"<tt:GovLengthRange><tt:Min>{ENCODER_GOV_RANGE[0]}</tt:Min><tt:Max>{ENCODER_GOV_RANGE[1]}</tt:Max>"
-                f"</tt:GovLengthRange><tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>{VIDEO_FRAMERATE}</tt:Max>"
-                "</tt:FrameRateRange><tt:EncodingIntervalRange><tt:Min>1</tt:Min><tt:Max>1</tt:Max>"
-                f"</tt:EncodingIntervalRange>{profiles}</tt:H264></trt:Options>"
-                "")
-
-    def set_video_encoder_configuration(self, request, host) -> str:
-        """Store the settings the options allow; anything else is ter:ConfigModify (Media 5.5.5)."""
-        config = find(request, "Configuration")
-        token = config.get("token") if config is not None else None
-        if token != VIDEO_ENCODER_CONFIG_TOKEN:
-            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
-        new = dict(self.encoder)
-
-        def number(*path, cast=int):
-            value = text_of(config, *path)
-            return cast(value) if value is not None else None
-        encoding = text_of(config, "Encoding")
-        width, height = number("Resolution", "Width"), number("Resolution", "Height")
-        quality = number("Quality", cast=float)
-        framerate, bitrate = number("RateControl", "FrameRateLimit"), number("RateControl", "BitrateLimit")
-        gov, profile = number("H264", "GovLength"), text_of(config, "H264", "H264Profile")
-        if encoding not in (None, "H264"):
-            raise invalid_arg("ter:ConfigModify", "only H264 is supported")
-        if width is not None or height is not None:
-            if (width, height) not in ENCODER_RESOLUTIONS:
-                raise invalid_arg("ter:ConfigModify", f"resolution {width}x{height} not supported")
-            new["width"], new["height"] = width, height
-        checks = (("quality", quality, ENCODER_QUALITY_RANGE), ("framerate", framerate, (1, VIDEO_FRAMERATE)),
-                  ("bitrate", bitrate, (1, 1 << 20)), ("gov", gov, ENCODER_GOV_RANGE))
-        for key, value, (low, high) in checks:
-            if value is not None:
-                if not low <= value <= high:
-                    raise invalid_arg("ter:ConfigModify", f"{key} {value} outside {low}..{high}")
-                new[key] = value
-        if profile is not None:
-            if profile not in ENCODER_H264_PROFILES:
-                raise invalid_arg("ter:ConfigModify", f"H264 profile {profile} not supported")
-            new["profile"] = profile
-        self.encoder = new
-        self.camera.record("ONVIF", f"SetVideoEncoderConfiguration {new['width']}x{new['height']} "
-                                    f"{new['framerate']} fps")
-        return response("trt", "SetVideoEncoderConfiguration")
-
-    def get_guaranteed_encoder_instances(self, request, host) -> str:
-        self._check_token(request, VIDEO_SOURCE_CONFIG_TOKEN)
-        return response("trt", "GetGuaranteedNumberOfVideoEncoderInstances", "<trt:TotalNumber>1</trt:TotalNumber>"
-                "<trt:H264>1</trt:H264>")
-
-    _CONFIG_ACTIONS = {"source": "VideoSourceConfiguration", "encoder": "VideoEncoderConfiguration",
-                       "ptz": "PTZConfiguration"}
-
-    def _add_config(self, kind: str, token: str):
-        name = self._CONFIG_ACTIONS[kind]
-
-        def handler(request, host) -> str:
-            self._check_profile(request, required=True)
-            self._check_token(request, token)
-            self.profile_configs[kind] = True
-            self.camera.record("ONVIF", f"Add{name}")
-            return response("trt", f"Add{name}")
-        return handler
-
-    def _remove_config(self, kind: str):
-        name = self._CONFIG_ACTIONS[kind]
-
-        def handler(request, host) -> str:
-            self._check_profile(request, required=True)
-            self.profile_configs[kind] = False
-            self.camera.record("ONVIF", f"Remove{name}")
-            return response("trt", f"Remove{name}")
-        return handler
-
-    def get_compatible_ptz_configurations(self, request, host) -> str:
-        self._check_profile(request)
-        return response("tptz", "GetCompatibleConfigurations", ""
-                f"{self._configuration_xml('tptz:PTZConfiguration')}")
-
-    # ---------------------------------------------------------- PTZ config
-    def _spaces_xml(self) -> str:
-        def space2d(tag, uri, low, high):
-            return (f"<tt:{tag}><tt:URI>{uri}</tt:URI><tt:XRange><tt:Min>{low}</tt:Min><tt:Max>{high}"
-                    f"</tt:Max></tt:XRange><tt:YRange><tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max>"
-                    f"</tt:YRange></tt:{tag}>")
-
-        def space1d(tag, uri, low, high):
-            return (f"<tt:{tag}><tt:URI>{uri}</tt:URI><tt:XRange><tt:Min>{low}</tt:Min>"
-                    f"<tt:Max>{high}</tt:Max></tt:XRange></tt:{tag}>")
-
-        absolute = (space2d("AbsolutePanTiltPositionSpace", PT_POSITION_SPACE, -1, 1)
-                    + space1d("AbsoluteZoomPositionSpace", ZOOM_POSITION_SPACE, 0, 1)) if self.absolute else ""
-        return (absolute
-                + space2d("RelativePanTiltTranslationSpace", PT_TRANSLATION_SPACE, -1, 1)
-                + space1d("RelativeZoomTranslationSpace", ZOOM_TRANSLATION_SPACE, -1, 1)
-                + space2d("ContinuousPanTiltVelocitySpace", PT_VELOCITY_SPACE, -1, 1)
-                + space1d("ContinuousZoomVelocitySpace", ZOOM_VELOCITY_SPACE, -1, 1)
-                + space1d("PanTiltSpeedSpace", PT_SPEED_SPACE, 0, 1)
-                + space1d("ZoomSpeedSpace", ZOOM_SPEED_SPACE, 0, 1))
-
-    def _node_xml(self, tag: str) -> str:
-        return (f'<{tag} token="{PTZ_NODE_TOKEN}" FixedHomePosition="false"><tt:Name>{self._name_xml}</tt:Name>'
-                f"<tt:SupportedPTZSpaces>{self._spaces_xml()}</tt:SupportedPTZSpaces>"
-                f"<tt:MaximumNumberOfPresets>{st.PRESET_COUNT}</tt:MaximumNumberOfPresets>"
-                f"<tt:HomeSupported>true</tt:HomeSupported></{tag}>")
-
-    def _configuration_xml(self, tag: str) -> str:
-        absolute = (f"<tt:DefaultAbsolutePantTiltPositionSpace>{PT_POSITION_SPACE}</tt:DefaultAbsolutePantTiltPositionSpace>"
-                    f"<tt:DefaultAbsoluteZoomPositionSpace>{ZOOM_POSITION_SPACE}</tt:DefaultAbsoluteZoomPositionSpace>"
-                    if self.absolute else "")
-        return (f'<{tag} token="{PTZ_CONFIG_TOKEN}"><tt:Name>PTZ</tt:Name>'
-                f"<tt:UseCount>{int(self.profile_configs['ptz'])}</tt:UseCount>"
-                f"<tt:NodeToken>{PTZ_NODE_TOKEN}</tt:NodeToken>"
-                + absolute
-                + f"<tt:DefaultRelativePanTiltTranslationSpace>{PT_TRANSLATION_SPACE}</tt:DefaultRelativePanTiltTranslationSpace>"
-                f"<tt:DefaultRelativeZoomTranslationSpace>{ZOOM_TRANSLATION_SPACE}</tt:DefaultRelativeZoomTranslationSpace>"
-                f"<tt:DefaultContinuousPanTiltVelocitySpace>{PT_VELOCITY_SPACE}</tt:DefaultContinuousPanTiltVelocitySpace>"
-                f"<tt:DefaultContinuousZoomVelocitySpace>{ZOOM_VELOCITY_SPACE}</tt:DefaultContinuousZoomVelocitySpace>"
-                f'<tt:DefaultPTZSpeed><tt:PanTilt x="1" y="1" space="{PT_SPEED_SPACE}"/>'
-                f'<tt:Zoom x="1" space="{ZOOM_SPEED_SPACE}"/></tt:DefaultPTZSpeed>'
-                f"<tt:DefaultPTZTimeout>PT5S</tt:DefaultPTZTimeout></{tag}>")
-
-    def get_nodes(self, request, host) -> str:
-        return response("tptz", "GetNodes", self._node_xml('tptz:PTZNode'))
-
-    def get_node(self, request, host) -> str:
-        token = text_of(request, "NodeToken")
-        if token != PTZ_NODE_TOKEN:
-            raise invalid_arg("ter:NoEntity", f"unknown node {token}")
-        return response("tptz", "GetNode", self._node_xml('tptz:PTZNode'))
-
-    def get_configurations(self, request, host) -> str:
-        return response("tptz", "GetConfigurations", f"{self._configuration_xml('tptz:PTZConfiguration')}"
-                "")
-
-    @staticmethod
-    def _check_config(request: ET.Element, tag: str) -> None:
-        token = text_of(request, tag)
-        if token != PTZ_CONFIG_TOKEN:
-            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
-
-    def get_configuration(self, request, host) -> str:
-        self._check_config(request, "PTZConfigurationToken")
-        return response("tptz", "GetConfiguration", f"{self._configuration_xml('tptz:PTZConfiguration')}"
-                "")
-
-    def set_configuration(self, request, host) -> str:
-        config = find(request, "PTZConfiguration")
-        token = config.get("token") if config is not None else None
-        if token != PTZ_CONFIG_TOKEN:
-            raise invalid_arg("ter:NoConfig", f"unknown configuration {token}")
-        self.camera.record("ONVIF", "SetConfiguration (accepted, not changed)")
-        return response("tptz", "SetConfiguration")
-
-    def get_configuration_options(self, request, host) -> str:
-        self._check_config(request, "ConfigurationToken")
-        return response("tptz", "GetConfigurationOptions", "<tptz:PTZConfigurationOptions>"
-                f"<tt:Spaces>{self._spaces_xml()}</tt:Spaces>"
-                "<tt:PTZTimeout><tt:Min>PT0.1S</tt:Min><tt:Max>PT60S</tt:Max></tt:PTZTimeout>"
-                "</tptz:PTZConfigurationOptions>")
-
-    # --------------------------------------------------------- PTZ status
-    def _vector_xml(self, pan: float, tilt: float, zoom: float) -> str:
-        return (f'<tt:PanTilt x="{_f(pan_to_onvif(pan))}" y="{_f(tilt_to_onvif(tilt))}" '
-                f'space="{PT_POSITION_SPACE}"/>'
-                f'<tt:Zoom x="{_f(zoom_to_onvif(zoom))}" space="{ZOOM_POSITION_SPACE}"/>')
-
-    def get_status(self, request, host) -> str:
-        self._check_ptz_profile(request)
-        s = self.state
-        pt_moving = s.pan_target or s.tilt_target or s.pan_velocity or s.tilt_velocity
-        zoom_moving = s.zoom_target or s.zoom_velocity
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return response("tptz", "GetStatus", "<tptz:PTZStatus>"
-                f"<tt:Position>{self._vector_xml(s.pan, s.tilt, s.zoom)}</tt:Position>"
-                f"<tt:MoveStatus><tt:PanTilt>{'MOVING' if pt_moving else 'IDLE'}</tt:PanTilt>"
-                f"<tt:Zoom>{'MOVING' if zoom_moving else 'IDLE'}</tt:Zoom></tt:MoveStatus>"
-                f"<tt:UtcTime>{now}</tt:UtcTime></tptz:PTZStatus>")
-
-    # ----------------------------------------------------------- PTZ moves
-    def _require_power(self) -> None:
-        if not self.state.power:
-            raise OnvifFault("ter:Action", "camera in standby", sender=False)
-
-    def _cancel_timer(self) -> None:
-        if self._stop_timer is not None:
-            self._stop_timer.cancel()
-            self._stop_timer = None
-
-    @staticmethod
-    def _xy(elem: Optional[ET.Element]) -> Tuple[Optional[float], Optional[float]]:
-        if elem is None:
-            return None, None
-        x, y = elem.get("x"), elem.get("y")
-        return (float(x) if x is not None else None), (float(y) if y is not None else None)
-
-    @staticmethod
-    def _check_spaces(request: ET.Element, element: str, kind: str) -> None:
-        """PTZ spec 5.3/5.4.3: only spaces the node supports may be referenced."""
-        for axis, supported in SUPPORTED_SPACES[kind].items():
-            vector = find(request, element, axis)
-            space = vector.get("space") if vector is not None else None
-            if space is not None and space != supported:
-                raise invalid_arg("ter:SpaceNotSupported", f"{axis} space {space} is not supported")
-
-    def _speed_values(self, request: ET.Element) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-        """Pan, tilt and zoom of <Speed> in the generic speed spaces [0, 1] (ter:InvalidSpeed outside)."""
-        self._check_spaces(request, "Speed", "speed")
-        sx, sy = self._xy(find(request, "Speed", "PanTilt"))
-        sz, _ = self._xy(find(request, "Speed", "Zoom"))
-        if any(v is not None and not 0.0 <= v <= 1.0 for v in (sx, sy, sz)):
-            raise invalid_arg("ter:InvalidSpeed", "speed outside the generic speed space [0, 1]")
-        return sx, sy, sz
-
-    def _speeds(self, request: ET.Element) -> Tuple[float, float, float]:
-        """Return pan speed step, tilt speed step and a zoom factor from <Speed>."""
-        sx, sy, sz = self._speed_values(request)
-        pan = st.PAN_SPEED_MAX * st.clamp(sx if sx is not None else 1.0, 0.0, 1.0)
-        tilt = st.TILT_SPEED_MAX * st.clamp(sy if sy is not None else 1.0, 0.0, 1.0)
-        return max(pan, 1.0), max(tilt, 1.0), st.clamp(sz if sz is not None else 1.0, 0.05, 1.0)
-
-    def continuous_move(self, request, host) -> str:
-        self._check_ptz_profile(request)
-        self._require_power()
-        s = self.state
-        self._check_spaces(request, "Velocity", "velocity")
-        vx, vy = self._xy(find(request, "Velocity", "PanTilt"))
-        vz, _ = self._xy(find(request, "Velocity", "Zoom"))
-        if any(v is not None and not -1.0 <= v <= 1.0 for v in (vx, vy, vz)):
-            raise invalid_arg("ter:InvalidVelocity", "velocity outside the generic space [-1, 1]")
-        timeout_text = text_of(request, "Timeout")
-        timeout = parse_duration(timeout_text) if timeout_text else DEFAULT_CONTINUOUS_TIMEOUT
-        if not TIMEOUT_RANGE[0] <= timeout <= TIMEOUT_RANGE[1]:
-            raise invalid_arg("ter:TimeoutNotSupported", f"timeout {timeout:g}s outside PT0.1S..PT60S")
-        vx, vy = vx or 0.0, vy or 0.0
-        if find(request, "Velocity", "PanTilt") is not None:
-            s.pan_target = s.tilt_target = None
-            s.pan_velocity = vx * st.PAN_SPEED_MAX * st.PAN_TILT_UNITS_PER_SPEED_STEP
-            s.tilt_velocity = vy * st.TILT_SPEED_MAX * st.PAN_TILT_UNITS_PER_SPEED_STEP
-        if vz is not None:
-            s.zoom_target = None
-            s.zoom_velocity = vz * 8 * st.ZOOM_UNITS_PER_SPEED_STEP
-
-        self._cancel_timer()
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop is not None and timeout > 0:
-            self._stop_timer = loop.call_later(timeout, self._timeout_stop)
-
-        parts = [f"pan {vx:+.2f} tilt {vy:+.2f}"] if find(request, "Velocity", "PanTilt") is not None else []
-        if vz is not None:
-            parts.append(f"zoom {vz:+.2f}")
-        self.camera.record("ONVIF", f"ContinuousMove {' '.join(parts)} ({timeout:g}s)")
-        return response("tptz", "ContinuousMove")
-
-    def _timeout_stop(self) -> None:
-        self._stop_timer = None
-        s = self.state
-        s.pan_velocity = s.tilt_velocity = s.zoom_velocity = 0.0
-        self.camera.record("ONVIF", "ContinuousMove timeout, stopped")
-
-    def stop(self, request, host) -> str:
-        self._check_ptz_profile(request)
-        stop_pt = (text_of(request, "PanTilt") or "true").lower() == "true"
-        stop_zoom = (text_of(request, "Zoom") or "true").lower() == "true"
-        s = self.state
-        if stop_pt:
-            s.stop_pan_tilt()
-        if stop_zoom:
-            s.zoom_velocity = 0.0
-            s.zoom_target = None
-        if stop_pt and stop_zoom:
-            self._cancel_timer()
-        what = " + ".join(n for n, f in (("pan/tilt", stop_pt), ("zoom", stop_zoom)) if f)
-        self.camera.record("ONVIF", f"Stop {what or 'nothing'}")
-        return response("tptz", "Stop")
-
-    def _move_to(self, pan: Optional[float], tilt: Optional[float], zoom: Optional[float],
-                 speeds: Tuple[float, float, float]) -> None:
-        s = self.state
-        pan_speed, tilt_speed, zoom_factor = speeds
-        if pan is not None or tilt is not None:
-            s.move_pan_tilt_to(pan if pan is not None else s.pan,
-                               tilt if tilt is not None else s.tilt, pan_speed, tilt_speed)
-        if zoom is not None:
-            s.zoom_to(zoom)
-            s.zoom_target = (s.zoom_target[0], s.zoom_target[1] * zoom_factor)
-        if self.camera.instant:
-            s.finish_moves()
-
-    def absolute_move(self, request, host) -> str:
-        if not self.absolute:
-            raise OnvifFault("ter:ActionNotSupported/ter:OptionalActionNotSupported",
-                             "AbsoluteMove is not supported", sender=False)
-        self._check_ptz_profile(request)
-        self._require_power()
-        self._check_spaces(request, "Position", "position")
-        speeds = self._speeds(request)
-        x, y = self._xy(find(request, "Position", "PanTilt"))
-        z, _ = self._xy(find(request, "Position", "Zoom"))
-        if any(v is not None and not -1.0 <= v <= 1.0 for v in (x, y)) or (z is not None and not 0.0 <= z <= 1.0):
-            raise invalid_arg("ter:InvalidPosition", "position outside the generic space")
-        self._cancel_timer()
-        self._move_to(pan_from_onvif(x) if x is not None else None,
-                      tilt_from_onvif(y) if y is not None else None,
-                      zoom_from_onvif(z) if z is not None else None, speeds)
-        self.camera.record("ONVIF", "AbsoluteMove " + " ".join(
-            f"{n} {v:+.3f}" for n, v in (("pan", x), ("tilt", y), ("zoom", z)) if v is not None))
-        return response("tptz", "AbsoluteMove")
-
-    def relative_move(self, request, host) -> str:
-        self._check_ptz_profile(request)
-        self._require_power()
-        self._check_spaces(request, "Translation", "translation")
-        speeds = self._speeds(request)
-        s = self.state
-        dx, dy = self._xy(find(request, "Translation", "PanTilt"))
-        dz, _ = self._xy(find(request, "Translation", "Zoom"))
-        # The generic translation spaces span [-1, 1]; a translation that leads past
-        # the end stops are clipped at the border (5.3.2), larger values are faults.
-        if any(v is not None and not -1.0 <= v <= 1.0 for v in (dx, dy, dz)):
-            raise invalid_arg("ter:InvalidTranslation", "translation outside the generic space [-1, 1]")
-        self._cancel_timer()
-        base_pan = s.pan_target[0] if s.pan_target else s.pan
-        base_tilt = s.tilt_target[0] if s.tilt_target else s.tilt
-        base_zoom = s.zoom_target[0] if s.zoom_target else s.zoom
-        self._move_to(
-            base_pan + dx * st.PAN_MAX if dx is not None else None,
-            tilt_from_onvif(tilt_to_onvif(base_tilt) + dy) if dy is not None else None,
-            base_zoom + dz * (st.ZOOM_MAX - st.ZOOM_MIN) if dz is not None else None,
-            speeds)
-        self.camera.record("ONVIF", "RelativeMove " + " ".join(
-            f"{n} {v:+.3f}" for n, v in (("pan", dx), ("tilt", dy), ("zoom", dz)) if v is not None))
-        return response("tptz", "RelativeMove")
-
-    def goto_home(self, request, host) -> str:
-        self._check_ptz_profile(request)
-        self._require_power()
-        pan_speed, tilt_speed, _ = self._speeds(request)  # 5.5.1: Speed overrides the default
-        self._cancel_timer()
-        self.state.move_pan_tilt_to(*self.state.home_position, pan_speed, tilt_speed)
-        if self.camera.instant:
-            self.state.finish_moves()
-        self.camera.record("ONVIF", "GotoHomePosition")
-        return response("tptz", "GotoHomePosition")
-
-    def set_home(self, request, host) -> str:
-        self._check_ptz_profile(request)
-        self.state.set_home()
-        self.camera.record("ONVIF", "SetHomePosition")
-        return response("tptz", "SetHomePosition")
-
-    # ------------------------------------------------------------ presets
-    def get_presets(self, request, host) -> str:
-        self._check_ptz_profile(request)
-        items = "".join(
-            f'<tptz:Preset token="{n}"><tt:Name>{escape(p.name or f"Preset {n}")}</tt:Name>'
-            f"<tt:PTZPosition>{self._vector_xml(p.pan, p.tilt, p.zoom)}</tt:PTZPosition></tptz:Preset>"
-            for n, p in sorted(self.state.presets.items()))
-        return response("tptz", "GetPresets", items)
-
-    def _preset_number(self, token: Optional[str]) -> int:
-        try:
-            number = int(token)
-        except (TypeError, ValueError):
-            raise invalid_arg("ter:NoToken", f"unknown preset {token}")
-        if not 0 <= number < st.PRESET_COUNT:
-            raise invalid_arg("ter:NoToken", f"unknown preset {token}")
-        return number
-
-    def set_preset(self, request, host) -> str:
-        self._check_ptz_profile(request)
-        if self.state.moving:  # PTZ spec 5.4.1: fails while the unit moves
-            raise action_failed("ter:MovingPTZ", "preset cannot be set while the camera moves")
-        token = text_of(request, "PresetToken")
-        if token is None:
-            number = self.state.free_preset_number()
-            if number is None:
-                raise action_failed("ter:TooManyPresets", "no free preset slot")
-        else:
-            number = self._preset_number(token)
-            if number not in self.state.presets:  # 5.4.1: the token must name an existing preset
-                raise invalid_arg("ter:NoToken", f"preset {token} does not exist")
-        self.state.save_preset(number, text_of(request, "PresetName"))
-        self.camera.record("ONVIF", f"SetPreset {number}")
-        return response("tptz", "SetPreset", f"<tptz:PresetToken>{number}</tptz:PresetToken>")
-
-    def goto_preset(self, request, host) -> str:
-        self._check_ptz_profile(request)
-        self._require_power()
-        number = self._preset_number(text_of(request, "PresetToken"))
-        if number not in self.state.presets:
-            raise invalid_arg("ter:NoToken", f"preset {number} not set")
-        sx, _, sz = self._speed_values(request)
-        speed = next((v for v in (sx, sz) if v is not None), None)
-        self._cancel_timer()
-        self.state.recall_preset(number, speed)
-        if self.camera.instant:
-            self.state.finish_moves()
-        self.camera.record("ONVIF", f"GotoPreset {number}")
-        return response("tptz", "GotoPreset")
-
-    def remove_preset(self, request, host) -> str:
-        self._check_ptz_profile(request)
-        number = self._preset_number(text_of(request, "PresetToken"))
-        if number not in self.state.presets:
-            raise invalid_arg("ter:NoToken", f"preset {number} not set")
-        self.state.clear_preset(number)
-        self.camera.record("ONVIF", f"RemovePreset {number}")
-        return response("tptz", "RemovePreset")
-
-    # ------------------------------------------------------------- imaging
-    def _check_source(self, request: ET.Element) -> None:
-        token = text_of(request, "VideoSourceToken")
-        if token != IMAGING_SOURCE_TOKEN:
-            raise invalid_arg("ter:NoSource", f"unknown video source {token}")
-
-    def _white_balance_xml(self) -> str:
-        s = self.state
-        mode = "AUTO" if s.white_balance in st.WB_AUTO_MODES else "MANUAL"
-        return ("<tt:WhiteBalance>"
-                f"<tt:Mode>{mode}</tt:Mode>"
-                f"<tt:CrGain>{_f(s.red_gain / WB_ONVIF_UNIT)}</tt:CrGain>"
-                f"<tt:CbGain>{_f(s.blue_gain / WB_ONVIF_UNIT)}</tt:CbGain>"
-                "</tt:WhiteBalance>")
-
-    def get_imaging_settings(self, request, host) -> str:
-        self._check_source(request)
-        return response("timg", "GetImagingSettings", "<timg:ImagingSettings>"
-                f"{self._white_balance_xml()}</timg:ImagingSettings>")
-
-    @staticmethod
-    def _gain(request: ET.Element, tag: str) -> Optional[int]:
-        text = text_of(request, "WhiteBalance", tag)
-        if text is None:
-            return None
-        value = float(text)
-        if not 0 <= value <= st.WB_GAIN_MAX / WB_ONVIF_UNIT:
-            raise invalid_arg("ter:SettingsInvalid", f"{tag} outside 0..{_f(st.WB_GAIN_MAX / WB_ONVIF_UNIT)}")
-        return round(value * WB_ONVIF_UNIT)
-
-    def set_imaging_settings(self, request, host) -> str:
-        self._check_source(request)
-        mode = text_of(request, "WhiteBalance", "Mode")
-        if mode not in (None, "AUTO", "MANUAL"):
-            raise invalid_arg("ter:SettingsInvalid", f"unknown white balance mode {mode}")
-        red, blue = self._gain(request, "CrGain"), self._gain(request, "CbGain")
-        s = self.state
-        if mode == "AUTO" and s.white_balance not in st.WB_AUTO_MODES:
-            s.set_white_balance("auto")
-        if mode == "MANUAL" and s.white_balance != "manual":
-            s.set_white_balance("manual")
-        s.set_gains(red if red is not None else s.red_gain, blue if blue is not None else s.blue_gain)
-        self.camera.record("ONVIF", f"SetImagingSettings white balance {s.white_balance}")
-        return response("timg", "SetImagingSettings")
-
-    def get_move_options(self, request, host) -> str:
-        """No remote focus: the imaging spec (5.3.2) requires an empty answer."""
-        self._check_source(request)
-        return response("timg", "GetMoveOptions", "<timg:MoveOptions/>")
-
-    def get_imaging_status(self, request, host) -> str:
-        self._check_source(request)
-        return response("timg", "GetStatus", "<timg:Status/>")
-
-    def get_video_sources(self, request, host) -> str:
-        return response("trt", "GetVideoSources", ""
-                f'<trt:VideoSources token="{IMAGING_SOURCE_TOKEN}"><tt:Framerate>{VIDEO_FRAMERATE}</tt:Framerate>'
-                f"<tt:Resolution><tt:Width>{VIDEO_WIDTH}</tt:Width><tt:Height>{VIDEO_HEIGHT}</tt:Height></tt:Resolution>"
-                "</trt:VideoSources>")
-
-    def get_options(self, request, host) -> str:
-        self._check_source(request)
-        low, high = _f(0), _f(st.WB_GAIN_MAX / WB_ONVIF_UNIT)
-        return response("timg", "GetOptions", "<timg:ImagingOptions><tt:WhiteBalance>"
-                "<tt:Mode>AUTO</tt:Mode><tt:Mode>MANUAL</tt:Mode>"
-                f"<tt:YrGain><tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max></tt:YrGain>"
-                f"<tt:YbGain><tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max></tt:YbGain>"
-                "</tt:WhiteBalance></timg:ImagingOptions>")
-
-
 # ------------------------------------------------------------ HTTP server
-async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.AbstractServer:
-    """Minimal HTTP/1.1 server (keep-alive capable) carrying the SOAP services."""
+async def serve_onvif(onvif: OnvifCamera, host: str, port: int, faults=None, capture=None
+                       ) -> asyncio.AbstractServer:
+    """Minimal HTTP/1.1 server (keep-alive capable) carrying the SOAP services.
+
+    ``faults`` (a :class:`ptzsim.faults.FaultInjector`) mangles the HTTP responses
+    like the VISCA transports; ``capture`` (a :class:`ptzsim.faults.TrafficCapture`)
+    logs every request/response.
+    """
 
     def detailed_health(local_ip: str, local_port: int) -> str:
         hostname, fqdn = get_hostname_and_fqdn()
@@ -1267,6 +1279,8 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         local_ip, local_port = writer.get_extra_info("sockname")[:2]
+        peer = writer.get_extra_info("peername")
+        peer_name = f"{peer[0]}:{peer[1]}"
         try:
             while True:
                 request_line = await reader.readline()
@@ -1278,6 +1292,8 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
                     key, _, value = line.decode("latin-1").partition(":")
                     headers[key.strip().lower()] = value.strip()
                 body = await reader.readexactly(int(headers.get("content-length", 0) or 0))
+                if capture is not None:
+                    capture.log("rx", "ONVIF", peer_name, body, note=f"{method} {path}")
                 host_header = headers.get("host") or f"{local_ip}:{local_port}"
 
                 extra = ""
@@ -1335,16 +1351,36 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
                 reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
                           405: "Method Not Allowed", 500: "Internal Server Error"}[status]
                 close = headers.get("connection", "").lower() == "close"
-                writer.write(
-                    f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{extra}"
-                    f"Content-Length: {len(data)}\r\nConnection: {'close' if close else 'keep-alive'}"
-                    f"\r\n\r\n".encode() + data)
+                response = (f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{extra}"
+                            f"Content-Length: {len(data)}\r\nConnection: {'close' if close else 'keep-alive'}"
+                            f"\r\n\r\n".encode() + data)
+
+                def send_response(_resp: bytes = response, _status: int = status) -> None:
+                    # logged when the reply actually leaves (after loss/delay/duplicate)
+                    if capture is not None:
+                        capture.log("tx", "ONVIF", peer_name, _resp, note=f"HTTP {_status}")
+                    writer.write(_resp)
+
+                if faults is not None:
+                    faults.wrap("ONVIF", peer_name, send_response,
+                                on_disconnect=writer.close)(response)
+                else:
+                    send_response()
                 await writer.drain()
                 if close:
+                    if faults is not None:
+                        # wait only for this connection's delayed replies before closing
+                        await faults.wait_link("ONVIF", peer_name)
+                        if faults.last_dropped("ONVIF", peer_name):
+                            continue  # simulated loss: no answer, connection stays open
                     break
         except (ConnectionError, asyncio.IncompleteReadError, ValueError):
             pass
         finally:
+            if faults is not None:
+                # a half-closing client still gets this connection's delayed replies
+                await faults.wait_link("ONVIF", peer_name)
+                faults.release("ONVIF", peer_name)  # a reconnect gets a fresh allowance
             writer.close()
 
     return await asyncio.start_server(handle, host, port)
