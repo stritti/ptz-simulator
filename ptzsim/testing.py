@@ -57,18 +57,34 @@ async def serve(*argv: str, instant: bool = True, tick_interval: float = 0.01) -
     No dashboard is shown.
     """
     from .cli import build_parser
+    from .faults import check_script, from_args, replay
 
     args = build_parser().parse_args(["serve", "--host", "127.0.0.1", *argv])
     args.instant = args.instant or instant
+    if args.script:
+        check_script(args)  # e.g. ONVIF captures need --onvif and replayable auth
+    injector, capture = from_args(args)  # --latency/--capture/... work here too
     camera = ViscaCamera(address=args.address, instant=args.instant)
-    ctx = ServeContext(camera, Simulator(camera, tick_interval=tick_interval), args)
+    sim = Simulator(camera, tick_interval=tick_interval, faults=injector, capture=capture)
+    ctx = ServeContext(camera, sim, args, faults=injector, capture=capture)
     task = asyncio.ensure_future(ctx.simulator.run())
+    replay_task = None
     try:
         await ctx.start_plugins()
+        if args.script:
+            from .faults import onvif_camera
+            replay_task = asyncio.ensure_future(
+                replay(sim, args.script, capture, onvif=onvif_camera(ctx)))
         yield ctx
     finally:
+        if replay_task is not None:
+            replay_task.cancel()
         task.cancel()
         ctx.stop_plugins()
+        if injector is not None:
+            injector.shutdown()  # cancel delayed replies before closing the capture
+        if capture is not None:
+            capture.close()
         # Transports close their sockets in a loop callback; let it run so the
         # ports are free again when the context is left.
         await asyncio.sleep(0)

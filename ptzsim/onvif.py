@@ -83,11 +83,6 @@ PRE_AUTH = {"GetSystemDateAndTime", "GetCapabilities", "GetServices", "GetServic
 
 DEFAULT_CONTINUOUS_TIMEOUT = 5.0  # seconds, used when ContinuousMove has no Timeout
 TIMEOUT_RANGE = (0.1, 60.0)  # seconds, advertised in GetConfigurationOptions
-# Focus move ranges of the imaging service (spec 5.3, advertised in GetMoveOptions).
-FOCUS_POSITION_RANGE = (0.0, 1.0)  # unitless absolute position
-FOCUS_DISTANCE_RANGE = (-1.0, 1.0)  # unitless relative distance, sign = direction
-FOCUS_SPEED_RANGE = (0.0, 1.0)  # absolute/relative move speed
-FOCUS_CONTINUOUS_SPEED_RANGE = (-1.0, 1.0)  # continuous speed, sign = direction
 AUTH_MODES = ("both", "digest", "wsse")
 DIGEST_REALM = "ptzsim"
 
@@ -123,16 +118,6 @@ def zoom_to_onvif(zoom: float) -> float:
 
 def zoom_from_onvif(z: float) -> float:
     return st.ZOOM_MIN + st.clamp(z, 0.0, 1.0) * (st.ZOOM_MAX - st.ZOOM_MIN)
-
-
-# Focus is unitless 0..1 in the imaging service: 0 is infinity (VISCA FOCUS_MIN),
-# 1 the closest distance (FOCUS_MAX).
-def focus_to_onvif(focus: float) -> float:
-    return (focus - st.FOCUS_MIN) / (st.FOCUS_MAX - st.FOCUS_MIN)
-
-
-def focus_from_onvif(x: float) -> float:
-    return st.FOCUS_MIN + st.clamp(x, 0.0, 1.0) * (st.FOCUS_MAX - st.FOCUS_MIN)
 
 
 def parse_duration(text: str) -> float:
@@ -203,86 +188,16 @@ def action_failed(subcode: str, reason: str) -> OnvifFault:
 
 
 # ------------------------------------------------------------- service
-class OnvifCamera:
-    """Answers ONVIF SOAP requests for one simulated camera."""
+class DeviceService:
+    """Device service operations (``tds`` namespace): capabilities, scopes, network, hostname."""
 
-    def __init__(self, camera: ViscaCamera, name: str = "PTZ-Simulator",
-                 username: Optional[str] = None, password: Optional[str] = None,
-                 rtsp_uri: Optional[str] = None, absolute: bool = True, auth: str = "both"):
-        if auth not in AUTH_MODES:
-            raise ValueError(f"auth must be one of {AUTH_MODES}")
-        self.camera = camera
-        # "both": HTTP digest (RFC 2617) and WS-UsernameToken, "digest"/"wsse": only one of them
-        self.auth = auth
-        self._digest_nonces: Dict[str, None] = {}
-        # False simulates a camera without AbsoluteMove (only continuous moves and presets)
-        self.absolute = absolute
-        self.name = name
-        self.username = username
-        self.password = password
-        self.rtsp_uri = rtsp_uri
-        self.serial = uuid.uuid5(uuid.NAMESPACE_DNS, name).hex[:12].upper()
-        self.endpoint_uuid = uuid.uuid5(uuid.NAMESPACE_URL, f"ptzsim:{name}")
-        self._stop_timer: Optional[asyncio.TimerHandle] = None
-        # Which configurations Profile_1 holds (Media Add*/Remove*Configuration)
-        self.profile_configs = {"source": True, "encoder": True, "ptz": True}
-        self.encoder = {"width": VIDEO_WIDTH, "height": VIDEO_HEIGHT, "quality": 5.0,
-                        "framerate": VIDEO_FRAMERATE, "bitrate": 2048, "gov": VIDEO_FRAMERATE,
-                        "profile": "Main"}
-        # Device management (Core spec 8.2, 8.3): scopes, discovery mode, hostname
-        self.discoverable = True
-        self.hostname = "ptzsim-" + self.serial[-6:].lower()
-        self.fixed_scopes = ["onvif://www.onvif.org/type/ptz", "onvif://www.onvif.org/type/video_encoder",
-                             "onvif://www.onvif.org/Profile/Streaming", "onvif://www.onvif.org/hardware/ptzsim"]
-        self.configurable_scopes = [f"onvif://www.onvif.org/name/{urllib.parse.quote(name)}",
-                                    "onvif://www.onvif.org/location/simulator"]
-        self._actions: Dict[str, Callable[[ET.Element, str], str]] = {
+    def device_actions(self) -> Dict[str, Callable[[ET.Element, str], str]]:
+        return {
             "GetSystemDateAndTime": self.get_system_date_and_time,
             "GetCapabilities": self.get_capabilities,
             "GetServices": self.get_services,
             "GetDeviceInformation": self.get_device_information,
-            "GetProfiles": self.get_profiles,
-            "GetProfile": self.get_profile,
-            "GetStreamUri": self.get_stream_uri,
-            "GetNodes": self.get_nodes,
-            "GetNode": self.get_node,
-            "GetConfigurations": self.get_configurations,
-            "GetConfiguration": self.get_configuration,
-            "GetConfigurationOptions": self.get_configuration_options,
-            "SetConfiguration": self.set_configuration,
-            "GetStatus": self.get_status,
-            "ContinuousMove": self.continuous_move,
-            "AbsoluteMove": self.absolute_move,
-            "RelativeMove": self.relative_move,
-            "Stop": self.stop,
-            "GotoHomePosition": self.goto_home,
-            "SetHomePosition": self.set_home,
-            "GetPresets": self.get_presets,
-            "SetPreset": self.set_preset,
-            "GotoPreset": self.goto_preset,
-            "RemovePreset": self.remove_preset,
-            "GetVideoSources": self.get_video_sources,
             "GetWsdlUrl": self.get_wsdl_url,
-            "GetCompatibleConfigurations": self.get_compatible_ptz_configurations,
-            # media: video source / encoder configurations, profile composition
-            "GetVideoSourceConfigurations": self.get_video_source_configurations,
-            "GetVideoSourceConfiguration": self.get_video_source_configuration,
-            "GetCompatibleVideoSourceConfigurations": self.get_compatible_video_source_configurations,
-            "GetVideoSourceConfigurationOptions": self.get_video_source_configuration_options,
-            "SetVideoSourceConfiguration": self.set_video_source_configuration,
-            "GetVideoEncoderConfigurations": self.get_video_encoder_configurations,
-            "GetVideoEncoderConfiguration": self.get_video_encoder_configuration,
-            "GetCompatibleVideoEncoderConfigurations": self.get_compatible_video_encoder_configurations,
-            "GetVideoEncoderConfigurationOptions": self.get_video_encoder_configuration_options,
-            "SetVideoEncoderConfiguration": self.set_video_encoder_configuration,
-            "GetGuaranteedNumberOfVideoEncoderInstances": self.get_guaranteed_encoder_instances,
-            "AddVideoSourceConfiguration": self._add_config("source", VIDEO_SOURCE_CONFIG_TOKEN),
-            "AddVideoEncoderConfiguration": self._add_config("encoder", VIDEO_ENCODER_CONFIG_TOKEN),
-            "AddPTZConfiguration": self._add_config("ptz", PTZ_CONFIG_TOKEN),
-            "RemoveVideoSourceConfiguration": self._remove_config("source"),
-            "RemoveVideoEncoderConfiguration": self._remove_config("encoder"),
-            "RemovePTZConfiguration": self._remove_config("ptz"),
-            # device management
             "GetScopes": self.get_scopes,
             "SetScopes": self.set_scopes,
             "AddScopes": self.add_scopes,
@@ -308,142 +223,7 @@ class OnvifCamera:
             "SetSystemDateAndTime": self._accept("SetSystemDateAndTime"),
             "SetSystemFactoryDefault": self._accept("SetSystemFactoryDefault"),
         }
-        # The imaging service reuses operation names of the PTZ service (GetStatus, Stop,
-        # Move), so requests in its namespace are dispatched separately.
-        self._imaging_actions: Dict[str, Callable[[ET.Element, str], str]] = {
-            "GetImagingSettings": self.get_imaging_settings,
-            "SetImagingSettings": self.set_imaging_settings,
-            "GetOptions": self.get_options,
-            "GetMoveOptions": self.get_move_options,
-            "GetStatus": self.get_imaging_status,
-            "Move": self.imaging_move,
-            "Stop": self.imaging_stop,
-        }
 
-    @property
-    def state(self) -> st.CameraState:
-        return self.camera.state
-
-    # ------------------------------------------------------------- dispatch
-    def handle(self, xml_body: bytes, host: str, authorization: Optional[str] = None,
-               method: str = "POST", uri: str = "/onvif/device_service") -> Tuple[int, str]:
-        """Handle one SOAP request; returns (HTTP status, response XML).
-
-        ``authorization`` is the HTTP Authorization header. Raises :class:`Unauthorized`
-        when the HTTP layer has to answer 401 with a digest challenge.
-        """
-        if not xml_body.strip() and self._digest_offered(authorization):
-            # e.g. curl --digest probes with an empty POST: answer with the challenge
-            raise Unauthorized()
-        try:
-            root = ET.fromstring(xml_body)
-        except ET.ParseError as err:
-            self.camera.record("ONVIF", f"invalid XML: {err}", ok=False)
-            return 400, envelope(OnvifFault("ter:WellFormed", "invalid XML").xml())
-        body = find(root, "Body")
-        request = next(iter(body), None) if body is not None else None
-        if request is None:
-            return 400, envelope(OnvifFault("ter:InvalidArgVal", "empty SOAP body").xml())
-        action = _local(request.tag)
-        try:
-            if action not in PRE_AUTH:
-                self._check_auth(root, authorization, method, uri)
-            if request.tag.startswith("{" + NS["timg"] + "}"):
-                handler = self._imaging_actions.get(action)
-            else:
-                handler = self._actions.get(action)
-            if action == "GetServiceCapabilities":
-                handler = self._service_capabilities_handler(request)
-            if handler is None:
-                raise OnvifFault("ter:ActionNotSupported", f"{action} is not supported", sender=False)
-            response = handler(request, host)
-        except OnvifFault as fault:
-            self.camera.record("ONVIF", f"{action}: {fault.reason}", ok=False)
-            return (400 if fault.sender else 500), envelope(fault.xml())
-        except (TypeError, ValueError) as err:
-            self.camera.record("ONVIF", f"{action}: {err}", ok=False)
-            return 400, envelope(OnvifFault("ter:InvalidArgVal", str(err)).xml())
-        return 200, envelope(response)
-
-    def _digest_offered(self, authorization: Optional[str]) -> bool:
-        """Credentials are required, none were sent on the HTTP level and digest is offered."""
-        return self.username is not None and self.auth != "wsse" and not authorization
-
-    def _check_auth(self, root: ET.Element, authorization: Optional[str], method: str, uri: str) -> None:
-        """Core spec 5.9.1, figure 4: HTTP digest first, then WS-UsernameToken."""
-        if self.username is None:
-            return
-        token = find(root, "Security", "UsernameToken")
-        http_digest = authorization if authorization and authorization.lower().startswith("digest ") else None
-        if self.auth == "wsse":
-            http_digest = None
-        if self.auth == "digest":
-            token = None
-        if http_digest is None and token is None:
-            if self.auth != "wsse":
-                raise Unauthorized()
-            raise OnvifFault("ter:NotAuthorized", "authentication required")
-        if http_digest is not None:
-            self._check_http_digest(http_digest, method, uri)
-        if token is not None:
-            self._check_username_token(token)
-
-    def digest_challenge(self) -> str:
-        """WWW-Authenticate header value for a 401 answer."""
-        nonce = uuid.uuid4().hex
-        self._digest_nonces[nonce] = None
-        while len(self._digest_nonces) > 100:  # keep only recent challenges
-            self._digest_nonces.pop(next(iter(self._digest_nonces)))
-        return f'Digest realm="{DIGEST_REALM}", qop="auth", algorithm=MD5, nonce="{nonce}"'
-
-    def _check_http_digest(self, header: str, method: str, uri: str) -> None:
-        params = {k: a or b for k, a, b in re.findall(r'(\w+)=(?:"([^"]*)"|([^,\s]*))', header[7:])}
-        # Core spec 5.9.1, figure 4: failed HTTP digest credentials get HTTP 401
-        if params.get("username") != self.username or params.get("nonce") not in self._digest_nonces:
-            self.camera.record("ONVIF", "HTTP digest: unknown user or nonce", ok=False)
-            raise Unauthorized()
-        def md5(text: str) -> str:
-            return hashlib.md5(text.encode()).hexdigest()
-        ha1 = md5(f"{self.username}:{params.get('realm', DIGEST_REALM)}:{self.password}")
-        ha2 = md5(f"{method}:{params.get('uri', uri)}")
-        if params.get("qop"):
-            expected = md5(f"{ha1}:{params['nonce']}:{params.get('nc')}:{params.get('cnonce')}:"
-                           f"{params['qop']}:{ha2}")
-        else:  # RFC 2069 style
-            expected = md5(f"{ha1}:{params['nonce']}:{ha2}")
-        if params.get("response") != expected:
-            self.camera.record("ONVIF", "HTTP digest: wrong password", ok=False)
-            raise Unauthorized()
-
-    def _check_username_token(self, token: ET.Element) -> None:
-        user = text_of(token, "Username")
-        password = find(token, "Password")
-        nonce, created = text_of(token, "Nonce"), text_of(token, "Created")
-        if user != self.username or password is None:
-            raise OnvifFault("ter:NotAuthorized", "unknown user")
-        supplied = (password.text or "").strip()
-        if password.get("Type", "").endswith("#PasswordText"):
-            ok = supplied == self.password
-        else:
-            if nonce is None or created is None:  # Core spec 5.9.5: both are required
-                raise OnvifFault("ter:NotAuthorized", "digest without nonce/created")
-            digest = hashlib.sha1(base64.b64decode(nonce) + created.encode() + self.password.encode())
-            ok = base64.b64encode(digest.digest()).decode() == supplied
-        if not ok:
-            raise OnvifFault("ter:NotAuthorized", "wrong password")
-
-    def _check_profile(self, request: ET.Element, tag: str = "ProfileToken", required: bool = False) -> None:
-        token = text_of(request, tag)
-        if (token is not None or required) and token != PROFILE_TOKEN:
-            raise invalid_arg("ter:NoProfile", f"unknown profile {token}")
-
-    def _check_ptz_profile(self, request: ET.Element) -> None:
-        """PTZ operations need a profile that holds the PTZ configuration (RemovePTZConfiguration)."""
-        self._check_profile(request)
-        if not self.profile_configs["ptz"]:
-            raise invalid_arg("ter:NoPTZProfile", "profile has no PTZ configuration")
-
-    # ------------------------------------------------------------- device
     def get_system_date_and_time(self, request, host) -> str:
         now = datetime.now(timezone.utc)
         return ("<tds:GetSystemDateAndTimeResponse><tds:SystemDateAndTime>"
@@ -514,7 +294,6 @@ class OnvifCamera:
                 f"<tds:SerialNumber>{self.serial}</tds:SerialNumber><tds:HardwareId>ptzsim</tds:HardwareId>"
                 "</tds:GetDeviceInformationResponse>")
 
-    # ---------------------------------------- device: scopes and network
     @property
     def scopes(self) -> list:
         return self.fixed_scopes + self.configurable_scopes
@@ -641,7 +420,34 @@ class OnvifCamera:
             return f"<tds:{action}Response>{body}</tds:{action}Response>"
         return handler
 
-    # -------------------------------------------------------------- media
+class MediaService:
+    """Media service operations (``trt`` namespace): profile, video source and encoder configurations."""
+
+    def media_actions(self) -> Dict[str, Callable[[ET.Element, str], str]]:
+        return {
+            "GetProfiles": self.get_profiles,
+            "GetProfile": self.get_profile,
+            "GetStreamUri": self.get_stream_uri,
+            "GetVideoSources": self.get_video_sources,
+            "GetVideoSourceConfigurations": self.get_video_source_configurations,
+            "GetVideoSourceConfiguration": self.get_video_source_configuration,
+            "GetCompatibleVideoSourceConfigurations": self.get_compatible_video_source_configurations,
+            "GetVideoSourceConfigurationOptions": self.get_video_source_configuration_options,
+            "SetVideoSourceConfiguration": self.set_video_source_configuration,
+            "GetVideoEncoderConfigurations": self.get_video_encoder_configurations,
+            "GetVideoEncoderConfiguration": self.get_video_encoder_configuration,
+            "GetCompatibleVideoEncoderConfigurations": self.get_compatible_video_encoder_configurations,
+            "GetVideoEncoderConfigurationOptions": self.get_video_encoder_configuration_options,
+            "SetVideoEncoderConfiguration": self.set_video_encoder_configuration,
+            "GetGuaranteedNumberOfVideoEncoderInstances": self.get_guaranteed_encoder_instances,
+            "AddVideoSourceConfiguration": self._add_config("source", VIDEO_SOURCE_CONFIG_TOKEN),
+            "AddVideoEncoderConfiguration": self._add_config("encoder", VIDEO_ENCODER_CONFIG_TOKEN),
+            "AddPTZConfiguration": self._add_config("ptz", PTZ_CONFIG_TOKEN),
+            "RemoveVideoSourceConfiguration": self._remove_config("source"),
+            "RemoveVideoEncoderConfiguration": self._remove_config("encoder"),
+            "RemovePTZConfiguration": self._remove_config("ptz"),
+        }
+
     def _profile_xml(self, tag: str = "trt:Profiles") -> str:
         c = self.profile_configs
         return (f'<{tag} token="{PROFILE_TOKEN}" fixed="true"><tt:Name>{escape(self.name)}</tt:Name>'
@@ -668,7 +474,6 @@ class OnvifCamera:
                 "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot><tt:Timeout>PT0S</tt:Timeout>"
                 "</trt:MediaUri></trt:GetStreamUriResponse>")
 
-    # ------------------------------------------- media: source and encoder
     def _video_source_config_xml(self, tag: str) -> str:
         return (f'<{tag} token="{VIDEO_SOURCE_CONFIG_TOKEN}"><tt:Name>VideoSource</tt:Name>'
                 f"<tt:UseCount>{int(self.profile_configs['source'])}</tt:UseCount>"
@@ -836,12 +641,42 @@ class OnvifCamera:
             return f"<trt:Remove{name}Response/>"
         return handler
 
+    def get_video_sources(self, request, host) -> str:
+        return ("<trt:GetVideoSourcesResponse>"
+                f'<trt:VideoSources token="{IMAGING_SOURCE_TOKEN}"><tt:Framerate>{VIDEO_FRAMERATE}</tt:Framerate>'
+                f"<tt:Resolution><tt:Width>{VIDEO_WIDTH}</tt:Width><tt:Height>{VIDEO_HEIGHT}</tt:Height></tt:Resolution>"
+                "</trt:VideoSources></trt:GetVideoSourcesResponse>")
+
+class PtzService:
+    """PTZ service operations (``tptz`` namespace): node, spaces, moves, presets."""
+
+    def ptz_actions(self) -> Dict[str, Callable[[ET.Element, str], str]]:
+        return {
+            "GetNodes": self.get_nodes,
+            "GetNode": self.get_node,
+            "GetConfigurations": self.get_configurations,
+            "GetConfiguration": self.get_configuration,
+            "GetConfigurationOptions": self.get_configuration_options,
+            "SetConfiguration": self.set_configuration,
+            "GetStatus": self.get_status,
+            "ContinuousMove": self.continuous_move,
+            "AbsoluteMove": self.absolute_move,
+            "RelativeMove": self.relative_move,
+            "Stop": self.stop,
+            "GotoHomePosition": self.goto_home,
+            "SetHomePosition": self.set_home,
+            "GetPresets": self.get_presets,
+            "SetPreset": self.set_preset,
+            "GotoPreset": self.goto_preset,
+            "RemovePreset": self.remove_preset,
+            "GetCompatibleConfigurations": self.get_compatible_ptz_configurations,
+        }
+
     def get_compatible_ptz_configurations(self, request, host) -> str:
         self._check_profile(request)
         return ("<tptz:GetCompatibleConfigurationsResponse>"
                 f"{self._configuration_xml('tptz:PTZConfiguration')}</tptz:GetCompatibleConfigurationsResponse>")
 
-    # ---------------------------------------------------------- PTZ config
     def _spaces_xml(self) -> str:
         def space2d(tag, uri, low, high):
             return (f"<tt:{tag}><tt:URI>{uri}</tt:URI><tt:XRange><tt:Min>{low}</tt:Min><tt:Max>{high}"
@@ -923,7 +758,6 @@ class OnvifCamera:
                 "<tt:PTZTimeout><tt:Min>PT0.1S</tt:Min><tt:Max>PT60S</tt:Max></tt:PTZTimeout>"
                 "</tptz:PTZConfigurationOptions></tptz:GetConfigurationOptionsResponse>")
 
-    # --------------------------------------------------------- PTZ status
     def _vector_xml(self, pan: float, tilt: float, zoom: float) -> str:
         return (f'<tt:PanTilt x="{_f(pan_to_onvif(pan))}" y="{_f(tilt_to_onvif(tilt))}" '
                 f'space="{PT_POSITION_SPACE}"/>'
@@ -941,7 +775,6 @@ class OnvifCamera:
                 f"<tt:Zoom>{'MOVING' if zoom_moving else 'IDLE'}</tt:Zoom></tt:MoveStatus>"
                 f"<tt:UtcTime>{now}</tt:UtcTime></tptz:PTZStatus></tptz:GetStatusResponse>")
 
-    # ----------------------------------------------------------- PTZ moves
     def _require_power(self) -> None:
         if not self.state.power:
             raise OnvifFault("ter:Action", "camera in standby", sender=False)
@@ -1116,7 +949,6 @@ class OnvifCamera:
         self.camera.record("ONVIF", "SetHomePosition")
         return "<tptz:SetHomePositionResponse/>"
 
-    # ------------------------------------------------------------ presets
     def get_presets(self, request, host) -> str:
         self._check_ptz_profile(request)
         items = "".join(
@@ -1175,7 +1007,18 @@ class OnvifCamera:
         self.camera.record("ONVIF", f"RemovePreset {number}")
         return "<tptz:RemovePresetResponse/>"
 
-    # ------------------------------------------------------------- imaging
+class ImagingService:
+    """Imaging service operations (``timg`` namespace): white balance only."""
+
+    def imaging_actions(self) -> Dict[str, Callable[[ET.Element, str], str]]:
+        return {
+            "GetImagingSettings": self.get_imaging_settings,
+            "SetImagingSettings": self.set_imaging_settings,
+            "GetOptions": self.get_options,
+            "GetMoveOptions": self.get_move_options,
+            "GetStatus": self.get_imaging_status,
+        }
+
     def _check_source(self, request: ET.Element) -> None:
         token = text_of(request, "VideoSourceToken")
         if token != IMAGING_SOURCE_TOKEN:
@@ -1220,120 +1063,14 @@ class OnvifCamera:
         self.camera.record("ONVIF", f"SetImagingSettings white balance {s.white_balance}")
         return "<timg:SetImagingSettingsResponse/>"
 
-    # ------------------------------------------- imaging: focus (spec 5.3)
-    @staticmethod
-    def _focus_operation(request: ET.Element) -> Tuple[str, ET.Element]:
-        """The one move kind inside <Focus>: ("Absolute"|"Relative"|"Continuous", element)."""
-        focus = find(request, "Focus")
-        if focus is None:
-            raise OnvifFault("ter:InvalidArgVal", "Move without a Focus element")
-        kinds = [(kind, elem) for kind in ("Absolute", "Relative", "Continuous")
-                 if (elem := find(focus, kind)) is not None]
-        if len(kinds) != 1:
-            raise OnvifFault("ter:InvalidArgVal",
-                             "Focus must hold exactly one of Absolute, Relative, Continuous")
-        return kinds[0]
-
-    @staticmethod
-    def _focus_value(elem: ET.Element, tag: str, required: bool = True) -> Optional[float]:
-        text = text_of(elem, tag)
-        if text is None:
-            if required:
-                raise OnvifFault("ter:InvalidArgVal", f"missing focus {tag}")
-            return None
-        try:
-            return float(text)
-        except ValueError:
-            raise OnvifFault("ter:InvalidArgVal", f"bad focus {tag} {text!r}")
-
-    @staticmethod
-    def _check_focus_range(value: float, low: float, high: float, what: str) -> None:
-        if not low <= value <= high:
-            raise OnvifFault("ter:InvalidArgVal", f"focus {what} {value:g} outside {low:g}..{high:g}")
-
-    def imaging_move(self, request, host) -> str:
-        """Imaging spec 5.3.1: move the focus lens absolutely, relatively or continuously."""
-        self._check_source(request)
-        self._require_power()
-        kind, elem = self._focus_operation(request)
-        s = self.state
-        if kind == "Continuous":
-            speed = self._focus_value(elem, "Speed")
-            self._check_focus_range(speed, *FOCUS_CONTINUOUS_SPEED_RANGE, "speed")
-            s.autofocus = False  # 5.3.1: focus adjustments through Move turn off the autofocus
-            if speed == 0:
-                s.focus_velocity = 0.0
-                s.focus_target = None
-                what = "stop"
-            else:
-                # ONVIF speed 0..1 (sign = direction) onto the VISCA focus speed steps 0..7
-                step = max(0, round(abs(speed) * 8) - 1)
-                s.drive_focus(1 if speed > 0 else -1, step)
-                what = f"continuous {speed:+.2f}"
-        else:
-            if kind == "Absolute":
-                value = self._focus_value(elem, "Position")
-                self._check_focus_range(value, *FOCUS_POSITION_RANGE, "position")
-                target = focus_from_onvif(value)
-                what = f"absolute {value:.3f}"
-            else:
-                distance = self._focus_value(elem, "Distance")
-                self._check_focus_range(distance, *FOCUS_DISTANCE_RANGE, "distance")
-                # 5.3.1: a relative move starts from the current lens position
-                target = st.clamp(s.focus + distance * (st.FOCUS_MAX - st.FOCUS_MIN),
-                                  st.FOCUS_MIN, st.FOCUS_MAX)
-                what = f"relative {distance:+.3f}"
-            speed = self._focus_value(elem, "Speed", required=False)
-            if speed is not None:
-                self._check_focus_range(speed, *FOCUS_SPEED_RANGE, "speed")
-            s.autofocus = False  # everything validated: the request is executed now
-            s.focus_to(target)
-            if speed is not None and s.focus_target is not None:
-                s.focus_target = (s.focus_target[0], s.focus_target[1] * st.clamp(speed, 0.05, 1.0))
-            if self.camera.instant:
-                s.finish_moves()
-        self.camera.record("ONVIF", f"imaging Move {what}")
-        return "<timg:MoveResponse/>"
-
-    def imaging_stop(self, request, host) -> str:
-        """Imaging spec 5.3.3: stop ongoing focus movements; autofocus is not affected."""
-        self._check_source(request)
-        s = self.state
-        s.focus_velocity = 0.0
-        s.focus_target = None
-        self.camera.record("ONVIF", "imaging Stop focus")
-        return "<timg:StopResponse/>"
-
     def get_move_options(self, request, host) -> str:
-        """Imaging spec 5.3.2: all three focus move kinds are supported."""
+        """No remote focus: the imaging spec (5.3.2) requires an empty answer."""
         self._check_source(request)
-
-        def rng(low: float, high: float) -> str:
-            return f"<tt:Min>{_f(low)}</tt:Min><tt:Max>{_f(high)}</tt:Max>"
-
-        return ("<timg:GetMoveOptionsResponse><timg:MoveOptions>"
-                f"<tt:Absolute><tt:Position>{rng(*FOCUS_POSITION_RANGE)}</tt:Position>"
-                f"<tt:Speed>{rng(*FOCUS_SPEED_RANGE)}</tt:Speed></tt:Absolute>"
-                f"<tt:Relative><tt:Distance>{rng(*FOCUS_DISTANCE_RANGE)}</tt:Distance>"
-                f"<tt:Speed>{rng(*FOCUS_SPEED_RANGE)}</tt:Speed></tt:Relative>"
-                f"<tt:Continuous><tt:Speed>{rng(*FOCUS_CONTINUOUS_SPEED_RANGE)}</tt:Speed></tt:Continuous>"
-                "</timg:MoveOptions></timg:GetMoveOptionsResponse>")
+        return "<timg:GetMoveOptionsResponse><timg:MoveOptions/></timg:GetMoveOptionsResponse>"
 
     def get_imaging_status(self, request, host) -> str:
-        """Imaging spec 5.3.4: focus position (unitless 0..1) and move status."""
         self._check_source(request)
-        s = self.state
-        moving = s.focus_target is not None or s.focus_velocity != 0.0
-        return ("<timg:GetStatusResponse><timg:Status><tt:FocusStatus20>"
-                f"<tt:Position>{_f(focus_to_onvif(s.focus))}</tt:Position>"
-                f"<tt:MoveStatus>{'MOVING' if moving else 'IDLE'}</tt:MoveStatus>"
-                "</tt:FocusStatus20></timg:Status></timg:GetStatusResponse>")
-
-    def get_video_sources(self, request, host) -> str:
-        return ("<trt:GetVideoSourcesResponse>"
-                f'<trt:VideoSources token="{IMAGING_SOURCE_TOKEN}"><tt:Framerate>{VIDEO_FRAMERATE}</tt:Framerate>'
-                f"<tt:Resolution><tt:Width>{VIDEO_WIDTH}</tt:Width><tt:Height>{VIDEO_HEIGHT}</tt:Height></tt:Resolution>"
-                "</trt:VideoSources></trt:GetVideoSourcesResponse>")
+        return "<timg:GetStatusResponse><timg:Status/></timg:GetStatusResponse>"
 
     def get_options(self, request, host) -> str:
         self._check_source(request)
@@ -1344,10 +1081,179 @@ class OnvifCamera:
                 f"<tt:YbGain><tt:Min>{low}</tt:Min><tt:Max>{high}</tt:Max></tt:YbGain>"
                 "</tt:WhiteBalance></timg:ImagingOptions></timg:GetOptionsResponse>")
 
+class OnvifCamera(DeviceService, MediaService, PtzService, ImagingService):
+    """Answers ONVIF SOAP requests for one simulated camera.
 
+    The operations live in the service mixins; this class holds the shared state,
+    the authentication and the SOAP dispatch.
+    """
+
+    def __init__(self, camera: ViscaCamera, name: str = "PTZ-Simulator",
+                 username: Optional[str] = None, password: Optional[str] = None,
+                 rtsp_uri: Optional[str] = None, absolute: bool = True, auth: str = "both"):
+        if auth not in AUTH_MODES:
+            raise ValueError(f"auth must be one of {AUTH_MODES}")
+        self.camera = camera
+        # "both": HTTP digest (RFC 2617) and WS-UsernameToken, "digest"/"wsse": only one of them
+        self.auth = auth
+        self._digest_nonces: Dict[str, None] = {}
+        # False simulates a camera without AbsoluteMove (only continuous moves and presets)
+        self.absolute = absolute
+        self.name = name
+        self.username = username
+        self.password = password
+        self.rtsp_uri = rtsp_uri
+        self.serial = uuid.uuid5(uuid.NAMESPACE_DNS, name).hex[:12].upper()
+        self.endpoint_uuid = uuid.uuid5(uuid.NAMESPACE_URL, f"ptzsim:{name}")
+        self._stop_timer: Optional[asyncio.TimerHandle] = None
+        # Which configurations Profile_1 holds (Media Add*/Remove*Configuration)
+        self.profile_configs = {"source": True, "encoder": True, "ptz": True}
+        self.encoder = {"width": VIDEO_WIDTH, "height": VIDEO_HEIGHT, "quality": 5.0,
+                        "framerate": VIDEO_FRAMERATE, "bitrate": 2048, "gov": VIDEO_FRAMERATE,
+                        "profile": "Main"}
+        # Device management (Core spec 8.2, 8.3): scopes, discovery mode, hostname
+        self.discoverable = True
+        self.hostname = "ptzsim-" + self.serial[-6:].lower()
+        self.fixed_scopes = ["onvif://www.onvif.org/type/ptz", "onvif://www.onvif.org/type/video_encoder",
+                             "onvif://www.onvif.org/Profile/Streaming", "onvif://www.onvif.org/hardware/ptzsim"]
+        self.configurable_scopes = [f"onvif://www.onvif.org/name/{urllib.parse.quote(name)}",
+                                    "onvif://www.onvif.org/location/simulator"]
+        self._actions: Dict[str, Callable[[ET.Element, str], str]] = {
+            **self.device_actions(), **self.media_actions(), **self.ptz_actions()}
+        # The imaging service reuses operation names of the PTZ service (GetStatus, Stop,
+        # Move), so requests in its namespace are dispatched separately.
+        self._imaging_actions: Dict[str, Callable[[ET.Element, str], str]] = self.imaging_actions()
+
+    @property
+    def state(self) -> st.CameraState:
+        return self.camera.state
+
+    def handle(self, xml_body: bytes, host: str, authorization: Optional[str] = None,
+               method: str = "POST", uri: str = "/onvif/device_service") -> Tuple[int, str]:
+        """Handle one SOAP request; returns (HTTP status, response XML).
+
+        ``authorization`` is the HTTP Authorization header. Raises :class:`Unauthorized`
+        when the HTTP layer has to answer 401 with a digest challenge.
+        """
+        if not xml_body.strip() and self._digest_offered(authorization):
+            # e.g. curl --digest probes with an empty POST: answer with the challenge
+            raise Unauthorized()
+        try:
+            root = ET.fromstring(xml_body)
+        except ET.ParseError as err:
+            self.camera.record("ONVIF", f"invalid XML: {err}", ok=False)
+            return 400, envelope(OnvifFault("ter:WellFormed", "invalid XML").xml())
+        body = find(root, "Body")
+        request = next(iter(body), None) if body is not None else None
+        if request is None:
+            return 400, envelope(OnvifFault("ter:InvalidArgVal", "empty SOAP body").xml())
+        action = _local(request.tag)
+        try:
+            if action not in PRE_AUTH:
+                self._check_auth(root, authorization, method, uri)
+            if request.tag.startswith("{" + NS["timg"] + "}"):
+                handler = self._imaging_actions.get(action)
+            else:
+                handler = self._actions.get(action)
+            if action == "GetServiceCapabilities":
+                handler = self._service_capabilities_handler(request)
+            if handler is None:
+                raise OnvifFault("ter:ActionNotSupported", f"{action} is not supported", sender=False)
+            response = handler(request, host)
+        except OnvifFault as fault:
+            self.camera.record("ONVIF", f"{action}: {fault.reason}", ok=False)
+            return (400 if fault.sender else 500), envelope(fault.xml())
+        except (TypeError, ValueError) as err:
+            self.camera.record("ONVIF", f"{action}: {err}", ok=False)
+            return 400, envelope(OnvifFault("ter:InvalidArgVal", str(err)).xml())
+        return 200, envelope(response)
+
+    def _digest_offered(self, authorization: Optional[str]) -> bool:
+        """Credentials are required, none were sent on the HTTP level and digest is offered."""
+        return self.username is not None and self.auth != "wsse" and not authorization
+
+    def _check_auth(self, root: ET.Element, authorization: Optional[str], method: str, uri: str) -> None:
+        """Core spec 5.9.1, figure 4: HTTP digest first, then WS-UsernameToken."""
+        if self.username is None:
+            return
+        token = find(root, "Security", "UsernameToken")
+        http_digest = authorization if authorization and authorization.lower().startswith("digest ") else None
+        if self.auth == "wsse":
+            http_digest = None
+        if self.auth == "digest":
+            token = None
+        if http_digest is None and token is None:
+            if self.auth != "wsse":
+                raise Unauthorized()
+            raise OnvifFault("ter:NotAuthorized", "authentication required")
+        if http_digest is not None:
+            self._check_http_digest(http_digest, method, uri)
+        if token is not None:
+            self._check_username_token(token)
+
+    def digest_challenge(self) -> str:
+        """WWW-Authenticate header value for a 401 answer."""
+        nonce = uuid.uuid4().hex
+        self._digest_nonces[nonce] = None
+        while len(self._digest_nonces) > 100:  # keep only recent challenges
+            self._digest_nonces.pop(next(iter(self._digest_nonces)))
+        return f'Digest realm="{DIGEST_REALM}", qop="auth", algorithm=MD5, nonce="{nonce}"'
+
+    def _check_http_digest(self, header: str, method: str, uri: str) -> None:
+        params = {k: a or b for k, a, b in re.findall(r'(\w+)=(?:"([^"]*)"|([^,\s]*))', header[7:])}
+        # Core spec 5.9.1, figure 4: failed HTTP digest credentials get HTTP 401
+        if params.get("username") != self.username or params.get("nonce") not in self._digest_nonces:
+            self.camera.record("ONVIF", "HTTP digest: unknown user or nonce", ok=False)
+            raise Unauthorized()
+        def md5(text: str) -> str:
+            return hashlib.md5(text.encode()).hexdigest()
+        ha1 = md5(f"{self.username}:{params.get('realm', DIGEST_REALM)}:{self.password}")
+        ha2 = md5(f"{method}:{params.get('uri', uri)}")
+        if params.get("qop"):
+            expected = md5(f"{ha1}:{params['nonce']}:{params.get('nc')}:{params.get('cnonce')}:"
+                           f"{params['qop']}:{ha2}")
+        else:  # RFC 2069 style
+            expected = md5(f"{ha1}:{params['nonce']}:{ha2}")
+        if params.get("response") != expected:
+            self.camera.record("ONVIF", "HTTP digest: wrong password", ok=False)
+            raise Unauthorized()
+
+    def _check_username_token(self, token: ET.Element) -> None:
+        user = text_of(token, "Username")
+        password = find(token, "Password")
+        nonce, created = text_of(token, "Nonce"), text_of(token, "Created")
+        if user != self.username or password is None:
+            raise OnvifFault("ter:NotAuthorized", "unknown user")
+        supplied = (password.text or "").strip()
+        if password.get("Type", "").endswith("#PasswordText"):
+            ok = supplied == self.password
+        else:
+            if nonce is None or created is None:  # Core spec 5.9.5: both are required
+                raise OnvifFault("ter:NotAuthorized", "digest without nonce/created")
+            digest = hashlib.sha1(base64.b64decode(nonce) + created.encode() + self.password.encode())
+            ok = base64.b64encode(digest.digest()).decode() == supplied
+        if not ok:
+            raise OnvifFault("ter:NotAuthorized", "wrong password")
+
+    def _check_profile(self, request: ET.Element, tag: str = "ProfileToken", required: bool = False) -> None:
+        token = text_of(request, tag)
+        if (token is not None or required) and token != PROFILE_TOKEN:
+            raise invalid_arg("ter:NoProfile", f"unknown profile {token}")
+
+    def _check_ptz_profile(self, request: ET.Element) -> None:
+        """PTZ operations need a profile that holds the PTZ configuration (RemovePTZConfiguration)."""
+        self._check_profile(request)
+        if not self.profile_configs["ptz"]:
+            raise invalid_arg("ter:NoPTZProfile", "profile has no PTZ configuration")
 # ------------------------------------------------------------ HTTP server
-async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.AbstractServer:
-    """Minimal HTTP/1.1 server (keep-alive capable) carrying the SOAP services."""
+async def serve_onvif(onvif: OnvifCamera, host: str, port: int, faults=None, capture=None
+                       ) -> asyncio.AbstractServer:
+    """Minimal HTTP/1.1 server (keep-alive capable) carrying the SOAP services.
+
+    ``faults`` (a :class:`ptzsim.faults.FaultInjector`) mangles the HTTP responses
+    like the VISCA transports; ``capture`` (a :class:`ptzsim.faults.TrafficCapture`)
+    logs every request/response.
+    """
 
     def detailed_health(local_ip: str, local_port: int) -> str:
         hostname, fqdn = get_hostname_and_fqdn()
@@ -1373,6 +1279,8 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         local_ip, local_port = writer.get_extra_info("sockname")[:2]
+        peer = writer.get_extra_info("peername")
+        peer_name = f"{peer[0]}:{peer[1]}"
         try:
             while True:
                 request_line = await reader.readline()
@@ -1384,6 +1292,8 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
                     key, _, value = line.decode("latin-1").partition(":")
                     headers[key.strip().lower()] = value.strip()
                 body = await reader.readexactly(int(headers.get("content-length", 0) or 0))
+                if capture is not None:
+                    capture.log("rx", "ONVIF", peer_name, body, note=f"{method} {path}")
                 host_header = headers.get("host") or f"{local_ip}:{local_port}"
 
                 extra = ""
@@ -1441,16 +1351,36 @@ async def serve_onvif(onvif: OnvifCamera, host: str, port: int) -> asyncio.Abstr
                 reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
                           405: "Method Not Allowed", 500: "Internal Server Error"}[status]
                 close = headers.get("connection", "").lower() == "close"
-                writer.write(
-                    f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{extra}"
-                    f"Content-Length: {len(data)}\r\nConnection: {'close' if close else 'keep-alive'}"
-                    f"\r\n\r\n".encode() + data)
+                response = (f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{extra}"
+                            f"Content-Length: {len(data)}\r\nConnection: {'close' if close else 'keep-alive'}"
+                            f"\r\n\r\n".encode() + data)
+
+                def send_response(_resp: bytes = response, _status: int = status) -> None:
+                    # logged when the reply actually leaves (after loss/delay/duplicate)
+                    if capture is not None:
+                        capture.log("tx", "ONVIF", peer_name, _resp, note=f"HTTP {_status}")
+                    writer.write(_resp)
+
+                if faults is not None:
+                    faults.wrap("ONVIF", peer_name, send_response,
+                                on_disconnect=writer.close)(response)
+                else:
+                    send_response()
                 await writer.drain()
                 if close:
+                    if faults is not None:
+                        # wait only for this connection's delayed replies before closing
+                        await faults.wait_link("ONVIF", peer_name)
+                        if faults.last_dropped("ONVIF", peer_name):
+                            continue  # simulated loss: no answer, connection stays open
                     break
         except (ConnectionError, asyncio.IncompleteReadError, ValueError):
             pass
         finally:
+            if faults is not None:
+                # a half-closing client still gets this connection's delayed replies
+                await faults.wait_link("ONVIF", peer_name)
+                faults.release("ONVIF", peer_name)  # a reconnect gets a fresh allowance
             writer.close()
 
     return await asyncio.start_server(handle, host, port)
