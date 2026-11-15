@@ -103,5 +103,5 @@ default port 8080).
 | Section | Operation | ptzsim |
 |---|---|---|
 | 5.1.2–5.1.4 | GetImagingSettings, SetImagingSettings, GetOptions | white balance only: mode AUTO/MANUAL, Cr/Cb gains 0…255 (128 = VISCA `0x80`) |
-| 5.3.1–5.3.4 | Move, GetMoveOptions, Stop, GetImagingStatus | GetMoveOptions and GetStatus answer empty, Move/Stop give `ter:ActionNotSupported` (focus via ONVIF: issue #34) |
+| 5.3.1–5.3.4 | Move, GetMoveOptions, Stop, GetImagingStatus | focus: `Move` with `Absolute` (position 0…1), `Relative` (distance −1…1) or `Continuous` (speed −1…1) turns autofocus off and drives the focus axis; `Stop` halts it; `GetStatus` returns position 0…1 and `IDLE`/`MOVING`; `GetMoveOptions` advertises all three kinds. Out-of-range values give `ter:InvalidArgVal`; 0 = infinity, 1 = closest (VISCA `0x1000`…`0xF000`) |
 | 5.2 | imaging presets | *missing* |

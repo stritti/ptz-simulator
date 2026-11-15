@@ -78,8 +78,11 @@ Schema types: `tt:` = `http://www.onvif.org/ver10/schema`.
 
 Usually only white balance matters for PTZ integration: `GetImagingSettings`,
 `SetImagingSettings`, `GetOptions` for the video source, mode AUTO/MANUAL, gains
-0…255 (1.0 = neutral). `GetMoveOptions`/`GetStatus` answer empty (no remote focus);
-imaging `Move`/`Stop` return `ter:ActionNotSupported` and never touch the PTZ unit.
+0…255 (1.0 = neutral). Remote focus is supported (spec 5.3): `Move` with `Absolute`
+(position 0…1), `Relative` (distance −1…1) or `Continuous` (speed −1…1) turns
+autofocus off; `Stop` halts the lens; `GetStatus` returns the unitless position and
+`IDLE`/`MOVING`; `GetMoveOptions` advertises all three kinds. Imaging `Move`/`Stop`
+only touch the focus axis, never the PTZ unit.
 
 ## Not simulated by the ptzsim reference (common gaps)
 
