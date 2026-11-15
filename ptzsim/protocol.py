@@ -261,11 +261,6 @@ def register(cls: Type[ProtocolPlugin]) -> Type[ProtocolPlugin]:
     return cls
 
 
-def unregister(name: str) -> None:
-    """Remove a plugin again (for tests)."""
-    _registry.pop(name, None)
-
-
 def _entry_points() -> List[Any]:
     try:
         from importlib import metadata

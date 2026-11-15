@@ -56,8 +56,7 @@ QUERIES = {0x51: ("pan", 0x59), 0x53: ("tilt", 0x5B), 0x55: ("zoom", 0x5D)}
 ANGLE_RANGE = 36000  # hundredths of a degree
 ZOOM_POSITION_MAX = 0xFFFF
 
-SPEED_MAX = 0x3F  # data field range 0x00..0x3F
-TURBO = 0x40  # pan turbo speed (D 5.0.1 3.1.2); any value above 0x3F is treated as maximum
+SPEED_MAX = 0x3F  # data field range 0x00..0x3F; turbo 0x40 and above count as maximum (D 5.0.1 3.1.2)
 ALARMS = 0x00  # alarm byte of the general response: no alarm (3.2.1)
 # Standard commands stop by themselves after this many seconds (runaway detection,
 # section 4); a new drive command restarts the timer.
@@ -210,7 +209,7 @@ class PelcoCamera:
         self.camera.record("Pelco-D", ", ".join(actions) if actions else "stop all")
         return self.ack(frame)
 
-    VELOCITY_AXES = ("pan_velocity", "tilt_velocity", "zoom_velocity", "focus_velocity")
+    VELOCITY_AXES = tuple(f"{axis}_velocity" for axis in st.AXES)
 
     def _restart_runaway_timer(self, moving: bool) -> None:
         """Stop a standard-command motion after RUNAWAY_TIMEOUT seconds (section 4)."""

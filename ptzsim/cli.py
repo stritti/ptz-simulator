@@ -16,9 +16,10 @@ from . import faults, protocol
 from .display import dashboard, log_printer
 from .transports import SONY_HEADER, SONY_VISCA_COMMAND, SONY_VISCA_INQUIRY, Simulator
 from .visca import ViscaCamera, hexdump, parse_hex
-from .network import get_resolved_addresses, format_network_info_for_startup, format_network_summary
+from .network import get_resolved_addresses, format_network_info_for_startup
 
-DEFAULT_PORTS = {"sony": 52381, "tcp": 5678, "udp": 1259, "onvif": 8080}
+# Default ports of the port-based plugins, taken from the plugin registry.
+DEFAULT_PORTS = {p.name: p.default_port for p in protocol.plugins() if getattr(p, "default_port", 0)}
 
 
 def build_parser() -> argparse.ArgumentParser:

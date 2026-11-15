@@ -313,69 +313,6 @@ def format_network_info_for_startup(bind_address: str = "0.0.0.0") -> str:
     return "\n".join(lines)
 
 
-def format_network_summary() -> str:
-    """
-    Format a brief network summary with hostname and main IP addresses.
-
-    Returns a single-line summary suitable for logs.
-    """
-    hostname, fqdn = get_hostname_and_fqdn()
-    interfaces = get_all_interfaces_detailed()
-
-    # Collect main IPv4 addresses (non-loopback, non-docker)
-    main_ips = []
-    for iface_name, iface in sorted(interfaces.items()):
-        # Prefer eth, en, wlan interfaces
-        if iface_name.startswith(("eth", "en", "wlan")):
-            main_ips.extend([addr for addr, _ in iface.ipv4_addresses])
-
-    # If no main interface, get any IPv4
-    if not main_ips:
-        for iface_name, iface in sorted(interfaces.items()):
-            if not iface_name.startswith(("lo", "veth", "docker", "br-")):
-                main_ips.extend([addr for addr, _ in iface.ipv4_addresses])
-                if main_ips:
-                    break
-
-    if main_ips:
-        return f"{hostname} ({', '.join(main_ips[:3])})"
-    else:
-        return hostname
-
-
-def format_addresses_for_display(
-    bind_address: str,
-    ports: Dict[str, int],
-) -> List[str]:
-    """
-    Format network addresses and ports for display in the startup message.
-
-    Args:
-        bind_address: The bind address (e.g., "0.0.0.0", "127.0.0.1", or specific IP)
-        ports: Dictionary mapping transport names to port numbers
-
-    Returns:
-        List of formatted strings showing how to connect
-    """
-    lines: List[str] = []
-
-    # If binding to all interfaces
-    if bind_address == "0.0.0.0":
-        all_addrs = get_resolved_addresses(bind_address)
-        if all_addrs:
-            lines.append(f"  Available on: {', '.join(all_addrs)}")
-
-            # Show how to connect via each port, using the main interface
-            for transport, port in sorted(ports.items()):
-                lines.append(f"  {transport:15} → {all_addrs[0]}:{port}")
-    else:
-        # If binding to a specific address
-        for transport, port in sorted(ports.items()):
-            lines.append(f"  {transport:15} → {bind_address}:{port}")
-
-    return lines
-
-
 def get_resolved_addresses(bind_address: str) -> List[str]:
     """
     Get all addresses that this bind address resolves to.

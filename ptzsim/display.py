@@ -309,7 +309,7 @@ async def log_printer(camera: ViscaCamera, interval: float = 0.1,
         new = list(camera.log)[-(total - seen):] if total > seen else []
         seen = total
         for entry in new:
-            pan, tilt, zoom, focus = camera.state.position()
+            pan, tilt, zoom, _ = camera.state.position()
             print(f"{entry.source:<44} {entry.description:<36} "
                   f"pan={pan} tilt={tilt} zoom={zoom:#06x}", flush=True)
         await asyncio.sleep(interval)

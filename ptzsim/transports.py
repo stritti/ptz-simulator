@@ -159,7 +159,17 @@ async def serve_tcp(sim: Simulator, host: str, port: int) -> asyncio.AbstractSer
 
 
 # ---------------------------------------------------------------- raw UDP
-class RawUdpProtocol(asyncio.DatagramProtocol):
+class UdpProtocol(asyncio.DatagramProtocol):
+    """Base of the UDP transports: one wrapped sender per peer address.
+
+    With fault injection off the sender is built per datagram (no per-peer state
+    is kept); with it on, senders are cached per peer so --disconnect-after counts
+    per peer, and peers "disconnected" by it are ignored from then on.
+    """
+
+    #: Transport label for capture and fault injection (set by the subclass).
+    transport_label = ""
+
     def __init__(self, sim: Simulator):
         self.sim = sim
         self.transport: Optional[asyncio.DatagramTransport] = None
@@ -170,54 +180,44 @@ class RawUdpProtocol(asyncio.DatagramProtocol):
     def connection_made(self, transport) -> None:
         self.transport = transport
 
+    @staticmethod
+    def _peer(addr) -> str:
+        return f"{addr[0]}:{addr[1]}"
+
     def _send_for(self, addr) -> Send:
-        peer = f"{addr[0]}:{addr[1]}"
+        peer = self._peer(addr)
         raw = lambda reply, a=addr: self.transport.sendto(reply, a)
         if self.sim.faults is None:
             # no per-peer state needed: do not retain a sender per client socket
-            return self.sim.wrap_out("VISCA/UDP", peer, raw)
+            return self.sim.wrap_out(self.transport_label, peer, raw)
         if addr not in self._sends:
             if len(self._sends) >= MAX_CACHED_SENDERS:
                 self._sends.pop(next(iter(self._sends)))  # evict the oldest peer
             self._sends[addr] = self.sim.wrap_out(
-                "VISCA/UDP", peer, raw, on_disconnect=lambda a=addr: self._ignored.add(a))
+                self.transport_label, peer, raw, on_disconnect=lambda a=addr: self._ignored.add(a))
         return self._sends[addr]
+
+
+class RawUdpProtocol(UdpProtocol):
+    transport_label = "VISCA/UDP"
 
     def datagram_received(self, data: bytes, addr) -> None:
         if addr in self._ignored:
             return
-        peer = f"{addr[0]}:{addr[1]}"
-        feed(self.sim, bytearray(), data, self._send_for(addr), label="VISCA/UDP", peer=peer)
+        peer = self._peer(addr)
+        feed(self.sim, bytearray(), data, self._send_for(addr), label=self.transport_label, peer=peer)
 
 
 # ------------------------------------------------------- Sony VISCA over IP
-class SonyViscaIpProtocol(asyncio.DatagramProtocol):
+class SonyViscaIpProtocol(UdpProtocol):
     """Sony "VISCA over IP": 8-byte header (type, length, sequence) + VISCA."""
 
+    transport_label = "Sony VISCA/IP"
+
     def __init__(self, sim: Simulator):
-        self.sim = sim
-        self.transport: Optional[asyncio.DatagramTransport] = None
+        super().__init__(sim)
         # Last sequence number per controller; a repeat is not executed again.
         self._last_sequence = {}
-        # One wrapped datagram sender per controller, so faults count per peer.
-        self._sends = {}
-        self._ignored = set()  # peers "disconnected" by --disconnect-after
-
-    def connection_made(self, transport) -> None:
-        self.transport = transport
-
-    def _send_for(self, addr) -> Send:
-        peer = f"{addr[0]}:{addr[1]}"
-        raw = lambda data, a=addr: self.transport.sendto(data, a)
-        if self.sim.faults is None:
-            # no per-peer state needed: do not retain a sender per client socket
-            return self.sim.wrap_out("Sony VISCA/IP", peer, raw)
-        if addr not in self._sends:
-            if len(self._sends) >= MAX_CACHED_SENDERS:
-                self._sends.pop(next(iter(self._sends)))  # evict the oldest peer
-            self._sends[addr] = self.sim.wrap_out(
-                "Sony VISCA/IP", peer, raw, on_disconnect=lambda a=addr: self._ignored.add(a))
-        return self._sends[addr]
 
     def _reply(self, addr, payload_type: int, sequence: int, payload: bytes) -> None:
         header = SONY_HEADER.pack(payload_type, len(payload), sequence)
@@ -232,7 +232,7 @@ class SonyViscaIpProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr) -> None:
         if addr in self._ignored:
             return
-        peer = f"{addr[0]}:{addr[1]}"
+        peer = self._peer(addr)
         if len(data) < SONY_HEADER.size:
             log.warning("short Sony VISCA-IP datagram from %s: %s", addr, hexdump(data))
             self.sim.capture_rx("Sony VISCA/IP", peer, data, note="short datagram", replay=False)

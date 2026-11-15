@@ -31,7 +31,6 @@ PRESET_SPEED_MAX = 50
 PRESET_SPEED_DEFAULT = PRESET_SPEED_MAX
 
 # White balance (VISCA API doc): gains 0x00..0xFF, 0x80 is 50 %.
-WB_MODES = ("auto", "indoor", "outdoor", "auto_outdoor", "manual")
 WB_AUTO_MODES = ("auto", "auto_outdoor")
 WB_GAIN_NEUTRAL, WB_GAIN_MAX = 0x80, 0xFF
 WB_GAIN_STEP = 8  # simulator choice: the doc does not give the relative step
@@ -98,7 +97,7 @@ class CameraState:
     @property
     def busy(self) -> bool:
         """True while an absolute move (with a pending completion) is running."""
-        return any(getattr(self, f"{axis}_target") is not None for axis in AXES)
+        return self.axes_busy(AXES)
 
     def axes_busy(self, axes) -> bool:
         """True while one of ``axes`` ("pan", "tilt", "zoom", "focus") has a target."""
@@ -222,9 +221,6 @@ class CameraState:
         """Stop the absolute moves of ``axes``; the axes stay where they are."""
         for axis in axes:
             setattr(self, f"{axis}_target", None)
-
-    def stop_absolute(self) -> None:
-        self.pan_target = self.tilt_target = self.zoom_target = self.focus_target = None
 
     def stop_all(self) -> None:
         for axis in AXES:
