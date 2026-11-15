@@ -34,6 +34,20 @@ ERROR_SEQUENCE = b"\x0f\x01"
 ERROR_MESSAGE_TYPE = b"\x0f\x02"
 
 
+def feed(sim, buffer: bytearray, data: bytes, send: Send, split=split_packets,
+         label: str = "", peer: Optional[str] = None) -> None:
+    """Append received bytes to ``buffer``, split them into packets and process each.
+
+    With ``label`` set, every packet is also reported to ``sim.capture_rx`` (--capture).
+    """
+    buffer.extend(data)
+    capture_rx = getattr(sim, "capture_rx", None)
+    for packet in split(buffer):
+        if label and capture_rx is not None:
+            capture_rx(label, peer, packet)
+        sim.process(packet, send)
+
+
 class Simulator:
     """Runs the camera physics and routes replies back to the senders."""
 
@@ -129,10 +143,7 @@ async def serve_tcp(sim: Simulator, host: str, port: int) -> asyncio.AbstractSer
         buffer = bytearray()
         try:
             while data := await reader.read(1024):
-                buffer.extend(data)
-                for packet in split_packets(buffer):
-                    sim.capture_rx("VISCA/TCP", peer_name, packet)
-                    sim.process(packet, send)
+                feed(sim, buffer, data, send, label="VISCA/TCP", peer=peer_name)
         except ConnectionError:
             pass
         finally:
@@ -176,10 +187,7 @@ class RawUdpProtocol(asyncio.DatagramProtocol):
         if addr in self._ignored:
             return
         peer = f"{addr[0]}:{addr[1]}"
-        buffer = bytearray(data)
-        for packet in split_packets(buffer):
-            self.sim.capture_rx("VISCA/UDP", peer, packet)
-            self.sim.process(packet, self._send_for(addr))
+        feed(self.sim, bytearray(), data, self._send_for(addr), label="VISCA/UDP", peer=peer)
 
 
 # ------------------------------------------------------- Sony VISCA over IP
@@ -342,12 +350,7 @@ class PtyPort:
             data = os.read(self.master, 1024)
         except (BlockingIOError, OSError):
             return
-        self._buffer.extend(data)
-        capture_rx = getattr(self.sim, "capture_rx", None)
-        for packet in self.split(self._buffer):
-            if capture_rx is not None:
-                capture_rx("VISCA/serial", None, packet)
-            self.sim.process(packet, self._send)
+        feed(self.sim, self._buffer, data, self._send, split=self.split, label="VISCA/serial")
 
     def close(self) -> None:
         """Stop reading, close both ends and remove the symlink."""

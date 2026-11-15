@@ -124,9 +124,14 @@ class CameraState:
         return round(self.pan), round(self.tilt), round(self.zoom), round(self.focus)
 
     # ---------------------------------------------------------------- commands
+    def stop_axis(self, axis: str) -> None:
+        """Stop continuous motion and any pending target of one axis."""
+        setattr(self, f"{axis}_velocity", 0.0)
+        setattr(self, f"{axis}_target", None)
+
     def stop_pan_tilt(self) -> None:
-        self.pan_velocity = self.tilt_velocity = 0.0
-        self.pan_target = self.tilt_target = None
+        self.stop_axis("pan")
+        self.stop_axis("tilt")
 
     def drive_pan_tilt(self, pan_dir: int, tilt_dir: int, pan_speed: int, tilt_speed: int) -> None:
         """Continuous move. Directions are -1, 0 or +1."""
@@ -223,8 +228,7 @@ class CameraState:
 
     def stop_all(self) -> None:
         for axis in AXES:
-            setattr(self, f"{axis}_velocity", 0.0)
-            setattr(self, f"{axis}_target", None)
+            self.stop_axis(axis)
 
     def finish_moves(self) -> None:
         """Jump straight to all targets (used in --instant mode and tests)."""
