@@ -731,6 +731,10 @@ There is also a test against the real ONVIF client library
 PTZSIM_ONVIF_CLIENT=1 uv run --group onvif-client pytest
 ```
 
+CI also scans the lockfiles (`uv.lock`, `docs/package-lock.json`) for known vulnerabilities
+with [OSV-Scanner](https://github.com/google/osv-scanner), see
+[.github/workflows/osv-scanner.yml](.github/workflows/osv-scanner.yml).
+
 ## ONVIF conformance
 
 Checked against the [ONVIF Core Specification 26.06](https://www.onvif.org/specs/2606/ONVIF-Core-Spec-v2606.pdf)
