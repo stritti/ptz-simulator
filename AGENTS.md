@@ -94,6 +94,12 @@ If a commit fails, reword it (`git commit --amend` or an interactive rebase) bef
 the PR is merged; a renamed PR title re-runs the check automatically.
 
 - `.github/workflows/ci.yml` — tests on Python 3.8 and 3.13, builds the release artifacts.
+- `.github/workflows/osv-scanner.yml` — [OSV-Scanner](https://github.com/google/osv-scanner)
+  vulnerability scan of the lockfiles (`uv.lock`, `docs/package-lock.json`): PRs fail on newly
+  introduced vulnerabilities; pushes to `main` and a weekly schedule run a full scan with
+  `fail-on-vuln: false` (known findings on `main` are tracked by Dependabot and only reported,
+  SARIF lands in the Security tab / code scanning). Local run:
+  `docker run -v "$PWD":/src ghcr.io/google/osv-scanner scan -r /src`.
 - `.github/workflows/pr-title.yml` — Conventional Commits gate for PR title and commits.
 - `.github/workflows/release-please.yml` — maintains the release PR (and its `uv.lock`);
   merging it tags the release and attaches wheel, sdist and `ptzsim.pyz` built by

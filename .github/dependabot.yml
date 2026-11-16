@@ -98,3 +98,4 @@ updates:
         patterns:
           - "astral-sh/*"
           - "googleapis/*"
+          - "google/osv-scanner-action"
