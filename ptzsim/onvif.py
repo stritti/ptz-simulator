@@ -887,8 +887,7 @@ class PtzService:
         if stop_pt:
             s.stop_pan_tilt()
         if stop_zoom:
-            s.zoom_velocity = 0.0
-            s.zoom_target = None
+            s.stop_axis("zoom")
         if stop_pt and stop_zoom:
             self._cancel_timer()
         what = " + ".join(n for n, f in (("pan/tilt", stop_pt), ("zoom", stop_zoom)) if f)
@@ -1164,9 +1163,7 @@ class ImagingService:
     def imaging_stop(self, request, host) -> str:
         """Imaging spec 5.3.3: stop ongoing focus movements; autofocus is not affected."""
         self._check_source(request)
-        s = self.state
-        s.focus_velocity = 0.0
-        s.focus_target = None
+        self.state.stop_axis("focus")
         self.camera.record("ONVIF", "imaging Stop focus")
         return response("timg", "Stop")
 
@@ -1289,14 +1286,14 @@ class OnvifCamera(DeviceService, MediaService, PtzService, ImagingService):
                 handler = self._actions.get(action)
             if handler is None:
                 raise OnvifFault("ter:ActionNotSupported", f"{action} is not supported", sender=False)
-            response = handler(request, host)
+            result = handler(request, host)
         except OnvifFault as fault:
             self.camera.record("ONVIF", f"{action}: {fault.reason}", ok=False)
             return (400 if fault.sender else 500), envelope(fault.xml())
         except (TypeError, ValueError) as err:
             self.camera.record("ONVIF", f"{action}: {err}", ok=False)
             return 400, envelope(OnvifFault("ter:InvalidArgVal", str(err)).xml())
-        return 200, envelope(response)
+        return 200, envelope(result)
 
     def _digest_offered(self, authorization: Optional[str]) -> bool:
         """Credentials are required, none were sent on the HTTP level and digest is offered."""

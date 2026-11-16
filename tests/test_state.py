@@ -157,7 +157,8 @@ def test_stop_axes_and_stop_all():
     assert s.zoom_velocity != 0  # continuous motion is not touched by stop_axes
     s.stop_all()
     assert not s.moving and not s.busy
-    s.stop_absolute()
+    s.move_pan_tilt_to(100, 100, 1, 1)
+    s.stop_axes(st.AXES)
     assert not s.busy
 
 

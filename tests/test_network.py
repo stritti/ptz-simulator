@@ -16,7 +16,7 @@ import pytest
 from ptzsim import builtin_protocols, cli, display, network
 from ptzsim.tui import TuiController
 from ptzsim.visca import ViscaCamera
-from ptzsim.network import (InterfaceInfo, format_addresses_for_display, get_all_interfaces_detailed,
+from ptzsim.network import (InterfaceInfo, get_all_interfaces_detailed,
                             get_network_addresses, get_resolved_addresses)
 
 
@@ -90,9 +90,6 @@ def test_startup_addresses_skip_loopback_interface_and_list_main_interface_first
     assert get_resolved_addresses("0.0.0.0") == ["172.28.67.216", "172.17.0.1"]
     assert get_network_addresses("0.0.0.0") == {"eth0": ["172.28.67.216", "2001:db8::5"],
                                                 "docker0": ["172.17.0.1"]}
-    lines = format_addresses_for_display("0.0.0.0", {"visca-tcp": 5678})
-    assert lines == ["  Available on: 172.28.67.216, 172.17.0.1",
-                     "  visca-tcp       → 172.28.67.216:5678"]
 
 
 def test_loopback_only_has_no_reachable_addresses(monkeypatch):
@@ -102,7 +99,6 @@ def test_loopback_only_has_no_reachable_addresses(monkeypatch):
 
     assert get_network_addresses("0.0.0.0", include_ipv6=False) == {}
     assert get_resolved_addresses("0.0.0.0") == []
-    assert format_addresses_for_display("0.0.0.0", {"ONVIF": 8080}) == []
 
 
 def test_get_resolved_addresses_specific_ip():
@@ -135,9 +131,6 @@ def test_network_redraw_does_not_repeat_dns(monkeypatch, fallback):
     for _ in range(3):
         text = display.render_network("test", color=False)
         assert "camera.example.test" in text and "192.0.2.10" in text
-        assert "192.0.2.10" in "\n".join(
-            format_addresses_for_display("0.0.0.0", {"ONVIF": 8080})
-        )
     assert lookups.count("fqdn") == 1
     assert lookups.count("addresses") <= 2
 
@@ -380,40 +373,6 @@ def test_network_addresses_fallback_adds_the_bound_address(monkeypatch):
 
     monkeypatch.setattr(network.socket, "getaddrinfo", fail)
     assert network.get_network_addresses("192.168.0.5", include_ipv6=False) == {"bound": ["192.168.0.5"]}
-
-
-def test_format_network_summary_prefers_physical_interfaces(monkeypatch):
-    monkeypatch.setattr(network, "get_all_interfaces_detailed", lambda: {
-        "lo": make_interface("lo", ipv4=[("127.0.0.1", "255.0.0.0")]),
-        "docker0": make_interface("docker0", ipv4=[("172.17.0.1", "255.255.0.0")]),
-        "eth0": make_interface("eth0", ipv4=[("172.28.67.216", "255.255.240.0"), ("172.28.67.217", "255.255.240.0"),
-                                            ("172.28.67.218", "255.255.240.0"), ("172.28.67.219", "255.255.240.0")]),
-    })
-    summary = network.format_network_summary()
-    assert summary == f"{socket.gethostname()} (172.28.67.216, 172.28.67.217, 172.28.67.218)"  # max 3
-
-
-def test_format_network_summary_falls_back_to_any_ipv4_then_hostname(monkeypatch):
-    monkeypatch.setattr(network, "get_all_interfaces_detailed", lambda: {
-        "docker0": make_interface("docker0", ipv4=[("172.17.0.1", "255.255.0.0")]),
-        "usb0": make_interface("usb0", ipv4=[("10.9.0.1", "255.255.0.0")]),  # not eth/en/wlan/lo/veth/...
-    })
-    assert network.format_network_summary() == f"{socket.gethostname()} (10.9.0.1)"
-    monkeypatch.setattr(network, "get_all_interfaces_detailed", lambda: {})
-    assert network.format_network_summary() == socket.gethostname()
-
-
-def test_format_addresses_for_display_on_all_interfaces(monkeypatch):
-    monkeypatch.setattr(network, "get_resolved_addresses", lambda bind: ["10.0.0.9", "10.0.0.10"])
-    lines = network.format_addresses_for_display("0.0.0.0", {"sony": 52381, "tcp": 5678})
-    assert lines[0] == "  Available on: 10.0.0.9, 10.0.0.10"
-    assert lines[1:] == ["  " + "sony".ljust(15) + " → 10.0.0.9:52381",
-                         "  " + "tcp".ljust(15) + " → 10.0.0.9:5678"]
-
-
-def test_format_addresses_for_display_on_a_specific_bind():
-    lines = network.format_addresses_for_display("10.0.0.9", {"tcp": 5678})
-    assert lines == ["  " + "tcp".ljust(15) + " → 10.0.0.9:5678"]
 
 
 def test_get_resolved_addresses_for_a_specific_bind():

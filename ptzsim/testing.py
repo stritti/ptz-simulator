@@ -34,11 +34,8 @@ from typing import AsyncIterator, Iterable, List
 
 from .protocol import ServeContext
 from .transports import Simulator
-from .state import CameraState
+from .state import AXES, CameraState
 from .visca import LogEntry, ViscaCamera
-
-#: The motor axes of the camera model.
-AXES = ("pan", "tilt", "zoom", "focus")
 
 
 def free_port(kind: int = socket.SOCK_STREAM) -> int:
