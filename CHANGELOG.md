@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.9.0](https://github.com/stritti/ptz-simulator/compare/v0.8.0...v0.9.0) (2026-11-16)
+
+
+### Features
+
+* **cli:** add fault injection, capture and replay options ([41656d3](https://github.com/stritti/ptz-simulator/commit/41656d36ec5126968244f90a8081e03a4249ca31))
+* **onvif:** drive focus via the Imaging service Move/Stop ([98057b5](https://github.com/stritti/ptz-simulator/commit/98057b5ee9d05ee12824afc4e0b8603c70c45f2f))
+* **onvif:** port imaging focus Move/Stop onto response() style ([403aa8f](https://github.com/stritti/ptz-simulator/commit/403aa8f73aa9323e3f7c71045ab8874278855798))
+* **onvif:** port imaging focus Move/Stop onto the service mixins ([726e710](https://github.com/stritti/ptz-simulator/commit/726e7106c6db8c185099be86bf512049e9b52b5e))
+
+
+### Bug Fixes
+
+* **cli:** deliver delayed replies on half-close and bound the UDP sender cache ([3a5c0b9](https://github.com/stritti/ptz-simulator/commit/3a5c0b95ec18b2872faf3437d947372943d2a88a))
+* **cli:** disconnect after delivered replies and replay ONVIF captures ([3dcb2f2](https://github.com/stritti/ptz-simulator/commit/3dcb2f2559797c31f20233cd9fd1ef03c677a6a6))
+* **cli:** per-connection pending waits, link release on close, capture all Sony datagrams ([feba4f7](https://github.com/stritti/ptz-simulator/commit/feba4f7ff70f4e424c6815c2c66c573efcd79df7))
+* **cli:** review round 2 for fault injection: replay, pty disconnect, capture timeline ([2a39feb](https://github.com/stritti/ptz-simulator/commit/2a39feb45d75e23b4a4ccdde7d7212fcc525fb77))
+* **cli:** treat a connection reset in ptzsim send like EOF ([742b1c2](https://github.com/stritti/ptz-simulator/commit/742b1c243771389c90caa838324dc00e5b94d7c6))
+* **onvif:** standby guard and validation order for imaging focus Move ([ad02541](https://github.com/stritti/ptz-simulator/commit/ad0254174fa4c7968834cfc77c7317772230a573))
+
 ## [0.8.0](https://github.com/stritti/ptz-simulator/compare/v0.7.0...v0.8.0) (2026-11-09)
 
 
