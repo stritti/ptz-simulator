@@ -250,6 +250,12 @@ and enclosed in brackets:
 - **`PgUp` / `PgDn`** - Scroll long camera, network or help content; the status
   line shows the visible line range when content overflows
 
+The view tabs at the top (`[c]:Camera`, `[n]:Network`) and the single-key
+shortcuts in the command bar (`[Space]`, `[h]`, `[f]`, `[b]`, `[o]`, `[c]`,
+`[n]`, `[?]`, `[q]`, `[P then 1-9]`, `[C then 1-9]`) can also be clicked with
+the left mouse button in terminals that report mouse events. Multi-key
+shortcuts (arrows/WASD, `+/-`, `1-9`, `[ / ]`, `PgUp/PgDn`) stay keyboard-only.
+
 The interactive TUI requires at least **120 columns and 8 rows**. If the
 terminal is smaller, a resize notice replaces the dashboard; `Space` (stop)
 and `q` (quit) remain available. Resizing back restores the current view and
@@ -363,6 +369,9 @@ current position using `GetStatus`.
 View switching uses lowercase `n` and `c`; uppercase `C` still clears a preset.
 The network view uses the full width without the camera picture. Returning with
 `c` restores the camera layout without resetting the camera or its presets.
+Where the terminal reports mouse events, the view tabs and the single-key
+entries of the bottom command bar can also be clicked with the left mouse
+button instead of pressing their key.
 
 Next to the dashboard, when there is enough vertical space, the TUI shows the
 **camera picture** at the current position: the same virtual scene as the NDI test
