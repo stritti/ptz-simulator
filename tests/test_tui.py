@@ -82,6 +82,16 @@ def test_speed_keys_change_jog_speed():
     assert 0 < tui.state.pan_velocity < fast
 
 
+@pytest.mark.parametrize("down, up", [(",", "."), ("[", "]")])
+def test_speed_keys_work_on_german_and_us_keyboards(down, up):
+    tui, _ = make()
+    tui.handle_key(up)
+    assert tui.speed == SPEED_LEVELS // 2 + 1
+    tui.handle_key(down)
+    tui.handle_key(down)
+    assert tui.speed == SPEED_LEVELS // 2 - 1
+
+
 def test_zoom_jog_and_stop():
     tui, clock = make()
     tui.handle_key("+")
@@ -347,7 +357,7 @@ def test_footer_groups_and_labels_all_available_commands(width, height, view_key
     footer = lines[-4:]
     groups = [
         ("MOVE", (("[Arrows/WASD]", "Pan/Tilt"), ("[+/-]", "Zoom"),
-                  ("[Space]", "Stop"), ("[ / ]", "Speed"), ("[h]", "Home"))),
+                  ("[Space]", "Stop"), ("[,/.]", "Speed"), ("[h]", "Home"))),
         ("PRESET", (("[1-9]", "Recall"), ("[P then 1-9]", "Save"),
                     ("[C then 1-9]", "Clear"))),
         ("CAMERA", (("[f]", "Autofocus"), ("[b]", "White balance"), ("[o]", "Power"))),
@@ -517,7 +527,7 @@ def test_footer_uses_four_aligned_columns_in_four_rows(width):
         start = lines[0].index(group)
         assert all(line[start - 6:start] == " " * 6 for line in lines)
     assert lines[1].index("Pan/Tilt") == lines[2].index("Zoom") == lines[3].index("Stop")
-    assert lines[2].index("[h]") == lines[3].index("[ / ]")
+    assert lines[2].index("[h]") == lines[3].index("[,/.]")
     assert lines[2].index("[?]") == lines[3].index("[q]")
     assert all(len(line) <= width for line in lines)
 
