@@ -876,3 +876,99 @@ def test_resize_is_adopted_on_windows_curses(monkeypatch, platform, resized):
     monkeypatch.setattr(tui_mod.sys, "platform", platform)
     asyncio.run(tui_mod.interactive(ViscaCamera(), "t", interval=0.01))
     assert calls == resized
+
+
+# ------------------------------------------------------------- mouse control
+def test_click_regions_cover_tabs_and_single_key_shortcuts():
+    tui, _ = make()
+    lines, _ = tui.layout("test", 120, 24)
+    regions = tui_mod.click_regions(lines, len(tui.shortcuts(120, 24)) + 1)
+    tabs = {key: (row, col, length) for row, col, length, key in regions if row == 0}
+    assert set(tabs) == {"c", "n", "?"}
+    assert tabs["c"] == (0, lines[0].index("[c] Camera"), len("[c] Camera"))
+    assert tabs["n"] == (0, lines[0].index("[n] Network"), len("[n] Network"))
+    footer_keys = {key for row, _, _, key in regions if row > 0}
+    assert {" ", "h", "f", "b", "o", "c", "n", "?", "q", "P", "C"} <= footer_keys
+    assert (len(lines) - 1, lines[-1].index("[q]"), 3, "q") in regions
+
+
+def test_click_regions_skip_multi_key_labels():
+    tui, _ = make()
+    lines, _ = tui.layout("test", 120, 24)
+    regions = tui_mod.click_regions(lines, len(tui.shortcuts(120, 24)) + 1)
+    covered = {(row, col) for row, col, length, _ in regions for col in range(col, col + length)}
+    for label in ("[Arrows/WASD]", "[+/-]", "[1-9]", "[ / ]", "[,/.]", "[PgUp/PgDn]"):
+        for row, line in enumerate(lines):
+            col = line.find(label)
+            if col >= 0:
+                assert all((row, c) not in covered for c in range(col, col + len(label)))
+
+
+def test_click_regions_in_tiny_terminal_keep_stop_and_quit_clickable():
+    tui, _ = make()
+    lines, _ = tui.layout("test", 100, 10)
+    regions = tui_mod.click_regions(lines, len(tui.shortcuts(100, 10)) + 1)
+    keys = {key for _, _, _, key in regions}
+    assert " " in keys and "q" in keys
+
+
+def test_handle_click_dispatches_the_region_key():
+    tui, _ = make()
+    lines, _ = tui.layout("test", 120, 24)
+    regions = tui_mod.click_regions(lines, len(tui.shortcuts(120, 24)) + 1)
+    tui.handle_click(lines[-1].index("[q]") + 1, len(lines) - 1, regions)
+    assert tui.quit
+
+
+def test_handle_click_on_a_tab_switches_the_view():
+    tui, _ = make()
+    lines, _ = tui.layout("test", 120, 24)
+    regions = tui_mod.click_regions(lines, len(tui.shortcuts(120, 24)) + 1)
+    tui.handle_click(lines[0].index("[n] Network") + 2, 0, regions)
+    assert tui.current_view == "network"
+    lines, _ = tui.layout("test", 120, 24)
+    regions = tui_mod.click_regions(lines, len(tui.shortcuts(120, 24)) + 1)
+    tui.handle_click(lines[0].index("[c] Camera") + 2, 0, regions)
+    assert tui.current_view == "camera"
+
+
+def test_handle_click_outside_all_regions_does_nothing():
+    tui, _ = make()
+    lines, _ = tui.layout("test", 120, 24)
+    regions = tui_mod.click_regions(lines, len(tui.shortcuts(120, 24)) + 1)
+    tui.handle_click(0, 0, regions)  # product name in the header
+    tui.handle_click(5, 3, regions)  # content
+    assert not tui.quit and tui.current_view == "camera" and not tui.state.moving
+
+
+def test_interactive_mouse_click_switches_view_and_restores_mouse_mask(monkeypatch):
+    probe = TuiController(ViscaCamera())
+    lines, _ = probe.layout("title", 120, 24)
+    net_col = lines[0].index("[n] Network") + 1
+    masks = []
+    mod = fake_curses(KEY_MOUSE="KEY_MOUSE", ALL_MOUSE_EVENTS=8,
+                      BUTTON1_CLICKED=1, BUTTON1_PRESSED=2, BUTTON1_DOUBLE_CLICKED=4,
+                      mousemask=masks.append,
+                      getmouse=lambda: (0, net_col, 0, 0, 1))
+    frames = [[], ["KEY_MOUSE"], ["q"]]  # first frame draws, so regions exist for the click
+
+    def getkey():
+        if frames[0]:
+            return frames[0].pop(0)
+        frames.pop(0)
+        raise mod.error()
+
+    mod._screen.getkey = getkey
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    cam = ViscaCamera()
+    asyncio.run(tui_mod.interactive(cam, "title", interval=0.01))
+    assert masks == [8, 0]  # mouse events requested on start, mask restored on exit
+    body = [call[3] for call in mod._screen.calls if call[0] == "addnstr" and call[1] > 0]
+    assert any(text.startswith("Interfaces (") for text in body)  # the network view was drawn
+
+
+def test_interactive_without_mouse_support_still_runs(monkeypatch):
+    mod = fake_curses(keys=["q"])  # no mousemask/getmouse attributes
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    asyncio.run(tui_mod.interactive(ViscaCamera(), "t", interval=0.01))
+    assert ("keypad", False) in mod._screen.calls

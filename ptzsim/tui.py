@@ -52,7 +52,8 @@ HELP = [
     ("CAMERA", [("f", "toggle autofocus"), ("b", "one-push white balance"),
                 ("o", "power on/standby")]),
     ("VIEW", [("c / n", "camera / network view"), ("PgUp/PgDn", "scroll content"),
-              ("? / Esc", "open/close help; cancel preset"), ("q", "quit simulator")]),
+              ("? / Esc", "open/close help; cancel preset"),
+              ("Mouse", "click the view tabs and single-key shortcuts"), ("q", "quit simulator")]),
 ]
 COMMANDS = [command for _, commands in HELP for command in commands]
 
@@ -169,6 +170,13 @@ class TuiController:
             self.current_view, self.help_visible = "camera", False
         elif key in ("q", "Q"):
             self.quit = True
+
+    def handle_click(self, x: int, y: int, regions: List[tuple]) -> None:
+        """Dispatch a mouse click at terminal cell (x, y) to the region's key."""
+        for row, col, length, key in regions:
+            if row == y and col <= x < col + length:
+                self.handle_key(key)
+                return
 
     def tick(self) -> None:
         """Stop jogs whose key is no longer repeating."""
@@ -502,6 +510,55 @@ def _view_cols(rows: int) -> int:
 CURSES_KEYS = {"KEY_UP": "UP", "KEY_DOWN": "DOWN", "KEY_LEFT": "LEFT", "KEY_RIGHT": "RIGHT",
                "KEY_PPAGE": "PAGEUP", "KEY_NPAGE": "PAGEDOWN"}
 
+# Footer labels that stand for a single key, plus the multi-key labels mapped to
+# their leading key; every other bracketed label (Arrows/WASD, +/-, 1-9, ...) is
+# not clickable.
+CLICK_LABEL_KEYS = {"Space": " ", "P then 1-9": "P", "C then 1-9": "C", "?/Esc": "?"}
+
+
+def click_regions(lines: List[str], footer_rows: int) -> List[tuple]:
+    """Clickable (row, col, length, key) areas: the view tabs and the footer shortcuts."""
+    regions: List[tuple] = []
+    if lines:  # the header tabs: " [c] Camera ", " [n] Network ", " [?] Help "
+        for match in re.finditer(r"\[([cn?])\] (?:Camera|Network|Help)", lines[0]):
+            regions.append((0, match.start(), match.end() - match.start(), match.group(1)))
+    for row in range(max(len(lines) - footer_rows + 1, 0), len(lines)):
+        for match in re.finditer(r"\[([^\[\]]+)\]", lines[row]):
+            label = match.group(1)
+            key = CLICK_LABEL_KEYS.get(label) or (label if len(label) == 1 else None)
+            if key:
+                regions.append((row, match.start(), len(match.group()), key))
+    return regions
+
+
+def _enable_mouse() -> bool:
+    """Ask the terminal for mouse events; False when the curses build cannot."""
+    import curses
+
+    mask = getattr(curses, "ALL_MOUSE_EVENTS", None)
+    if mask is None or not hasattr(curses, "mousemask"):
+        return False
+    try:
+        curses.mousemask(mask)
+    except curses.error:
+        return False
+    return True
+
+
+def _mouse_click() -> Optional[Tuple[int, int]]:
+    """(x, y) of a pending left-button click, or None."""
+    import curses
+
+    if not hasattr(curses, "getmouse"):
+        return None
+    clicks = (getattr(curses, "BUTTON1_CLICKED", 0) | getattr(curses, "BUTTON1_PRESSED", 0)
+              | getattr(curses, "BUTTON1_DOUBLE_CLICKED", 0))
+    try:
+        _, x, y, _, bstate = curses.getmouse()
+    except curses.error:
+        return None
+    return (x, y) if bstate & clicks else None
+
 
 async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05,
                       bind_address: str = "0.0.0.0") -> None:
@@ -511,6 +568,8 @@ async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05,
     controller = TuiController(camera, bind_address=bind_address)
     os.environ.setdefault("ESCDELAY", "100")
     screen = curses.initscr()
+    mouse = _enable_mouse()
+    regions: List[tuple] = []
     try:
         curses.noecho()
         curses.cbreak()
@@ -527,6 +586,11 @@ async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05,
                     key = screen.getkey()
                 except curses.error:  # no input pending
                     break
+                if key == "KEY_MOUSE":
+                    click = _mouse_click()
+                    if click is not None:
+                        controller.handle_click(click[0], click[1], regions)
+                    continue
                 keys = [key]
                 if key == "\x1b":
                     keys = _escape_sequence(screen)
@@ -537,9 +601,15 @@ async def interactive(camera: ViscaCamera, title: str, interval: float = 0.05,
             controller.tick()
             height, width = screen.getmaxyx()
             lines, view = controller.layout(title, width, height)
+            regions = click_regions(lines, len(controller.shortcuts(width, height)) + 1)
             _draw(screen, lines, view, colors, controller.view_styles, controller.spans)
             await asyncio.sleep(interval)
     finally:
+        if mouse:
+            try:
+                curses.mousemask(0)
+            except curses.error:
+                pass
         screen.keypad(False)
         curses.nocbreak()
         curses.echo()
