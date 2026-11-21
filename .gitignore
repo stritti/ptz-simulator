@@ -18,7 +18,8 @@ docs/.vitepress/.temp/
 dist/
 build/
 .axet-plugin/
-.claude/
+.claude/*
+!.claude/skills/
 .codex/
 .copilot/
 .gemini/

@@ -15,6 +15,7 @@ import time
 import pytest
 
 from ptzsim import display
+from ptzsim.visca import LogEntry
 from ptzsim.network import InterfaceInfo
 from ptzsim.visca import ViscaCamera
 
@@ -358,3 +359,22 @@ def test_render_shows_a_notice_below_the_shortcuts():
     text = display.render(ViscaCamera(), "t", color=False, notice="needs curses")
     assert text.splitlines()[-1] == "Note: needs curses"
     assert "Note:" not in display.render(ViscaCamera(), "t", color=False)
+
+
+def test_log_line_columns_and_error_mark():
+    entry = LogEntry(bytes.fromhex("8101060105050301FF"), "pan/tilt up", True, time=0)
+    line = display.log_line(entry, color=False)
+    assert line[0] == " " and "VISCA" in line
+    assert line.index("pan/tilt up") < line.index("81 01 06 01 05 05 03 01 FF")
+    assert len(line) <= display.LOG_WIDTH
+    error = display.log_line(LogEntry(b"", "error: bad", False, "Pelco-D"), color=False)
+    assert error.startswith("!") and "Pelco-D" in error
+    long = display.log_line(LogEntry(bytes(30), "x", True), color=False)
+    assert len(long) <= display.LOG_WIDTH and long.endswith("…")
+
+
+def test_render_camera_counts_errors():
+    cam = ViscaCamera()
+    assert "Errors" not in display.render_camera(cam, "t", color=False)
+    cam.record("TEST", "bad", ok=False)
+    assert "Errors: 1" in display.render_camera(cam, "t", color=False)

@@ -19,6 +19,7 @@ from . import state as st
 BASE_FOV = 60.0  # horizontal field of view at 1x, degrees (as in ndi.SceneRenderer)
 CELL_ASPECT = 2.0  # a terminal cell is about twice as high as wide
 POST_SPACING = 45
+FINE_GRID_CELLS = 6  # columns per degree before the 1° grid is drawn
 POST_TOP = 8.0  # posts reach from the ground up to this elevation, degrees
 LABEL_ELEVATION = 11.0
 
@@ -29,7 +30,7 @@ HORIZON, POST, CROSS = "─", "│", "◎"
 # Terminal colours ("fg[/bg][+bold]", see scenery.Paint) of the background characters.
 STYLES = {
     STAR: "blue", GROUND_A: "green", GROUND_B: "green", POST: "red",
-    CROSS: "yellow+bold", FINE: "cyan", HORIZON: "bold",
+    CROSS: "yellow+bold", FINE: "blue+dim", HORIZON: "bold",
 }
 
 Styles = List[List[Optional[str]]]
@@ -52,19 +53,30 @@ def render_view(s: st.CameraState, cols: int, rows: int) -> List[str]:
 def render_picture(s: st.CameraState, cols: int, rows: int) -> Tuple[List[str], Styles]:
     """The picture's lines plus the terminal colour of every cell (None: default)."""
     if not s.power:
-        blank = [" " * cols for _ in range(rows)]
-        text = "STANDBY"
-        if rows and cols >= len(text):
-            mid = rows // 2
-            start = (cols - len(text)) // 2
-            blank[mid] = blank[mid][:start] + text + blank[mid][start + len(text):]
-        return blank, [[None] * cols for _ in range(rows)]
+        return _standby(s, cols, rows)
+    return _picture(s, cols, rows)
 
+
+def _standby(s: st.CameraState, cols: int, rows: int) -> Tuple[List[str], Styles]:
+    """In standby the picture stays where the camera points, dimmed, with a STANDBY label."""
+    lines, _ = _picture(s, cols, rows)
+    grid = [list(line) for line in lines]
+    styles: Styles = [["dim"] * cols for _ in range(rows)]
+    text = " STANDBY "
+    if rows and cols >= len(text):
+        mid = rows // 2
+        start = (cols - len(text)) // 2
+        grid[mid][start:start + len(text)] = text
+        styles[mid][start:start + len(text)] = ["bold"] * len(text)
+    return ["".join(row) for row in grid], styles
+
+
+def _picture(s: st.CameraState, cols: int, rows: int) -> Tuple[List[str], Styles]:
     fov = BASE_FOV / s.zoom_ratio
     dx = fov / cols  # degrees per column
     dy = dx * CELL_ASPECT  # degrees per row
     cx, cy = cols // 2, rows // 2  # the crosshair cell shows exactly pan/tilt
-    fine_grid = dx < 0.25  # 1° grid once zoomed in far enough to see it
+    fine_grid = dx <= 1 / FINE_GRID_CELLS  # 1° grid once its lines are far enough apart
     landmarks = scenery.visible(s.pan_degrees - (cx + 1) * dx, s.pan_degrees + (cols - cx) * dx,
                                 s.tilt_degrees - (rows - cy) * dy, s.tilt_degrees + (cy + 1) * dy)
 

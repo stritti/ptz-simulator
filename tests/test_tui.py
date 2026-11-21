@@ -28,6 +28,19 @@ class Clock:
         return self.now
 
 
+def active_tab(tui):
+    """Text of the highlighted header tab of the last layout()."""
+    lines = tui._last_lines
+    return next(lines[row][col:col + length].strip()
+                for row, col, length, style in tui.spans if style == "accent")
+
+
+def layout(tui, width, height):
+    lines, box = tui.layout("test", width, height)
+    tui._last_lines = lines
+    return lines, box
+
+
 def make(instant=False):
     clock = Clock()
     return TuiController(ViscaCamera(instant=instant), clock=clock), clock
@@ -135,8 +148,8 @@ def test_network_and_camera_keys_switch_rendered_view():
         assert lines[0].startswith("Network Information")
         assert any(line.startswith("Hostname: ") for line in lines)
         assert any(line.startswith("FQDN: ") for line in lines)
-        screen, _ = tui.layout("test", 120, 24)
-        assert "[n]:Network" in screen[1]
+        layout(tui, 120, 24)
+        assert active_tab(tui) == "[n] Network"
 
     tui.handle_key("C")
     assert tui.pending == "clear"
@@ -145,8 +158,8 @@ def test_network_and_camera_keys_switch_rendered_view():
         tui.handle_key(key)
         lines = tui.frame("test")
         assert lines[0].startswith("PTZ camera simulator")
-        screen, _ = tui.layout("test", 120, 24)
-        assert "[c]:Camera" in screen[1]
+        layout(tui, 120, 24)
+        assert active_tab(tui) == "[c] Camera"
         assert tui.pending is None
 
 
@@ -177,13 +190,13 @@ def test_serve_switches_views_in_a_terminal(tmp_path):
         pytest.fail(f"Terminal did not show {text!r}; last output: {bytes(output[-500:])!r}")
 
     try:
-        expect_output("PTZ camera simulator")
+        expect_output("Last commands")
         os.write(master, b"f")
         expect_output("autofocus off")
         os.write(master, b"n")
-        expect_output("Network Information")
+        expect_output("Interfaces (")
         os.write(master, b"c")
-        expect_output("PTZ camera simulator")
+        expect_output("Last commands")
         os.write(master, b"P")
         expect_output("save preset: press 1-9")
         os.write(master, b"\x1b")
@@ -191,13 +204,13 @@ def test_serve_switches_views_in_a_terminal(tmp_path):
         os.write(master, b"?")
         expect_output("Keyboard commands")
         os.write(master, b"c")
-        expect_output("PTZ camera simulator")
+        expect_output("Last commands")
         os.write(master, b"P")
         expect_output("save preset: press 1-9")
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 119, 0, 0))
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 79, 0, 0))
         os.kill(process.pid, signal.SIGWINCH)
-        expect_output("Minimum: 120 columns")
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 120, 0, 0))
+        expect_output("Minimum: 80 columns")
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
         os.kill(process.pid, signal.SIGWINCH)
         expect_output("save preset: press 1-9")
         os.write(master, b"3")
@@ -230,10 +243,10 @@ def test_layout_keeps_view_and_commands_visible_with_overflow(width, height, vie
     for number in range(30):
         tui.camera.record("test", f"command {number}")
     tui.handle_key("n" if view == "network" else "c")
-    lines, box = tui.layout("test", width, height)
+    lines, box = layout(tui, width, height)
     assert len(lines) == height
     assert all(len(line) <= width for line in lines)
-    assert view.upper() in lines[0]
+    assert active_tab(tui) == {"camera": "[c] Camera", "network": "[n] Network"}[view]
     assert "[q]" in lines[-1] and "Quit" in lines[-1]
     assert "[?]" in "\n".join(lines[-2:])
     assert "Space" in "\n".join(lines[-12:])
@@ -263,8 +276,8 @@ def test_compact_help_can_be_paged_and_closed_without_losing_view():
     tui, _ = make()
     tui.handle_key("n")
     tui.handle_key("?")
-    lines, box = tui.layout("test", 120, 12)
-    assert "HELP" in lines[0] and "NETWORK" in lines[0]
+    lines, box = layout(tui, 120, 12)
+    assert active_tab(tui) == "[?] Help" and tui.current_view == "network"
     assert box is None
     seen = "\n".join(lines)
     for _ in range(12):
@@ -274,8 +287,8 @@ def test_compact_help_can_be_paged_and_closed_without_losing_view():
     for command in ("autofocus", "white balance", "standby", "preset"):
         assert command in seen
     tui.handle_key("ESC")
-    lines, _ = tui.layout("test", 120, 12)
-    assert "NETWORK" in lines[0] and "HELP" not in lines[0]
+    layout(tui, 120, 12)
+    assert active_tab(tui) == "[n] Network"
     assert tui.current_view == "network"
 
 
@@ -297,16 +310,16 @@ def test_help_cancels_pending_preset_and_keeps_emergency_stop_available():
     tui.handle_key("RIGHT")
     tui.handle_key("P")
     tui.handle_key("?")
-    lines, _ = tui.layout("test", 120, 24)
-    assert lines[0].startswith("HELP")
+    layout(tui, 120, 24)
+    assert active_tab(tui) == "[?] Help"
     assert tui.pending is None
     tui.handle_key("3")
     assert not tui.state.presets
     tui.handle_key(" ")
     assert not tui.state.moving
     tui.handle_key("n")
-    lines, _ = tui.layout("test", 120, 24)
-    assert lines[0].startswith("NETWORK")
+    layout(tui, 120, 24)
+    assert active_tab(tui) == "[n] Network"
 
 
 def test_compact_status_keeps_scroll_range_visible_after_long_feedback():
@@ -379,66 +392,99 @@ def test_help_footer_describes_only_available_actions():
 
 
 @pytest.mark.parametrize("use_color", [True, False])
-def test_footer_keys_are_visually_distinct_from_actions(use_color):
-    curses = pytest.importorskip("curses")
+def test_footer_keys_are_visually_distinct_from_actions(monkeypatch, use_color):
+    mod = fake_curses(size=(24, 120))
+    monkeypatch.setitem(sys.modules, "curses", mod)
     tui, _ = make()
     lines, _ = tui.layout("test", 120, 24)
-
-    class Screen:
-        def __init__(self):
-            self.cells = [[None] * 120 for _ in range(24)]
-
-        def getmaxyx(self):
-            return 24, 120
-
-        def erase(self):
-            pass
-
-        def addnstr(self, row, col, text, count, attr):
-            for offset, char in enumerate(text[:count]):
-                if col + offset < 120:
-                    self.cells[row][col + offset] = (char, attr)
-
-        def refresh(self):
-            pass
-
-    screen = Screen()
-    colors = {"header": 1, "commands": 2, "shortcut": 3, "status": 4} if use_color else {}
-    _draw(screen, lines, None, colors, footer_rows=len(tui.shortcuts(120, 24)) + 1)
-    column = lines[-1].index("[q]")
-    key = screen.cells[-1][column]
-    action = screen.cells[-1][lines[-1].index("Quit")]
+    colors = tui_mod._init_colors() if use_color else {}
+    tui_mod._draw(mod._screen, lines, None, colors, spans=tui.spans)
+    cells = {}
+    for call in mod._screen.calls:
+        if call[0] == "addnstr":
+            _, row, col, text, attr = call
+            for offset, char in enumerate(text):
+                cells[row, col + offset] = (char, attr)
+    row = len(lines) - 1
+    key = cells[row, lines[-1].index("[q]")]
+    action = cells[row, lines[-1].index("Quit")]
     assert key[0] == "[" and action[0] == "Q"
+    assert key[1] & mod.A_BOLD
+    assert action[1] == mod.A_NORMAL
     if use_color:
-        assert key[1] & ~curses.A_BOLD == colors["shortcut"]
-        assert action[1] == colors["commands"]
-    else:
-        assert key[1] == curses.A_BOLD
-        assert action[1] == curses.A_REVERSE
+        assert key[1] == tui_mod._style_attr(colors, "key")
 
 
-@pytest.mark.parametrize("view_key,view_name", [("c", "CAMERA"), ("n", "NETWORK")])
-def test_terminal_width_requires_120_columns_and_recovers_on_resize(view_key, view_name):
+def test_status_line_keeps_camera_state_and_fades_feedback():
+    tui, clock = make()
+    tui.handle_key("RIGHT")
+    tui.camera.record("VISCA", "error: test", ok=False)
+    lines, _ = tui.layout("test", 120, 24)
+    status = lines[-5]
+    assert "pan/tilt right" in status and "Speed 4/8" in status and "AF" in status
+    assert "1 error" in status
+    clock.now += tui_mod.MESSAGE_SECONDS + 1
+    lines, _ = tui.layout("test", 120, 24)
+    assert "pan/tilt right" not in lines[-5] and "Ready" in lines[-5]
+    assert "Speed 4/8" in lines[-5]
+    tui.handle_key("o")
+    lines, _ = tui.layout("test", 120, 24)
+    assert "STANDBY" in lines[-5]
+
+
+def test_dashboard_colours_reach_the_screen():
+    tui, _ = make()
+    tui.camera.record("VISCA", "error: unknown command", ok=False)
+    lines, _ = tui.layout("test", 160, 40)
+    row = next(i for i, line in enumerate(lines) if "error: unknown command" in line)
+    styles = {style for r, _, _, style in tui.spans if r == row}
+    assert "red" in styles
+    power = next(i for i, line in enumerate(lines) if line.startswith("Power: ON"))
+    assert any(style == "green" for r, _, _, style in tui.spans if r == power)
+
+
+def test_command_log_fills_the_free_rows():
+    tui, _ = make()
+    for number in range(60):
+        tui.camera.record("test", f"command {number}")
+    short, _ = tui.layout("test", 160, 30)
+    tall, _ = tui.layout("test", 160, 50)
+    count = lambda lines: sum("command " in line for line in lines)  # noqa: E731
+    assert count(tall) > count(short) >= tui_mod.MIN_LOG_LINES
+    assert any("command 59" in line for line in tall)  # newest entry visible
+
+
+def test_picture_grows_with_the_terminal():
+    tui, _ = make()
+    _, small = tui.layout("test", 160, 40)
+    _, large = tui.layout("test", 240, 70)
+    assert large[3] > small[3] and large[2] > small[2]
+    assert large[1] + large[3] <= 240
+
+
+@pytest.mark.parametrize("view_key,view_name", [("c", "Camera"), ("n", "Network")])
+def test_terminal_width_requires_80_columns_and_recovers_on_resize(view_key, view_name):
     tui, _ = make()
     tui.handle_key(view_key)
-    lines, box = tui.layout("test", 119, 24)
+    lines, box = tui.layout("test", 79, 24)
     assert lines[0].startswith(view_name)
-    assert any("120 columns" in line for line in lines)
+    assert any("80 columns" in line for line in lines)
     assert "[Space]" in lines[-1] and "[q]" in lines[-1]
     assert box is None
 
-    lines, _ = tui.layout("test", 120, 24)
-    assert lines[0].startswith(view_name)
-    assert any(line.startswith("MOVE") for line in lines)
+    lines, _ = layout(tui, 80, 24)
+    assert view_name in active_tab(tui)
+    assert "[q]" in lines[-1] and "[?]" in lines[-1]
+    assert all(len(line) <= 80 for line in lines)
     assert not any("Terminal too small" in line for line in lines)
 
 
-@pytest.mark.parametrize("width", [20, 80, 119])
+@pytest.mark.parametrize("width", [20, 60, 79])
 def test_resize_notice_keeps_stop_and_quit_available(width):
     tui, _ = make()
     lines, box = tui.layout("test", width, 10)
     assert len(lines) == 10 and box is None
-    assert any("120 columns" in line for line in lines)
+    assert any("80 columns" in line for line in lines)
     assert "[Space]" in "\n".join(lines[-2:])
     assert "[q]" in lines[-1]
     tui.handle_key("RIGHT")
@@ -452,10 +498,10 @@ def test_resize_notice_preserves_open_help():
     tui, _ = make()
     tui.handle_key("n")
     tui.handle_key("?")
-    lines, _ = tui.layout("test", 119, 24)
-    assert lines[0].startswith("HELP | NETWORK")
-    lines, _ = tui.layout("test", 120, 24)
-    assert lines[0].startswith("HELP | NETWORK")
+    lines, _ = tui.layout("test", 79, 24)
+    assert lines[0].startswith("Help |")
+    lines, _ = layout(tui, 120, 24)
+    assert active_tab(tui) == "[?] Help" and tui.current_view == "network"
     assert any("Keyboard commands" in line for line in lines)
 
 
@@ -631,7 +677,7 @@ def test_tiny_terminal_shows_a_single_resize_hint():
     tui, _ = make()
     lines, box = tui.layout("t", 100, 2)
     assert box is None
-    assert lines[0] == "Resize: 120x8"
+    assert lines[0] == "Resize: 80x8"
     assert "[q]" in lines[1]
 
 
@@ -682,7 +728,7 @@ def fake_curses(keys=(), size=(24, 120), **overrides):
         pass
 
     mod.error = error
-    mod.A_NORMAL, mod.A_BOLD, mod.A_REVERSE = 0, 1, 2
+    mod.A_NORMAL, mod.A_BOLD, mod.A_REVERSE, mod.A_DIM = 0, 1, 2, 4
     for index, name in enumerate(("BLACK", "RED", "GREEN", "YELLOW", "BLUE", "MAGENTA", "CYAN", "WHITE")):
         setattr(mod, "COLOR_" + name, index)
     screen = FakeScreen(keys, size)
@@ -731,9 +777,15 @@ def test_interactive_tolerates_curs_set_failure(monkeypatch):
 @pytest.mark.parametrize("keys, expected", [
     (["[", "A"], "UP"), (["[", "B"], "DOWN"), (["[", "C"], "RIGHT"), (["[", "D"], "LEFT"),
     (["O", "A"], "UP"), (["O", "B"], "DOWN"), (["[", "5", "~"], "PAGEUP"), (["[", "6", "~"], "PAGEDOWN"),
-    (["x"], "ESC"), ([], "ESC"),
 ])
 def test_escape_sequence_maps_raw_arrow_keys(monkeypatch, keys, expected):
+    mod = fake_curses(keys=keys)
+    monkeypatch.setitem(sys.modules, "curses", mod)
+    assert tui_mod._escape_sequence(mod._screen) == [expected]
+
+
+@pytest.mark.parametrize("keys, expected", [(["c"], ["ESC", "c"]), ([], ["ESC"])])
+def test_escape_keeps_a_key_typed_right_after_it(monkeypatch, keys, expected):
     mod = fake_curses(keys=keys)
     monkeypatch.setitem(sys.modules, "curses", mod)
     assert tui_mod._escape_sequence(mod._screen) == expected
@@ -751,13 +803,10 @@ def test_init_colors_when_start_color_fails(monkeypatch):
     assert tui_mod._init_colors() == {}
 
 
-def test_init_colors_registers_the_chrome_pairs(monkeypatch):
+def test_init_colors_starts_without_pairs(monkeypatch):
     mod = fake_curses()
     monkeypatch.setitem(sys.modules, "curses", mod)
-    colors = tui_mod._init_colors()
-    assert colors["header"] == 1001 and colors["commands"] == 1002
-    assert colors["shortcut"] == 1003 and colors["status"] == 1004
-    assert colors["_pairs"] == {}
+    assert tui_mod._init_colors() == {"_pairs": {}}
 
 
 def test_style_attr_caches_and_combines_styles(monkeypatch):
@@ -767,19 +816,20 @@ def test_style_attr_caches_and_combines_styles(monkeypatch):
     assert tui_mod._style_attr(colors, None) == 0
     assert tui_mod._style_attr({}, "red") == 0  # no colour support: plain text
     attr = tui_mod._style_attr(colors, "red")
-    assert attr == mod.color_pair(5)  # first pair after the four chrome pairs
+    assert attr == mod.color_pair(1)  # pairs are added on demand
     assert tui_mod._style_attr(colors, "red") == attr  # cached
     assert tui_mod._style_attr(colors, "bold") == mod.A_BOLD
     both = tui_mod._style_attr(colors, "white/blue+bold")
-    assert both & mod.A_BOLD and both & mod.color_pair(6)
+    assert both & mod.A_BOLD and both & mod.color_pair(2)
+    assert tui_mod._style_attr(colors, "dim") == mod.A_DIM
+    assert tui_mod._style_attr({}, "accent") == mod.A_BOLD | mod.A_REVERSE  # no colours
 
 
 def test_style_attr_survives_exhausted_color_pairs(monkeypatch):
     mod = fake_curses()
 
     def init_pair(number, fg, bg):
-        if number >= 5:
-            raise mod.error()
+        raise mod.error()
 
     mod.init_pair = init_pair
     monkeypatch.setitem(sys.modules, "curses", mod)
@@ -791,15 +841,16 @@ def test_draw_colours_the_picture_inside_the_view_box(monkeypatch):
     mod = fake_curses(size=(10, 40))
     monkeypatch.setitem(sys.modules, "curses", mod)
     colors = tui_mod._init_colors()
-    lines = ["H" * 40, "T" * 30 + "[c]:Camera", "r2" + " " * 37, "r3" + " " * 37,
+    lines = ["H" * 28 + " [c] Camera", "", "r2" + " " * 37, "r3" + " " * 37,
              "r4" + " " * 37, "status", "foot [q] Quit"]
     styles = [["red", None], ["bold", "white/blue"]]
-    tui_mod._draw(mod._screen, lines, (2, 5, 4, 10), colors, styles, footer_rows=2)
+    spans = [(0, 28, 11, "accent"), (6, 5, 3, "key"), (6, 99, 3, "key"), (40, 0, 1, "key")]
+    tui_mod._draw(mod._screen, lines, (2, 5, 4, 10), colors, styles, spans)
     added = [call for call in mod._screen.calls if call[0] == "addstr"]
     assert added and all(call[1] > 2 for call in added)  # inside the box, below the header
-    addnstr = [call for call in mod._screen.calls if call[0] == "addnstr"]
-    assert any("[c]:Camera" in call[3] for call in addnstr)  # active tab highlighted
-    assert any("[q]" in call[3] for call in addnstr)  # footer key highlighted
+    addnstr = [call for call in mod._screen.calls if call[0] == "addnstr" and call[4]]
+    assert any(call[3] == " [c] Camera" for call in addnstr)  # active tab highlighted
+    assert any(call[3] == "[q]" for call in addnstr)  # footer key highlighted
 
 
 def test_draw_ignores_curses_write_errors(monkeypatch):
@@ -811,9 +862,9 @@ def test_draw_ignores_curses_write_errors(monkeypatch):
     mod._screen.addnstr = broken
     mod._screen.addstr = broken
     monkeypatch.setitem(sys.modules, "curses", mod)
-    colors = {"header": 1, "shortcut": 2, "status": 3, "commands": 4, "_pairs": {}}
+    colors = {"_pairs": {}}
     lines = ["H" * 20, "T" * 20, "body", "body2", "status", "foot [q]"]
-    tui_mod._draw(mod._screen, lines, (2, 2, 3, 6), colors, [["red"]], footer_rows=2)
+    tui_mod._draw(mod._screen, lines, (2, 2, 3, 6), colors, [["red"]], [(0, 0, 1, "bold")])
     assert ("refresh",) in mod._screen.calls
 
 
@@ -832,11 +883,11 @@ def test_click_regions_cover_tabs_and_single_key_shortcuts():
     tui, _ = make()
     lines, _ = tui.layout("test", 120, 24)
     regions = tui_mod.click_regions(lines, len(tui.shortcuts(120, 24)) + 1)
-    tabs = {key: (row, col, length) for row, col, length, key in regions if row == 1}
-    assert set(tabs) == {"c", "n"}
-    assert tabs["c"] == (1, lines[1].index("[c]:Camera"), len("[c]:Camera"))
-    assert tabs["n"] == (1, lines[1].index("n:Network"), len("n:Network"))
-    footer_keys = {key for row, _, _, key in regions if row > 1}
+    tabs = {key: (row, col, length) for row, col, length, key in regions if row == 0}
+    assert set(tabs) == {"c", "n", "?"}
+    assert tabs["c"] == (0, lines[0].index("[c] Camera"), len("[c] Camera"))
+    assert tabs["n"] == (0, lines[0].index("[n] Network"), len("[n] Network"))
+    footer_keys = {key for row, _, _, key in regions if row > 0}
     assert {" ", "h", "f", "b", "o", "c", "n", "?", "q", "P", "C"} <= footer_keys
     assert (len(lines) - 1, lines[-1].index("[q]"), 3, "q") in regions
 
@@ -846,7 +897,7 @@ def test_click_regions_skip_multi_key_labels():
     lines, _ = tui.layout("test", 120, 24)
     regions = tui_mod.click_regions(lines, len(tui.shortcuts(120, 24)) + 1)
     covered = {(row, col) for row, col, length, _ in regions for col in range(col, col + length)}
-    for label in ("[Arrows/WASD]", "[+/-]", "[1-9]", "[ / ]", "[PgUp/PgDn]"):
+    for label in ("[Arrows/WASD]", "[+/-]", "[1-9]", "[ / ]", "[,/.]", "[PgUp/PgDn]"):
         for row, line in enumerate(lines):
             col = line.find(label)
             if col >= 0:
@@ -873,11 +924,11 @@ def test_handle_click_on_a_tab_switches_the_view():
     tui, _ = make()
     lines, _ = tui.layout("test", 120, 24)
     regions = tui_mod.click_regions(lines, len(tui.shortcuts(120, 24)) + 1)
-    tui.handle_click(lines[1].index("n:Network") + 2, 1, regions)
+    tui.handle_click(lines[0].index("[n] Network") + 2, 0, regions)
     assert tui.current_view == "network"
     lines, _ = tui.layout("test", 120, 24)
     regions = tui_mod.click_regions(lines, len(tui.shortcuts(120, 24)) + 1)
-    tui.handle_click(lines[1].index("c:Camera") + 2, 1, regions)
+    tui.handle_click(lines[0].index("[c] Camera") + 2, 0, regions)
     assert tui.current_view == "camera"
 
 
@@ -885,7 +936,7 @@ def test_handle_click_outside_all_regions_does_nothing():
     tui, _ = make()
     lines, _ = tui.layout("test", 120, 24)
     regions = tui_mod.click_regions(lines, len(tui.shortcuts(120, 24)) + 1)
-    tui.handle_click(0, 0, regions)  # header
+    tui.handle_click(0, 0, regions)  # product name in the header
     tui.handle_click(5, 3, regions)  # content
     assert not tui.quit and tui.current_view == "camera" and not tui.state.moving
 
@@ -893,12 +944,12 @@ def test_handle_click_outside_all_regions_does_nothing():
 def test_interactive_mouse_click_switches_view_and_restores_mouse_mask(monkeypatch):
     probe = TuiController(ViscaCamera())
     lines, _ = probe.layout("title", 120, 24)
-    net_col = lines[1].index("n:Network") + 1
+    net_col = lines[0].index("[n] Network") + 1
     masks = []
     mod = fake_curses(KEY_MOUSE="KEY_MOUSE", ALL_MOUSE_EVENTS=8,
                       BUTTON1_CLICKED=1, BUTTON1_PRESSED=2, BUTTON1_DOUBLE_CLICKED=4,
                       mousemask=masks.append,
-                      getmouse=lambda: (0, net_col, 1, 0, 1))
+                      getmouse=lambda: (0, net_col, 0, 0, 1))
     frames = [[], ["KEY_MOUSE"], ["q"]]  # first frame draws, so regions exist for the click
 
     def getkey():
@@ -912,8 +963,8 @@ def test_interactive_mouse_click_switches_view_and_restores_mouse_mask(monkeypat
     cam = ViscaCamera()
     asyncio.run(tui_mod.interactive(cam, "title", interval=0.01))
     assert masks == [8, 0]  # mouse events requested on start, mask restored on exit
-    headers = [call[3] for call in mod._screen.calls if call[0] == "addnstr" and call[1] == 0]
-    assert any(text.startswith("NETWORK") for text in headers)
+    body = [call[3] for call in mod._screen.calls if call[0] == "addnstr" and call[1] > 0]
+    assert any(text.startswith("Interfaces (") for text in body)  # the network view was drawn
 
 
 def test_interactive_without_mouse_support_still_runs(monkeypatch):

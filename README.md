@@ -181,17 +181,27 @@ The same options work in `ptzsim.testing.serve(...)` inside your own test suite.
 ## Dashboard and Network Discovery
 
 ### TUI Dashboard Views
-The interactive TUI uses a Midnight-Commander-style layout: the active view and
-tabs stay at the top, while status feedback and the command bar stay fixed at the
-bottom, including the terminal's last row. Only the content between them scrolls.
-The active tab is highlighted and marked with brackets, even without color.
+The interactive TUI uses a Midnight-Commander-style layout: one quiet header line
+with the view tabs at the top, a status rule and the key legend at the bottom,
+including the terminal's last row. Only the content between them scrolls.
+The active tab is highlighted (reverse video without colour).
 
 #### Camera Control View (Press `c`)
-The main camera control view shows real-time PTZ status and commands:
+The main camera control view shows real-time PTZ status and commands. On terminals
+at least 112 columns wide the camera picture sits to the right of the dashboard and
+grows with the terminal; the command log takes the rows that are left.
+
+![TUI camera view: header tabs, camera status, presets, command log with a red protocol error, the camera picture of the Alps, the status rule and the key legend](docs/public/images/tui-dashboard.png)
+
+On an 80-column terminal the picture is left out and the legend uses two lines:
+
+![TUI camera view in an 80-column terminal with the two-line key legend](docs/public/images/tui-80-columns.png)
+
+The same view as text:
 ```
-CAMERA | PTZ camera simulator
-[c]:Camera  n:Network  | ONVIF http://0.0.0.0:8103/onvif/device_service
-Power: ON   Address: 1   Commands: 0
+PTZ-Simulator   [c] Camera  [n] Network  [?] Help         ONVIF http://0.0.0.0:8103/…
+
+Power: ON   Address: 1   Commands: 3   Errors: 1
 
 Pan        0     +0.0°  [──────────────●───────────────]  idle
 Tilt       0     +0.0°  [───────●──────────────────────]  idle
@@ -202,21 +212,29 @@ White balance  auto          R 0x80  B 0x80
 No presets stored
 
 Last commands
-(waiting for commands)
+ 16:40:57  TUI      pan/tilt right (speed 4)
+ 16:40:59  VISCA    absolute pan 1152 tilt 86         81 01 06 02 18 17 00 04 0…
+!16:41:00  VISCA    error: unknown command category 99  81 01 99 99 FF
 
-Speed 4/8 | Ready
-MOVE                                     PRESET                   CAMERA                 VIEW
-[Arrows/WASD] Pan/Tilt                   [1-9]        Recall      [f] Autofocus          [c]         Camera
-[+/-]         Zoom      [h]   Home       [P then 1-9] Save        [b] White balance      [n]         Network  [?] Help
-[Space]       Stop      [ / ] Speed      [C then 1-9] Clear       [o] Power              [PgUp/PgDn] Scroll   [q] Quit
+─ pan/tilt right (speed 4) ──────────────────────── Speed 4/8 · AF · 1 error
+[Arrows/WASD] Pan/Tilt  [+/-] Zoom  [Space] Stop  [ / ] Speed  [h] Home
+[1-9] Preset  [P/C 1-9] Save/Clear  [PgUp/PgDn] Scroll  [?] Help  [q] Quit
 ```
+
+The command log shows time, source (`VISCA`, `Pelco-D`, `ONVIF`, `TUI`), the
+description and, for VISCA, the raw bytes. Errors are red and marked with `!`, so
+they stand out without colour too; the header line counts them.
+
+The status rule shows feedback for the last key on the left for a few seconds, and
+the camera state on the right: `STANDBY`, the jog speed, AF/MF, the protocol error
+count and, when content overflows, the visible line range. In standby the camera
+picture stays visible, dimmed, with a `STANDBY` label.
 
 #### Network Information View (Press `n`)
 Lists the address to enter in a client, the hostname and every network interface of the machine (also interfaces
 that are down or have no address), the main interfaces first:
 ```
-NETWORK | Network Information
-c:Camera  [n]:Network  | ONVIF http://0.0.0.0:8103/onvif/device_service
+PTZ-Simulator   [c] Camera  [n] Network  [?] Help         ONVIF http://0.0.0.0:8103/…
 
 Address for clients: 192.0.2.10 or camera-host
 Hostname: camera-host
@@ -232,7 +250,7 @@ Interfaces (24)
   veth0123456      up                         fe80::4
   ...
 
-Speed 4/8 | Ready
+─ Ready ─────────────────────────────────────────────────────── Speed 4/8 · AF
 MOVE                                     PRESET                   CAMERA                 VIEW
 [Arrows/WASD] Pan/Tilt                   [1-9]        Recall      [f] Autofocus          [c]         Camera
 [+/-]         Zoom      [h]   Home       [P then 1-9] Save        [b] White balance      [n]         Network  [?] Help
@@ -240,9 +258,9 @@ MOVE                                     PRESET                   CAMERA        
 ```
 
 ### Keyboard Shortcuts
-The bottom command bar uses four compact columns for movement, presets, camera
-settings and view navigation, separated by six spaces. Key labels are highlighted
-and enclosed in brackets:
+From 118 columns the bottom legend uses four compact columns for movement, presets,
+camera settings and view navigation, separated by six spaces; narrower terminals get
+a two-line legend. Key labels are highlighted and enclosed in brackets:
 - **`n`** - Network Information View (IP addresses, interfaces, hostname)
 - **`c`** - Camera Control View (PTZ controls, presets, commands)
 - **`q`** - Quit the simulator (or use Ctrl+C)
@@ -250,13 +268,13 @@ and enclosed in brackets:
 - **`PgUp` / `PgDn`** - Scroll long camera, network or help content; the status
   line shows the visible line range when content overflows
 
-The view tabs at the top (`[c]:Camera`, `[n]:Network`) and the single-key
-shortcuts in the command bar (`[Space]`, `[h]`, `[f]`, `[b]`, `[o]`, `[c]`,
-`[n]`, `[?]`, `[q]`, `[P then 1-9]`, `[C then 1-9]`) can also be clicked with
-the left mouse button in terminals that report mouse events. Multi-key
-shortcuts (arrows/WASD, `+/-`, `1-9`, `[ / ]`, `PgUp/PgDn`) stay keyboard-only.
+The view tabs at the top (`[c] Camera`, `[n] Network`, `[?] Help`) and the
+single-key shortcuts in the key legend (`[Space]`, `[h]`, `[f]`, `[b]`, `[o]`,
+`[c]`, `[n]`, `[?]`, `[q]`, `[P then 1-9]`, `[C then 1-9]`) can also be clicked
+with the left mouse button in terminals that report mouse events. Multi-key
+shortcuts (arrows/WASD, `+/-`, `1-9`, speed, `PgUp/PgDn`) stay keyboard-only.
 
-The interactive TUI requires at least **120 columns and 8 rows**. If the
+The interactive TUI requires at least **80 columns and 8 rows**. If the
 terminal is smaller, a resize notice replaces the dashboard; `Space` (stop)
 and `q` (quit) remain available. Resizing back restores the current view and
 any pending preset action. On terminals 8 to 14 rows high, the bottom bar keeps

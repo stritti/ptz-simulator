@@ -12,10 +12,11 @@ import os
 import select
 import sys
 import threading
+import time
 from typing import Dict, List, Optional
 
 from . import state as st
-from .visca import ViscaCamera
+from .visca import ViscaCamera, hexdump
 from .network import format_client_address, get_all_interfaces_detailed, get_hostname_and_fqdn, interface_sort_key
 
 log = logging.getLogger("ptzsim")
@@ -51,7 +52,8 @@ def render_camera(camera: ViscaCamera, title: str, color: bool = True, log_lines
     lines: List[str] = [
         f"{b}PTZ camera simulator{x}  {d}{title}{x}",
         f"Power: {g + 'ON' if s.power else r + 'STANDBY'}{x}   "
-        f"Address: {camera.address}   Commands: {camera.command_count}",
+        f"Address: {camera.address}   Commands: {camera.command_count}"
+        + (f"   {r}Errors: {_error_count(camera)}{x}" if camera.errors else ""),
         "",
     ]
 
@@ -77,14 +79,44 @@ def render_camera(camera: ViscaCamera, title: str, color: bool = True, log_lines
     else:
         lines.append(f"{d}No presets stored{x}")
     lines += ["", f"{b}Last commands{x}"]
-    entries = list(camera.log)[-log_lines:]
-    if not entries:
+    entries = list(camera.log)[-log_lines:] if log_lines > 0 else []
+    if not camera.log:
         lines.append(f"{d}(waiting for commands){x}")
-    for entry in entries:
-        c = "" if entry.ok else r
-        lines.append(f" {d}{entry.source:<44}{x} {c}{entry.description}{x}")
+    lines += [log_line(entry, color) for entry in entries]
 
     return "\n".join(lines)
+
+
+LOG_WIDTH = 80  # a log line fits an 80-column terminal
+LOG_SOURCE_WIDTH = 7  # "Pelco-D"
+LOG_DESCRIPTION_WIDTH = 32
+
+
+def _error_count(camera: ViscaCamera) -> str:
+    errors = len(camera.errors)
+    return f"{errors}+" if errors == camera.errors.maxlen else str(errors)
+
+
+def log_line(entry, color: bool = True) -> str:
+    """One command log line: error mark, time, source, description, then the raw bytes.
+
+    Errors carry a "!" as well as the colour, so they stand out without colour too.
+    """
+    r, d, x = (RED, DIM, RESET) if color else ("",) * 3
+    mark = f"{r}!{x}" if not entry.ok else " "
+    stamp = time.strftime("%H:%M:%S", time.localtime(entry.time))
+    source = (entry.label or "VISCA")[:LOG_SOURCE_WIDTH]
+    prefix_width = 1 + len(stamp) + 2 + LOG_SOURCE_WIDTH + 2
+    description = entry.description.ljust(LOG_DESCRIPTION_WIDTH)
+    c = "" if entry.ok else r
+    line = f"{mark}{d}{stamp}{x}  {d}{source:<{LOG_SOURCE_WIDTH}}{x}  {c}{description}{x}"
+    raw = hexdump(entry.raw) if entry.raw else ""
+    room = LOG_WIDTH - prefix_width - len(description) - 2
+    if raw and room >= 8:
+        if len(raw) > room:
+            raw = raw[:room - 1].rstrip() + "…"
+        line += f"  {d}{raw}{x}"
+    return line.rstrip()
 
 
 def _ipv4_with_prefix(address: str, netmask: str) -> str:
