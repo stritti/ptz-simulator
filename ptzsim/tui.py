@@ -40,13 +40,16 @@ PAN_TILT_KEYS = {
     "a": (-1, 0), "d": (1, 0), "w": (0, 1), "s": (0, -1),
 }
 ZOOM_KEYS = {"+": 1, "=": 1, "-": -1}
+# "," and "." need no Shift or AltGr on German and US keyboards; "[" and "]" still work.
+SPEED_KEYS = {",": -1, ".": 1, "[": -1, "]": 1}
 
 TABS = [("c", "Camera", "camera"), ("n", "Network", "network"), ("?", "Help", "help")]
 
 # The help page, grouped like the key legend.
 HELP = [
     ("MOVE", [("Arrows/WASD", "pan/tilt while held"), ("+/-", "zoom tele/wide while held"),
-              ("Space", "stop all movement"), ("[ / ]", "speed down/up"), ("h", "home position")]),
+              ("Space", "stop all movement"), (", / .", "speed down/up ([ / ] also work)"),
+              ("h", "home position")]),
     ("PRESET", [("1-9", "recall preset"), ("P then 1-9", "save preset"),
                 ("C then 1-9", "clear preset")]),
     ("CAMERA", [("f", "toggle autofocus"), ("b", "one-push white balance"),
@@ -60,7 +63,7 @@ COMMANDS = [command for _, commands in HELP for command in commands]
 LEGEND = [
     ("MOVE", [[("[Arrows/WASD]", "Pan/Tilt")],
               [("[+/-]", "Zoom"), ("[h]", "Home")],
-              [("[Space]", "Stop"), ("[ / ]", "Speed")]]),
+              [("[Space]", "Stop"), ("[,/.]", "Speed")]]),
     ("PRESET", [[("[1-9]", "Recall")], [("[P then 1-9]", "Save")],
                 [("[C then 1-9]", "Clear")]]),
     ("CAMERA", [[("[f]", "Autofocus")], [("[b]", "White balance")],
@@ -70,7 +73,7 @@ LEGEND = [
 ]
 # For terminals narrower than the full legend.
 MEDIUM_LEGEND = [
-    "[Arrows/WASD] Pan/Tilt  [+/-] Zoom  [Space] Stop  [ / ] Speed  [h] Home",
+    "[Arrows/WASD] Pan/Tilt  [+/-] Zoom  [Space] Stop  [,/.] Speed  [h] Home",
     "[1-9] Preset  [P/C 1-9] Save/Clear  [PgUp/PgDn] Scroll  [?] Help  [q] Quit",
 ]
 
@@ -134,8 +137,8 @@ class TuiController:
             self._jog_zoom(ZOOM_KEYS[key])
         elif key == " ":
             self.stop()
-        elif key in ("[", "]"):
-            step = 1 if key == "]" else -1
+        elif key in SPEED_KEYS:
+            step = SPEED_KEYS[key]
             self.speed = int(st.clamp(self.speed + step, 1, SPEED_LEVELS))
             self.message = f"speed {self.speed}/{SPEED_LEVELS}"
         elif key == "h":

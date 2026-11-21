@@ -217,7 +217,7 @@ Last commands
 !16:41:00  VISCA    error: unknown command category 99  81 01 99 99 FF
 
 ─ pan/tilt right (speed 4) ──────────────────────── Speed 4/8 · AF · 1 error
-[Arrows/WASD] Pan/Tilt  [+/-] Zoom  [Space] Stop  [ / ] Speed  [h] Home
+[Arrows/WASD] Pan/Tilt  [+/-] Zoom  [Space] Stop  [,/.] Speed  [h] Home
 [1-9] Preset  [P/C 1-9] Save/Clear  [PgUp/PgDn] Scroll  [?] Help  [q] Quit
 ```
 
@@ -254,7 +254,7 @@ Interfaces (24)
 MOVE                                     PRESET                   CAMERA                 VIEW
 [Arrows/WASD] Pan/Tilt                   [1-9]        Recall      [f] Autofocus          [c]         Camera
 [+/-]         Zoom      [h]   Home       [P then 1-9] Save        [b] White balance      [n]         Network  [?] Help
-[Space]       Stop      [ / ] Speed      [C then 1-9] Clear       [o] Power              [PgUp/PgDn] Scroll   [q] Quit
+[Space]       Stop      [,/.] Speed      [C then 1-9] Clear       [o] Power              [PgUp/PgDn] Scroll   [q] Quit
 ```
 
 ### Keyboard Shortcuts
@@ -372,7 +372,7 @@ current position using `GetStatus`.
 | arrows or `W` `A` `S` `D` | pan/tilt while the key is held (stops ~0.35 s after the last key repeat) |
 | `+` / `-` | zoom tele / wide while the key is held |
 | space | stop all movement |
-| `[` / `]` | jog speed down / up (1–8) |
+| `,` / `.` | jog speed down / up (1–8); `[` / `]` also work |
 | `h` | home position |
 | `1`–`9` | recall preset |
 | `P` then `1`–`9` | save the current position as preset |
