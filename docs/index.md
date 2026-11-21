@@ -38,7 +38,8 @@ SPDX-License-Identifier: MIT
 [![PTZ simulator terminal dashboard showing camera controls, presets, recent commands and a text-mode viewfinder](/images/tui-dashboard.png)](/images/tui-dashboard.png)
 
 <figcaption>
-The terminal dashboard combines camera status, presets and a text-mode viewfinder.
+The terminal dashboard combines camera status, presets, a command log that marks
+protocol errors, and a text-mode viewfinder.
 Open the image to zoom in.
 </figcaption>
 </figure>

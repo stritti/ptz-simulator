@@ -189,7 +189,15 @@ The active tab is highlighted (reverse video without colour).
 #### Camera Control View (Press `c`)
 The main camera control view shows real-time PTZ status and commands. On terminals
 at least 112 columns wide the camera picture sits to the right of the dashboard and
-grows with the terminal; the command log takes the rows that are left:
+grows with the terminal; the command log takes the rows that are left.
+
+![TUI camera view: header tabs, camera status, presets, command log with a red protocol error, the camera picture of the Alps, the status rule and the key legend](docs/public/images/tui-dashboard.png)
+
+On an 80-column terminal the picture is left out and the legend uses two lines:
+
+![TUI camera view in an 80-column terminal with the two-line key legend](docs/public/images/tui-80-columns.png)
+
+The same view as text:
 ```
 PTZ-Simulator   [c] Camera  [n] Network  [?] Help         ONVIF http://0.0.0.0:8103/…
 
