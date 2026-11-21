@@ -4,7 +4,7 @@
 from ptzsim import state as st
 from ptzsim.state import CameraState
 from ptzsim.tui import DASHBOARD_WIDTH, TuiController
-from ptzsim.viewfinder import CROSS, HORIZON, POST, framed_view, render_view
+from ptzsim.viewfinder import CROSS, HORIZON, POST, framed_view, render_picture, render_view
 from ptzsim.visca import ViscaCamera
 
 COLS, ROWS = 59, 15
@@ -49,10 +49,12 @@ def test_zoom_narrows_the_field_of_view():
     assert sum(line.count(POST) for line in tele) == 0  # nearest post is 25° away
 
 
-def test_standby_shows_no_picture():
-    lines = view(power=False)
+def test_standby_dims_the_picture():
+    s = CameraState(power=False)
+    lines, styles = render_picture(s, COLS, ROWS)
     assert any("STANDBY" in line for line in lines)
-    assert not any(HORIZON in line for line in lines)
+    assert any(HORIZON in line for line in lines)  # the camera still points somewhere
+    assert {style for row in styles for style in row} <= {"dim", "bold"}
 
 
 def test_framed_view_caption_and_size():
@@ -68,10 +70,16 @@ def test_layout_side_by_side_and_minimum_width():
         lines, box = tui.layout("t", width, 50)
         row, col, rows, cols = box
         assert row == 2 and col == DASHBOARD_WIDTH + 2 and lines[row][col] == "┌"
-        assert "CAMERA" in lines[0]
-    lines, box = tui.layout("t", 119, 50)
+        assert "Camera" in lines[0]
+    lines, box = tui.layout("t", 79, 50)
     assert box is None
-    assert any("120 columns" in line for line in lines)
+    assert any("80 columns" in line for line in lines)
+
+
+def tab(tui, lines):
+    """The highlighted header tab."""
+    return next(lines[row][col:col + length] for row, col, length, style in tui.spans
+                if style == "accent")
 
 
 def test_network_view_uses_full_dashboard_without_camera_picture():
@@ -79,9 +87,9 @@ def test_network_view_uses_full_dashboard_without_camera_picture():
     for width, height in ((160, 50), (120, 50)):
         tui.handle_key("n")
         lines, box = tui.layout("t", width, height)
-        assert lines[0].startswith("NETWORK")
+        assert "[n] Network" in tab(tui, lines)
         assert box is None
         tui.handle_key("c")
         lines, box = tui.layout("t", width, height)
-        assert lines[0].startswith("CAMERA")
+        assert "[c] Camera" in tab(tui, lines)
         assert box is not None

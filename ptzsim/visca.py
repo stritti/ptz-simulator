@@ -9,8 +9,9 @@ and produces the replies a real camera would send.
 
 from __future__ import annotations
 
+import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Deque, Dict, FrozenSet, List, Optional, Tuple
 
 from . import state as st
@@ -71,6 +72,8 @@ class LogEntry:
     ok: bool
     # Shown instead of the hex dump for non-VISCA protocols (e.g. "ONVIF").
     label: str = ""
+    # Wall-clock time the command arrived, for the command log.
+    time: float = field(default_factory=time.time)
 
     @property
     def source(self) -> str:
