@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.10.0](https://github.com/stritti/ptz-simulator/compare/v0.9.0...v0.10.0) (2026-11-21)
+
+
+### Features
+
+* **tui:** quieter chrome, coloured dashboard and a fuller command log ([2e17be7](https://github.com/stritti/ptz-simulator/commit/2e17be7055b2bb91cb26cde12e898c328173a1fd))
+* **tui:** support mouse clicks on tabs and shortcut bar ([5987cfe](https://github.com/stritti/ptz-simulator/commit/5987cfe811a10b97552a039b88b9d5c631b1c526))
+* **tui:** support mouse clicks on tabs and shortcut bar ([c41fd09](https://github.com/stritti/ptz-simulator/commit/c41fd092ee106d8bf71edf5b66a4e02a5dbcc518))
+* **tui:** use , and . for jog speed, usable on German keyboards ([4f2635b](https://github.com/stritti/ptz-simulator/commit/4f2635bd63019900f219c4cfdaef3f3ed3aec39b))
+* **tui:** use , and . for jog speed, usable on German keyboards ([69329b8](https://github.com/stritti/ptz-simulator/commit/69329b83145ba7b4a3f4339e31c7f72bd00485c6))
+
+
+### Documentation
+
+* **tui:** show the new terminal dashboard in screenshots ([7bd4bd1](https://github.com/stritti/ptz-simulator/commit/7bd4bd1d339bea670489227a7121a7b1897fbe31))
+
 ## [0.9.0](https://github.com/stritti/ptz-simulator/compare/v0.8.0...v0.9.0) (2026-11-16)
 
 
